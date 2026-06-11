@@ -1,0 +1,17 @@
+[package]
+name = "covmap"
+version = "0.1.0"
+edition = "2021"
+description = "Coverings and connections between repositories"
+license = "Apache-2.0"
+
+[[bin]]
+name = "covmap"
+path = "src/main.rs"
+
+[dependencies]
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

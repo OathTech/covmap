@@ -1,0 +1,47 @@
+image: rust:1.82
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_TERM_COLOR: always
+
+cache:
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - .cargo/
+    - target/
+
+stages:
+  - check
+  - test
+
+fmt:
+  stage: check
+  before_script:
+    - rustup component add rustfmt
+  script:
+    - cargo fmt --all -- --check
+
+clippy:
+  stage: check
+  before_script:
+    - rustup component add clippy
+  script:
+    - cargo clippy --all-targets -- -D warnings
+
+build:
+  stage: check
+  script:
+    - cargo build --release
+
+test:
+  stage: test
+  script:
+    - cargo test --all
+
+smoke:
+  stage: test
+  script:
+    - cargo build --release
+    - ./smoke_test/run.sh

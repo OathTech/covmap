@@ -23,12 +23,7 @@ pub fn walk_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn walk(
-    root: &Path,
-    dir: &Path,
-    ignore: &[String],
-    out: &mut Vec<PathBuf>,
-) -> io::Result<()> {
+fn walk(root: &Path, dir: &Path, ignore: &[String], out: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -157,10 +152,7 @@ fn glob_rec(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
 /// trailing '\n' when present. Returns `Ok(None)` for files that are
 /// not valid UTF-8 (binaries are skipped silently).
 pub fn read_text_lines(path: &Path) -> io::Result<Option<Vec<String>>> {
-    let raw = match fs::read(path) {
-        Ok(b) => b,
-        Err(e) => return Err(e),
-    };
+    let raw = fs::read(path)?;
     let s = match std::str::from_utf8(&raw) {
         Ok(s) => s.to_string(),
         Err(_) => return Ok(None),

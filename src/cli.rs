@@ -204,7 +204,8 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
         });
         added += 1;
     }
-    cov.entries.sort_by(|a, b| a.file.cmp(&b.file).then(a.a.cmp(&b.a)));
+    cov.entries
+        .sort_by(|a, b| a.file.cmp(&b.file).then(a.a.cmp(&b.a)));
     cov.write(&repo)?;
     let st = covering::stats(&cov);
     println!(
@@ -307,7 +308,11 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
             }
             println!(
                 "  {} -> {}/{} : {} pairs, {} broken",
-                cn, k.target_repo, k.target_covering, k.pairs.len(), broken
+                cn,
+                k.target_repo,
+                k.target_covering,
+                k.pairs.len(),
+                broken
             );
         }
     }
@@ -486,8 +491,8 @@ fn cmd_grep(args: &[String]) -> io::Result<u8> {
             }
         }
     }
-    let pattern = pattern
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "grep <pattern>"))?;
+    let pattern =
+        pattern.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "grep <pattern>"))?;
     let repo = current_repo()?;
     let c = resolve_covering(&repo, &covering_name)?;
     for e in &c.entries {
@@ -578,11 +583,20 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
     }
     let (covname, prefix) = parse_addr(&args[0]);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
-    let cut: usize = args[1]
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "<line> must be a positive integer"))?;
-    let label_top = args.get(2).cloned().unwrap_or_else(|| DEFAULT_LABEL.to_string());
-    let label_bot = args.get(3).cloned().unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    let cut: usize = args[1].parse().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "<line> must be a positive integer",
+        )
+    })?;
+    let label_top = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    let label_bot = args
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
     let old = covering::resolve_in_covering(&c, &prefix)?;
@@ -632,7 +646,10 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
             "merge: both segments must be in the same covering",
         ));
     }
-    let label = args.get(2).cloned().unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    let label = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &cn1)?;
     let h1 = covering::resolve_in_covering(&c, &p1)?;
@@ -669,7 +686,11 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
         eprintln!("(pair already present)");
         return Ok(0);
     }
-    k.pairs.push(Pair { a: ha.clone(), b: hb.clone(), note });
+    k.pairs.push(Pair {
+        a: ha.clone(),
+        b: hb.clone(),
+        note,
+    });
     k.write(&repo)?;
     println!("linked {} -> {}", ha, hb);
     Ok(0)
@@ -702,7 +723,13 @@ fn resolve_pair_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Res
     let mut matches: Vec<&str> = k
         .pairs
         .iter()
-        .map(|p| if source_side { p.a.as_str() } else { p.b.as_str() })
+        .map(|p| {
+            if source_side {
+                p.a.as_str()
+            } else {
+                p.b.as_str()
+            }
+        })
         .filter(|h| h.starts_with(prefix))
         .collect();
     matches.sort();
@@ -710,7 +737,10 @@ fn resolve_pair_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Res
     match matches.len() {
         0 => Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("no pair endpoint matches '{prefix}' in connection '{}'", k.name),
+            format!(
+                "no pair endpoint matches '{prefix}' in connection '{}'",
+                k.name
+            ),
         )),
         1 => Ok(matches.remove(0).to_string()),
         n => Err(io::Error::new(
@@ -750,7 +780,10 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
     let tgt_repo = Repo::discover(&target_root).map_err(|e| {
         io::Error::new(
             e.kind(),
-            format!("target repo not initialized: {}: {e}", target_root.display()),
+            format!(
+                "target repo not initialized: {}: {e}",
+                target_root.display()
+            ),
         )
     })?;
     Covering::read(&tgt_repo, &cov_b)?;
@@ -804,15 +837,27 @@ fn cmd_repair(args: &[String]) -> io::Result<u8> {
             println!(
                 "broken: {} ({}) -> {} ({}): dropped",
                 p.a,
-                if a_ok { "ok" } else { "missing in source covering" },
+                if a_ok {
+                    "ok"
+                } else {
+                    "missing in source covering"
+                },
                 p.b,
-                if b_ok { "ok" } else { "missing in target covering" }
+                if b_ok {
+                    "ok"
+                } else {
+                    "missing in target covering"
+                }
             );
         }
     }
     k.pairs = kept;
     k.write(&repo)?;
-    println!("repair: {} pair(s) dropped, {} kept", dropped, k.pairs.len());
+    println!(
+        "repair: {} pair(s) dropped, {} kept",
+        dropped,
+        k.pairs.len()
+    );
     Ok(0)
 }
 
@@ -881,7 +926,10 @@ fn cmd_hash_segment(args: &[String]) -> io::Result<u8> {
     if a == 0 || b < a || b > lines.len() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("line range {a}:{b} out of bounds for {file} ({} lines)", lines.len()),
+            format!(
+                "line range {a}:{b} out of bounds for {file} ({} lines)",
+                lines.len()
+            ),
         ));
     }
     let content: String = lines[a - 1..b].concat();
@@ -991,7 +1039,10 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
         for e in &c.entries {
             if !object_exists(&repo, &e.hash) {
                 if !broken_only {
-                    eprintln!("fsck: covering {} hash {} missing in object store", cn, e.hash);
+                    eprintln!(
+                        "fsck: covering {} hash {} missing in object store",
+                        cn, e.hash
+                    );
                 }
                 errs += 1;
             }

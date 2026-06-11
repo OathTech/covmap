@@ -60,10 +60,7 @@ pub fn write_object(objects_dir: &std::path::Path, seg: &Segment) -> std::io::Re
 }
 
 /// Read raw object content (label, content) from the store.
-pub fn read_object(
-    objects_dir: &std::path::Path,
-    hash: &str,
-) -> std::io::Result<(String, String)> {
+pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> std::io::Result<(String, String)> {
     let path = object_path(objects_dir, hash);
     let mut f = fs::File::open(path)?;
     let mut buf = Vec::new();
@@ -77,10 +74,7 @@ pub fn read_object(
 }
 
 /// Resolve a hash prefix to a unique full hash. Errors on ambiguity / no match.
-pub fn resolve_prefix(
-    objects_dir: &std::path::Path,
-    prefix: &str,
-) -> std::io::Result<String> {
+pub fn resolve_prefix(objects_dir: &std::path::Path, prefix: &str) -> std::io::Result<String> {
     if prefix.len() < 2 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

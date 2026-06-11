@@ -36,7 +36,11 @@ pub fn render(repo: &Repo) -> io::Result<String> {
             root: tgt_repo_path.clone(),
         };
         let tgt_cov = Covering::read(&tgt_repo, &k.target_covering).ok();
-        conn_data.push(ConnView { k, tgt_repo, tgt_cov });
+        conn_data.push(ConnView {
+            k,
+            tgt_repo,
+            tgt_cov,
+        });
     }
 
     // Build segment indices for the source covering.
@@ -47,7 +51,11 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     if let Some(src) = &src_cov {
         let src_set = covering::hashes(src);
         for cv in &conn_data {
-            let tgt_set = cv.tgt_cov.as_ref().map(covering::hashes).unwrap_or_default();
+            let tgt_set = cv
+                .tgt_cov
+                .as_ref()
+                .map(covering::hashes)
+                .unwrap_or_default();
             for p in &cv.k.pairs {
                 let a_in = src_set.contains(&p.a);
                 let b_in = tgt_set.contains(&p.b);
@@ -233,12 +241,7 @@ fn render_source_sidebar(
     s
 }
 
-fn file_sidebar_item(
-    name: &str,
-    key: &str,
-    counts: (usize, usize, usize),
-    active: bool,
-) -> String {
+fn file_sidebar_item(name: &str, key: &str, counts: (usize, usize, usize), active: bool) -> String {
     let total = counts.0 + counts.1 + counts.2;
     let denom = total.max(1) as f64;
     let pct_l = (counts.0 as f64 / denom) * 100.0;
@@ -257,8 +260,13 @@ fn file_sidebar_item(
         if active { " active" } else { "" },
         esc(key),
         esc(name),
-        pct_l, pct_u, pct_b,
-        total, counts.0, counts.1, counts.2
+        pct_l,
+        pct_u,
+        pct_b,
+        total,
+        counts.0,
+        counts.1,
+        counts.2
     )
 }
 
@@ -271,8 +279,7 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
     let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     for cv in conns {
         if let Some(tc) = &cv.tgt_cov {
-            let by_pair_target: BTreeSet<&str> =
-                cv.k.pairs.iter().map(|p| p.b.as_str()).collect();
+            let by_pair_target: BTreeSet<&str> = cv.k.pairs.iter().map(|p| p.b.as_str()).collect();
             let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
             for e in &tc.entries {
                 if by_pair_target.contains(e.hash.as_str()) {
@@ -322,11 +329,15 @@ fn render_list_view(
         s.push_str("<div class=\"empty\">No source covering yet. Run `covmap cover`.</div>");
         return s;
     }
-    for (_fname, entries) in by_file {
+    for entries in by_file.values() {
         for e in entries {
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
-            let label = if e.label.is_empty() { "&middot;" } else { &e.label };
+            let label = if e.label.is_empty() {
+                "&middot;"
+            } else {
+                &e.label
+            };
             s.push_str(&format!(
                 "<div class=\"segment clickable status-{}\" data-status=\"{}\" \
                        data-file=\"{}\" data-hash=\"{}\" data-tip='{}'>\
@@ -334,14 +345,18 @@ fn render_list_view(
                    <div class=\"meta\"><code>{}</code> · {}:{}-{} · {} lines · label {}</div>\
                    {}\
                  </div>\n",
-                status, status,
+                status,
+                status,
                 esc(&e.file),
                 &e.hash,
                 esc(&tip_json(e, &links)),
                 esc(&heading_for(e)),
-                status, status,
+                status,
+                status,
                 &e.hash,
-                esc(&e.file), e.a, e.b,
+                esc(&e.file),
+                e.a,
+                e.b,
                 e.b - e.a + 1,
                 label_html(label),
                 links_block(&links)
@@ -378,12 +393,20 @@ fn links_block(links: &[OutgoingLink]) -> String {
         if i > 0 {
             s.push_str(", ");
         }
-        let cls = if !l.src_resolved || !l.tgt_resolved { "broken" } else { "ok" };
+        let cls = if !l.src_resolved || !l.tgt_resolved {
+            "broken"
+        } else {
+            "ok"
+        };
         s.push_str(&format!(
             "<code class=\"{}\">{}</code> in <code>{}</code>",
             cls,
             &l.target_hash,
-            esc(&format!("{}:{}", short_repo_name(&l.target_repo), l.target_covering))
+            esc(&format!(
+                "{}:{}",
+                short_repo_name(&l.target_repo),
+                l.target_covering
+            ))
         ));
         if !l.note.is_empty() {
             s.push_str(&format!(" <span class=\"note\">— {}</span>", esc(&l.note)));
@@ -419,7 +442,8 @@ fn render_source_view(
             s.push_str(&format!(
                 "<span class=\"src-seg status-{}\" data-status=\"{}\" \
                        data-segid=\"{}\" data-file=\"{}\" data-tip='{}'>",
-                status, status,
+                status,
+                status,
                 &e.hash,
                 esc(fname),
                 esc(&tip_json(e, &links))
@@ -505,8 +529,7 @@ fn render_target_view(
                 };
                 s.push_str(&format!(
                     "<span class=\"tgt-block{}\" data-tgt-hash=\"{}\">",
-                    cov_class,
-                    &e.hash
+                    cov_class, &e.hash
                 ));
                 s.push_str(&esc(&content));
                 if !inc.is_empty() {
@@ -527,10 +550,7 @@ fn render_target_view(
                             esc(&l.conn_name)
                         ));
                         if !l.note.is_empty() {
-                            s.push_str(&format!(
-                                " <span class=\"note\">{}</span>",
-                                esc(&l.note)
-                            ));
+                            s.push_str(&format!(" <span class=\"note\">{}</span>", esc(&l.note)));
                         }
                     }
                     s.push_str("</span>");

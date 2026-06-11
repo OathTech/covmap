@@ -71,12 +71,12 @@ impl Covering {
             entries.push(CoveringEntry {
                 hash: parts[0].to_string(),
                 file: parts[1].to_string(),
-                a: parts[2].parse().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "bad line number")
-                })?,
-                b: parts[3].parse().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "bad line number")
-                })?,
+                a: parts[2]
+                    .parse()
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad line number"))?,
+                b: parts[3]
+                    .parse()
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad line number"))?,
                 label: parts[4].to_string(),
             });
         }
@@ -206,11 +206,7 @@ pub fn relabel(
 /// same (file, a, b, label); recomputes the hash from the file as it
 /// is now. Used after a file edit that changed bytes inside the
 /// segment but did not move its line boundaries. Returns the new hash.
-pub fn recut(
-    repo: &Repo,
-    c: &mut Covering,
-    old_hash: &str,
-) -> io::Result<String> {
+pub fn recut(repo: &Repo, c: &mut Covering, old_hash: &str) -> io::Result<String> {
     let idx = c
         .entries
         .iter()
@@ -230,7 +226,10 @@ pub fn recut(
             io::ErrorKind::InvalidInput,
             format!(
                 "segment {}:{}-{} no longer fits the file ({} lines on disk) — use merge/split",
-                entry.file, entry.a, entry.b, lines.len()
+                entry.file,
+                entry.a,
+                entry.b,
+                lines.len()
             ),
         ));
     }
@@ -321,23 +320,19 @@ pub fn split(
 
 /// Merge two adjacent segments in the same file into one. The
 /// segments must share a file and be contiguous (`h1.b + 1 == h2.a`).
-pub fn merge(
-    repo: &Repo,
-    c: &mut Covering,
-    h1: &str,
-    h2: &str,
-    label: &str,
-) -> io::Result<String> {
-    let i1 = c
-        .entries
-        .iter()
-        .position(|e| e.hash == h1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("hash '{h1}' not in covering")))?;
-    let i2 = c
-        .entries
-        .iter()
-        .position(|e| e.hash == h2)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("hash '{h2}' not in covering")))?;
+pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> io::Result<String> {
+    let i1 = c.entries.iter().position(|e| e.hash == h1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("hash '{h1}' not in covering"),
+        )
+    })?;
+    let i2 = c.entries.iter().position(|e| e.hash == h2).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("hash '{h2}' not in covering"),
+        )
+    })?;
     let (lo, hi) = if i1 < i2 { (i1, i2) } else { (i2, i1) };
     let (e1, e2) = (c.entries[lo].clone(), c.entries[hi].clone());
     if e1.file != e2.file || e1.b + 1 != e2.a {

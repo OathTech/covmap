@@ -158,12 +158,18 @@ one per line. Supported syntax:
 
 ```
 <repo>/.covmap/
+  version              # on-disk format version (currently "1")
   HEAD                 # default covering name (one line)
   ignore               # optional gitignore-lite patterns
   objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
   coverings/<name>     # covered files + one segment hash per line
   connections/<name>   # connection metadata + pairs
 ```
+
+Every command checks `.covmap/version` and refuses to operate on a
+repo created by an incompatible covmap version. The format version
+is bumped on changes to the segment hash, object encoding, or ref
+formats; patch releases never bump it.
 
 ## Repository layout
 

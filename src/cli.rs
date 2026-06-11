@@ -21,6 +21,22 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
     }
     let cmd = args[1].as_str();
     let rest: Vec<String> = args[2..].to_vec();
+
+    // Top-level --version / -V.
+    if matches!(cmd, "--version" | "-V") {
+        println!("covmap {}", env!("CARGO_PKG_VERSION"));
+        return Ok(0);
+    }
+
+    // If the user typed `covmap <cmd> -h|--help`, print the usage line
+    // for that command and exit 0 without invoking it.
+    if rest.iter().any(|a| a == "-h" || a == "--help") {
+        if let Some(line) = command_help_line(cmd) {
+            println!("{line}");
+            return Ok(0);
+        }
+    }
+
     match cmd {
         "init" => cmd_init(&rest),
         "cover" => cmd_cover(&rest),
@@ -57,36 +73,70 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
     }
 }
 
+/// Per-command synopsis printed by `covmap <cmd> --help`. Returns
+/// `None` for unknown commands (so dispatch can fall through).
+fn command_help_line(cmd: &str) -> Option<&'static str> {
+    Some(match cmd {
+        "init" => "covmap init                                  create .covmap/ in the cwd",
+        "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
+        "status" => "covmap status [<covering>]                   cardinality, entropy, drift, broken pairs",
+        "show" => "covmap show <addr>                           segment | covering | connection at <addr>",
+        "ls" => "covmap ls [-l] [<covering>]                  list segments",
+        "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
+        "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
+        "label" => "covmap label <C>:<h> <label>                 relabel a segment",
+        "split" => "covmap split <C>:<h> <line> [<top>] [<bot>] split one segment at <line>",
+        "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
+        "recut" => "covmap recut <C>:<h>                         refresh a segment's hash from current disk bytes",
+        "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a pair to connection K",
+        "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a pair",
+        "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
+        "repair" => "covmap repair <K>                            drop pairs whose endpoints are no longer in their coverings",
+        "html" => "covmap html [-o <path>]                      render a static HTML browser",
+        "hash-segment" => "covmap hash-segment <file> <a> <b> [<lbl>] [-w]",
+        "cat-segment" => "covmap cat-segment <hash>",
+        "ls-segments" => "covmap ls-segments <covering>",
+        "ls-pairs" => "covmap ls-pairs <connection>",
+        "rev-parse" => "covmap rev-parse <addr>",
+        "fsck" => "covmap fsck [--broken-pairs]",
+        _ => return None,
+    })
+}
+
 fn print_usage() {
     eprintln!(
-        "covmap — coverings and connections between repositories\n\
-\n\
-PORCELAIN\n\
-  init                                create .covmap/ in the cwd\n\
-  cover [<covering>]                  add one whole-file `unknown` segment per missing file\n\
-  status [<covering>]                 cardinality, entropy, drift, broken pairs\n\
-  show <addr>                         segment | covering | connection at <addr>\n\
-  ls [-l] [<covering>]                list segments\n\
-  grep [-l] [-c <C>] <pattern>        segments whose label or content matches\n\
-  diff <C1> <C2>                      added / removed / shared\n\
-  label <C>:<h> <label>               relabel a segment\n\
-  split <C>:<h> <line> [<lbl_top>] [<lbl_bot>]   split one segment at <line>\n\
-  merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments\n\
-  recut <C>:<h>                       refresh a segment's hash from current disk bytes\n\
-  link <K> <h_A> <h_B> [<note>]       add a pair to connection K\n\
-  unlink <K> <h_A> <h_B>              remove a pair\n\
-  connect <C_A> <repoB:C_B> [<K>]     create empty connection\n\
-  repair <K>                          drop pairs whose endpoints are no longer in their coverings\n\
-  html [-o <path>]                    render a static HTML browser\n\
-\n\
-PLUMBING\n\
-  hash-segment <file> <a> <b> [<lbl>] [-w]\n\
-  cat-segment <hash>\n\
-  ls-segments <covering>\n\
-  ls-pairs <connection>\n\
-  rev-parse <addr>\n\
-  fsck [--broken-pairs]\n\
-"
+        "covmap {} — coverings and connections between repositories
+
+Run `covmap <command> --help` for the synopsis of a single command.
+Run `covmap --version` to print the version.
+
+PORCELAIN
+  init                                create .covmap/ in the cwd
+  cover [<covering>]                  add one whole-file `unknown` segment per missing file
+  status [<covering>]                 cardinality, entropy, drift, broken pairs
+  show <addr>                         segment | covering | connection at <addr>
+  ls [-l] [<covering>]                list segments
+  grep [-l] [-c <C>] <pattern>        segments whose label or content matches
+  diff <C1> <C2>                      added / removed / shared
+  label <C>:<h> <label>               relabel a segment
+  split <C>:<h> <line> [<lbl_top>] [<lbl_bot>]   split one segment at <line>
+  merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
+  recut <C>:<h>                       refresh a segment's hash from current disk bytes
+  link <K> <h_A> <h_B> [<note>]       add a pair to connection K
+  unlink <K> <h_A> <h_B>              remove a pair
+  connect <C_A> <repoB:C_B> [<K>]     create empty connection
+  repair <K>                          drop pairs whose endpoints are no longer in their coverings
+  html [-o <path>]                    render a static HTML browser
+
+PLUMBING
+  hash-segment <file> <a> <b> [<lbl>] [-w]
+  cat-segment <hash>
+  ls-segments <covering>
+  ls-pairs <connection>
+  rev-parse <addr>
+  fsck [--broken-pairs]
+",
+        env!("CARGO_PKG_VERSION")
     );
 }
 

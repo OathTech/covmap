@@ -110,3 +110,113 @@ pub fn resolve_prefix(objects_dir: &std::path::Path, prefix: &str) -> std::io::R
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir() -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!("covmap-segment-test-{nanos}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn hash_is_deterministic_and_truncated() {
+        let h = hash_of("Intro", "hello\n");
+        assert_eq!(h.len(), HASH_LEN);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, hash_of("Intro", "hello\n"));
+    }
+
+    #[test]
+    fn label_is_part_of_identity() {
+        // Same content, different label → different hash.
+        assert_ne!(hash_of("a", "x"), hash_of("b", "x"));
+    }
+
+    #[test]
+    fn nul_separator_prevents_label_content_overlap() {
+        // Without the NUL, "ab" + "" and "a" + "b" would collide.
+        assert_ne!(hash_of("ab", ""), hash_of("a", "b"));
+    }
+
+    #[test]
+    fn object_path_splits_at_two() {
+        let dir = std::path::Path::new("/tmp/objs");
+        let p = object_path(dir, "abcdef0123456789");
+        assert_eq!(p, std::path::Path::new("/tmp/objs/ab/cdef0123456789"));
+    }
+
+    #[test]
+    fn write_then_read_roundtrip() {
+        let dir = tmpdir();
+        let seg = Segment {
+            file: "x.md".into(),
+            a: 1,
+            b: 2,
+            label: "Intro".into(),
+            content: "line one\nline two\n".into(),
+        };
+        let h = write_object(&dir, &seg).unwrap();
+        let (lbl, content) = read_object(&dir, &h).unwrap();
+        assert_eq!(lbl, "Intro");
+        assert_eq!(content, "line one\nline two\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_object_is_idempotent() {
+        let dir = tmpdir();
+        let seg = Segment {
+            file: "x.md".into(),
+            a: 1,
+            b: 1,
+            label: "".into(),
+            content: "x\n".into(),
+        };
+        let h1 = write_object(&dir, &seg).unwrap();
+        let h2 = write_object(&dir, &seg).unwrap();
+        assert_eq!(h1, h2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_prefix_rejects_short_input() {
+        let dir = tmpdir();
+        let err = resolve_prefix(&dir, "a").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_prefix_unique_match() {
+        let dir = tmpdir();
+        let seg = Segment {
+            file: "x".into(),
+            a: 1,
+            b: 1,
+            label: "".into(),
+            content: "abc".into(),
+        };
+        let h = write_object(&dir, &seg).unwrap();
+        let prefix = &h[..6];
+        let resolved = resolve_prefix(&dir, prefix).unwrap();
+        assert_eq!(resolved, h);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_prefix_no_match() {
+        let dir = tmpdir();
+        // No objects written.
+        let err = resolve_prefix(&dir, "deadbeef").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

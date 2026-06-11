@@ -187,3 +187,122 @@ pub fn whole_file_segment(file: &str, lines: &[String]) -> Segment {
         content,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pats(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ---- glob_match -------------------------------------------------------
+
+    #[test]
+    fn glob_literal() {
+        assert!(glob_match("foo", "foo"));
+        assert!(!glob_match("foo", "bar"));
+        assert!(!glob_match("foo", "foobar"));
+    }
+
+    #[test]
+    fn glob_star_matches_within_component() {
+        assert!(glob_match("*.go", "main.go"));
+        assert!(glob_match("*.go", ".go")); // empty match before .go is ok
+        assert!(!glob_match("*.go", "src/main.go")); // * must not cross /
+    }
+
+    #[test]
+    fn glob_star_does_not_cross_slash() {
+        assert!(!glob_match("*", "a/b"));
+        assert!(glob_match("*", "abc"));
+    }
+
+    #[test]
+    fn glob_question_mark() {
+        assert!(glob_match("?at", "cat"));
+        assert!(!glob_match("?at", "scat"));
+        assert!(!glob_match("?", "/")); // ? cannot match /
+    }
+
+    // ---- matches_pattern --------------------------------------------------
+
+    #[test]
+    fn pattern_extension_unanchored() {
+        // *.go matches at any depth.
+        assert!(matches_pattern("main.go", false, "*.go"));
+        assert!(matches_pattern("src/main.go", false, "*.go"));
+        assert!(!matches_pattern("main.rs", false, "*.go"));
+    }
+
+    #[test]
+    fn pattern_directory_with_trailing_slash() {
+        assert!(matches_pattern("schema", true, "schema/"));
+        assert!(matches_pattern("schema/foo.json", false, "schema/"));
+        assert!(matches_pattern("a/schema/x", false, "schema/"));
+    }
+
+    #[test]
+    fn pattern_anchored_with_leading_slash() {
+        assert!(matches_pattern("CODEOWNERS", false, "/CODEOWNERS"));
+        // Anchored: must equal the full relative path.
+        assert!(!matches_pattern("a/CODEOWNERS", false, "/CODEOWNERS"));
+    }
+
+    #[test]
+    fn pattern_exact_filename() {
+        assert!(matches_pattern("LICENSE", false, "LICENSE"));
+        assert!(matches_pattern("a/LICENSE", false, "LICENSE"));
+        assert!(!matches_pattern("LICENSE.md", false, "LICENSE"));
+    }
+
+    #[test]
+    fn pattern_multi_segment_unanchored() {
+        // Multi-segment patterns match on a full tail starting at a
+        // component boundary.
+        assert!(matches_pattern("schema/test", true, "schema/test"));
+        assert!(matches_pattern("a/schema/test", true, "schema/test"));
+        // Does not match a longer tail (use a trailing slash to ignore
+        // a whole subtree; see the test below).
+        assert!(!matches_pattern(
+            "a/schema/test/x.json",
+            false,
+            "schema/test"
+        ));
+        // Does not straddle a non-boundary.
+        assert!(!matches_pattern("aschema/testb", false, "schema/test"));
+    }
+
+    #[test]
+    fn pattern_directory_form_matches_directory_entry() {
+        // `schema/` matches the directory entry `schema`. The walker
+        // then prunes the whole subtree without re-checking each file.
+        assert!(matches_pattern("schema", true, "schema/"));
+        // The matcher itself is component-by-component: a file path
+        // under an ignored directory only gets filtered because the
+        // walker stopped descending — we don't try to match the
+        // file path against `schema/` directly.
+    }
+
+    // ---- is_ignored -------------------------------------------------------
+
+    #[test]
+    fn is_ignored_combines_patterns() {
+        let p = pats(&["*.go", "schema/", "/CODEOWNERS"]);
+        assert!(is_ignored("main.go", false, &p));
+        assert!(is_ignored("schema/x.json", false, &p));
+        assert!(is_ignored("CODEOWNERS", false, &p));
+        assert!(!is_ignored("README.md", false, &p));
+        assert!(!is_ignored("a/CODEOWNERS", false, &p));
+    }
+
+    // ---- read_text_lines / rel_string -------------------------------------
+
+    #[test]
+    fn rel_string_normalizes_separators() {
+        let p: PathBuf = ["a", "b", "c.txt"].iter().collect();
+        // On unix this is already "a/b/c.txt"; on windows the helper
+        // converts "\\" -> "/".
+        assert_eq!(rel_string(&p), "a/b/c.txt");
+    }
+}

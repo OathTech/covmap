@@ -610,7 +610,7 @@ fn render_compare_view(
                     _ => counts.1 += 1,
                 }
             }
-            s.push_str(&cmp_file_item("a", fname, fname, counts));
+            s.push_str(&cmp_file_item("a", fname, fname, counts, None));
         }
     }
     s.push_str("</aside>\n");
@@ -719,43 +719,37 @@ fn render_compare_view(
     if !any_b {
         s.push_str("<div class=\"file-empty\">No target covering.</div>");
     } else {
-        // group target files by (repo, covering, file), counting incoming.
-        let mut groups: BTreeMap<(String, String, String), (usize, usize)> = BTreeMap::new();
+        // group target files by (repo, covering, file), counting each
+        // segment's status (linked / unlinked / broken) the same way the
+        // focus-B panel does, so the bar matches the A side.
+        let mut groups: BTreeMap<(String, String, String), (usize, usize, usize)> = BTreeMap::new();
         for cv in conns {
             if let Some(tc) = &cv.tgt_cov {
-                let mut by_file_n: BTreeMap<String, (usize, usize)> = BTreeMap::new();
                 for e in &tc.entries {
                     let inc = incoming
                         .get(&(cv.k.target_repo.clone(), e.hash.clone()))
-                        .map(|v| v.len())
-                        .unwrap_or(0);
-                    let entry = by_file_n.entry(e.file.clone()).or_insert((0, 0));
-                    entry.0 += 1; // total segments
-                    if inc > 0 {
-                        entry.1 += 1; // segments with incoming links
+                        .cloned()
+                        .unwrap_or_default();
+                    let key = (
+                        cv.k.target_repo.clone(),
+                        cv.k.target_covering.clone(),
+                        e.file.clone(),
+                    );
+                    let g = groups.entry(key).or_insert((0, 0, 0));
+                    if inc.is_empty() {
+                        g.1 += 1; // unlinked
+                    } else if inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
+                        g.2 += 1; // broken
+                    } else {
+                        g.0 += 1; // linked
                     }
-                }
-                for (f, (tot, linked)) in by_file_n {
-                    let key = (cv.k.target_repo.clone(), cv.k.target_covering.clone(), f);
-                    let g = groups.entry(key).or_insert((0, 0));
-                    g.0 += tot;
-                    g.1 += linked;
                 }
             }
         }
-        for ((repo_p, cov, file), (tot, linked)) in groups {
+        for ((repo_p, cov, file), counts) in groups {
             let key = format!("{}::{}::{}", repo_p, cov, file);
-            s.push_str(&format!(
-                "<div class=\"file\" data-cmp-file-b=\"{}\">\
-                   <div class=\"name\">{}</div>\
-                   <div class=\"counts\">{} · {} segs · {} linked</div>\
-                 </div>",
-                esc(&key),
-                esc(&file),
-                esc(&format!("{} / {}", short_repo_name(&repo_p), cov)),
-                tot,
-                linked
-            ));
+            let sub = format!("{} / {}", short_repo_name(&repo_p), cov);
+            s.push_str(&cmp_file_item("b", &file, &key, counts, Some(&sub)));
         }
     }
     s.push_str("</aside>\n");
@@ -764,15 +758,26 @@ fn render_compare_view(
     Ok(s)
 }
 
-fn cmp_file_item(side: &str, name: &str, key: &str, counts: (usize, usize, usize)) -> String {
+fn cmp_file_item(
+    side: &str,
+    name: &str,
+    key: &str,
+    counts: (usize, usize, usize),
+    sub: Option<&str>,
+) -> String {
     let total = counts.0 + counts.1 + counts.2;
     let denom = total.max(1) as f64;
     let pct_l = (counts.0 as f64 / denom) * 100.0;
     let pct_u = (counts.1 as f64 / denom) * 100.0;
     let pct_b = (counts.2 as f64 / denom) * 100.0;
+    let sub_html = match sub {
+        Some(t) => format!("<div class=\"sub\">{}</div>", esc(t)),
+        None => String::new(),
+    };
     format!(
         "<div class=\"file\" data-cmp-file-{}=\"{}\">\
            <div class=\"name\">{}</div>\
+           {}\
            <div class=\"bar\">\
              <span class=\"sw-linked\" style=\"width:{:.1}%\"></span>\
              <span class=\"sw-unlinked\" style=\"width:{:.1}%\"></span>\
@@ -783,6 +788,7 @@ fn cmp_file_item(side: &str, name: &str, key: &str, counts: (usize, usize, usize
         side,
         esc(key),
         esc(name),
+        sub_html,
         pct_l,
         pct_u,
         pct_b,
@@ -998,6 +1004,7 @@ main.compare-active { grid-template-columns: 1fr; }
 .cmp-files { background: #f9fafb; overflow-y: auto; font-size: 0.85rem; }
 .cmp-files-a { border-right: 1px solid #e5e7eb; }
 .cmp-files-b { border-left: 1px solid #e5e7eb; }
+.cmp-files .file .sub { font-size: 0.7rem; color: #94a3b8; margin-top: 0.1rem; word-break: break-all; }
 .cmp-files-head {
   position: sticky; top: 0; background: #eef2f7; padding: 0.5rem 0.85rem;
   font-weight: 600; font-size: 0.75rem; text-transform: uppercase;

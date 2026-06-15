@@ -1,47 +1,33 @@
-image: rust:1.82
-
-variables:
-  CARGO_HOME: $CI_PROJECT_DIR/.cargo
-  CARGO_TERM_COLOR: always
-
-cache:
-  key:
-    files:
-      - Cargo.lock
-  paths:
-    - .cargo/
-    - target/
+# This is a ci file for building and testing covmap.
+image: ubuntu:22.04
 
 stages:
-  - check
-  - test
+  - build
 
-fmt:
-  stage: check
-  before_script:
-    - rustup component add rustfmt
+before_script:
+  - apt-get update -qy
+  - apt-get install -y software-properties-common curl wget build-essential git vim nano htop tree net-tools iputils-ping dnsutils unzip jq
+  - apt-get install -y python3 python3-pip
+  - curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.82 --component rustfmt clippy
+  - . "$HOME/.cargo/env"
+
+build_job:
+  tags:
+    - stardust
   script:
+    - echo "Now I'm running on Stardust"
+    - pwd
+    - tree -L 2
+    - . "$HOME/.cargo/env"
+    # formatting, lints, release build
     - cargo fmt --all -- --check
-
-clippy:
-  stage: check
-  before_script:
-    - rustup component add clippy
-  script:
     - cargo clippy --all-targets -- -D warnings
-
-build:
-  stage: check
-  script:
     - cargo build --release
-
-test:
-  stage: test
-  script:
+    # unit tests and end-to-end smoke test
     - cargo test --all
-
-smoke:
-  stage: test
-  script:
-    - cargo build --release
     - ./smoke_test/run.sh
+  stage: build
+
+#
+# EOF
+#

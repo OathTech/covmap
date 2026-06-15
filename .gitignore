@@ -2,6 +2,7 @@
 /target/
 
 # LaTeX build droppings
+theory/main.pdf
 theory/*.aux
 theory/*.fdb_latexmk
 theory/*.fls

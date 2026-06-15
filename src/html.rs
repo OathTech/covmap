@@ -110,6 +110,7 @@ pub fn render(repo: &Repo) -> io::Result<String> {
               <button data-view=\"list\" class=\"active\">List</button>\
               <button data-view=\"source\">Source</button>\
               <button data-view=\"target\">Target</button>\
+              <button data-view=\"compare\">Compare</button>\
             </div>\
          </header>\n",
         esc(&summary),
@@ -159,6 +160,11 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     s.push_str("</div>\n");
     s.push_str("<div id=\"view-target\" class=\"hidden\">");
     s.push_str(&render_target_view(&conn_data, &incoming)?);
+    s.push_str("</div>\n");
+    s.push_str("<div id=\"view-compare\" class=\"hidden\">");
+    s.push_str(&render_compare_view(
+        repo, &by_file, &outgoing, &conn_data, &incoming,
+    )?);
     s.push_str("</div>\n");
     s.push_str("</section>\n</main>\n");
 
@@ -566,6 +572,227 @@ fn render_target_view(
     Ok(s)
 }
 
+// ----- compare view --------------------------------------------------------
+//
+// A self-contained 4-panel layout that shows the FULL A and B coverings at
+// once, so they can be read side by side. Left to right:
+//
+//   [ file list A ] [ covering focus A ] [ covering focus B ] [ file list B ]
+//
+// All markup here uses `cmp-*` classes and `data-cmp-*` attributes so the
+// existing List / Source / Target views (and their JS) are untouched. Source
+// segments carry the target hashes they link to (`data-cmp-links`); target
+// segments carry the source hashes that point at them (`data-cmp-back`). The
+// compare JS uses those to highlight + scroll the counterpart panel on click.
+
+fn render_compare_view(
+    repo: &Repo,
+    by_file: &BTreeMap<String, Vec<&CoveringEntry>>,
+    outgoing: &BTreeMap<String, Vec<OutgoingLink>>,
+    conns: &[ConnView],
+    incoming: &BTreeMap<(String, String), Vec<IncomingLink>>,
+) -> io::Result<String> {
+    let mut s = String::from("<div class=\"cmp-grid\">\n");
+
+    // --- panel 1: file list for A ------------------------------------------
+    s.push_str(
+        "<aside class=\"cmp-files cmp-files-a\"><div class=\"cmp-files-head\">A · source</div>",
+    );
+    if by_file.is_empty() {
+        s.push_str("<div class=\"file-empty\">No source covering.</div>");
+    } else {
+        for (fname, entries) in by_file {
+            let mut counts = (0usize, 0usize, 0usize); // linked, unlinked, broken
+            for e in entries {
+                match seg_status(outgoing, &e.hash) {
+                    "linked" => counts.0 += 1,
+                    "broken" => counts.2 += 1,
+                    _ => counts.1 += 1,
+                }
+            }
+            s.push_str(&cmp_file_item("a", fname, fname, counts));
+        }
+    }
+    s.push_str("</aside>\n");
+
+    // --- panel 2: covering focus for A -------------------------------------
+    s.push_str("<div class=\"cmp-focus cmp-focus-a\">");
+    if by_file.is_empty() {
+        s.push_str("<div class=\"empty\">No source covering yet.</div>");
+    } else {
+        for (fname, entries) in by_file {
+            s.push_str(&format!(
+                "<div class=\"cmp-file-block\" data-cmp-file-a=\"{}\"><h3>{}</h3><pre class=\"cmp-pre\">",
+                esc(fname),
+                esc(fname)
+            ));
+            for e in entries {
+                let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let status = seg_status(outgoing, &e.hash);
+                let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
+                let link_hashes: Vec<String> =
+                    links.iter().map(|l| l.target_hash.clone()).collect();
+                s.push_str(&format!(
+                    "<span class=\"cmp-seg cmp-seg-a status-{}\" data-status=\"{}\" \
+                           data-cmp-a-hash=\"{}\" data-cmp-links=\"{}\" data-tip='{}'>",
+                    status,
+                    status,
+                    &e.hash,
+                    esc(&link_hashes.join(" ")),
+                    esc(&tip_json(e, &links))
+                ));
+                s.push_str(&esc(&content));
+                s.push_str("</span>");
+            }
+            s.push_str("</pre></div>\n");
+        }
+    }
+    s.push_str("</div>\n");
+
+    // --- panel 3: covering focus for B -------------------------------------
+    // Show the full target covering(s). Each target segment records which
+    // source hashes point at it (if any) for the back-highlight.
+    s.push_str("<div class=\"cmp-focus cmp-focus-b\">");
+    let mut any_b = false;
+    for cv in conns {
+        let tc = match &cv.tgt_cov {
+            Some(t) => t,
+            None => continue,
+        };
+        let mut tgt_by_file: BTreeMap<String, Vec<&CoveringEntry>> = BTreeMap::new();
+        for e in &tc.entries {
+            tgt_by_file.entry(e.file.clone()).or_default().push(e);
+        }
+        for v in tgt_by_file.values_mut() {
+            v.sort_by_key(|e| e.a);
+        }
+        for (fname, entries) in &tgt_by_file {
+            any_b = true;
+            let key = format!("{}::{}::{}", cv.k.target_repo, cv.k.target_covering, fname);
+            s.push_str(&format!(
+                "<div class=\"cmp-file-block\" data-cmp-file-b=\"{}\">\
+                   <h3>{} <span class=\"sub\">[{} / {}]</span></h3><pre class=\"cmp-pre\">",
+                esc(&key),
+                esc(fname),
+                esc(&short_repo_name(&cv.k.target_repo)),
+                esc(&cv.k.target_covering)
+            ));
+            for e in entries {
+                let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let inc = incoming
+                    .get(&(cv.k.target_repo.clone(), e.hash.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let back_hashes: Vec<String> = inc.iter().map(|l| l.source_hash.clone()).collect();
+                let status = if inc.is_empty() {
+                    "unlinked"
+                } else if inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
+                    "broken"
+                } else {
+                    "linked"
+                };
+                s.push_str(&format!(
+                    "<span class=\"cmp-seg cmp-seg-b status-{}\" data-status=\"{}\" \
+                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\">",
+                    status,
+                    status,
+                    &e.hash,
+                    esc(&back_hashes.join(" "))
+                ));
+                s.push_str(&esc(&content));
+                s.push_str("</span>");
+            }
+            s.push_str("</pre></div>\n");
+        }
+    }
+    if !any_b {
+        s.push_str("<div class=\"empty\">No target covering. Run `covmap connect`.</div>");
+    }
+    s.push_str("</div>\n");
+
+    // --- panel 4: file list for B ------------------------------------------
+    s.push_str(
+        "<aside class=\"cmp-files cmp-files-b\"><div class=\"cmp-files-head\">B · target</div>",
+    );
+    if !any_b {
+        s.push_str("<div class=\"file-empty\">No target covering.</div>");
+    } else {
+        // group target files by (repo, covering, file), counting incoming.
+        let mut groups: BTreeMap<(String, String, String), (usize, usize)> = BTreeMap::new();
+        for cv in conns {
+            if let Some(tc) = &cv.tgt_cov {
+                let mut by_file_n: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+                for e in &tc.entries {
+                    let inc = incoming
+                        .get(&(cv.k.target_repo.clone(), e.hash.clone()))
+                        .map(|v| v.len())
+                        .unwrap_or(0);
+                    let entry = by_file_n.entry(e.file.clone()).or_insert((0, 0));
+                    entry.0 += 1; // total segments
+                    if inc > 0 {
+                        entry.1 += 1; // segments with incoming links
+                    }
+                }
+                for (f, (tot, linked)) in by_file_n {
+                    let key = (cv.k.target_repo.clone(), cv.k.target_covering.clone(), f);
+                    let g = groups.entry(key).or_insert((0, 0));
+                    g.0 += tot;
+                    g.1 += linked;
+                }
+            }
+        }
+        for ((repo_p, cov, file), (tot, linked)) in groups {
+            let key = format!("{}::{}::{}", repo_p, cov, file);
+            s.push_str(&format!(
+                "<div class=\"file\" data-cmp-file-b=\"{}\">\
+                   <div class=\"name\">{}</div>\
+                   <div class=\"counts\">{} · {} segs · {} linked</div>\
+                 </div>",
+                esc(&key),
+                esc(&file),
+                esc(&format!("{} / {}", short_repo_name(&repo_p), cov)),
+                tot,
+                linked
+            ));
+        }
+    }
+    s.push_str("</aside>\n");
+
+    s.push_str("</div>\n");
+    Ok(s)
+}
+
+fn cmp_file_item(side: &str, name: &str, key: &str, counts: (usize, usize, usize)) -> String {
+    let total = counts.0 + counts.1 + counts.2;
+    let denom = total.max(1) as f64;
+    let pct_l = (counts.0 as f64 / denom) * 100.0;
+    let pct_u = (counts.1 as f64 / denom) * 100.0;
+    let pct_b = (counts.2 as f64 / denom) * 100.0;
+    format!(
+        "<div class=\"file\" data-cmp-file-{}=\"{}\">\
+           <div class=\"name\">{}</div>\
+           <div class=\"bar\">\
+             <span class=\"sw-linked\" style=\"width:{:.1}%\"></span>\
+             <span class=\"sw-unlinked\" style=\"width:{:.1}%\"></span>\
+             <span class=\"sw-broken\" style=\"width:{:.1}%\"></span>\
+           </div>\
+           <div class=\"counts\">{} segs · {} linked · {} unlinked · {} broken</div>\
+         </div>",
+        side,
+        esc(key),
+        esc(name),
+        pct_l,
+        pct_u,
+        pct_b,
+        total,
+        counts.0,
+        counts.1,
+        counts.2
+    )
+}
+
 // ----- tooltip JSON --------------------------------------------------------
 
 fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
@@ -757,6 +984,49 @@ code.broken { color: #991b1b; }
 code.ok { color: #166534; }
 .note { color: #64748b; font-style: italic; }
 .empty, .file-empty { padding: 1rem; color: #64748b; font-size: 0.88rem; }
+
+/* ---- compare view: 4 panels side by side ---- */
+/* When compare is active, let the section span the whole width (the shared
+   sidebar is hidden by the compare JS) and host its own 4-column grid. */
+main.compare-active { grid-template-columns: 1fr; }
+#view-compare { padding: 0; }
+.cmp-grid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1fr) 240px;
+  height: calc(100vh - 170px);
+}
+.cmp-files { background: #f9fafb; overflow-y: auto; font-size: 0.85rem; }
+.cmp-files-a { border-right: 1px solid #e5e7eb; }
+.cmp-files-b { border-left: 1px solid #e5e7eb; }
+.cmp-files-head {
+  position: sticky; top: 0; background: #eef2f7; padding: 0.5rem 0.85rem;
+  font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: #475569; border-bottom: 1px solid #e5e7eb;
+}
+.cmp-focus { overflow-y: auto; padding: 1rem; }
+.cmp-focus-a { border-right: 1px solid #e5e7eb; background: #fcfcfd; }
+.cmp-focus-b { background: #fcfcfd; }
+.cmp-file-block { margin-bottom: 1.5rem; }
+.cmp-file-block h3 {
+  font-size: 0.85rem; font-family: ui-monospace, monospace; background: #f1f5f9;
+  padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0 0 0.4rem 0; position: sticky; top: 0;
+}
+.cmp-file-block h3 .sub { font-size: 0.7rem; color: #64748b; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.cmp-pre {
+  margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.6rem 0.8rem;
+}
+.cmp-seg {
+  display: block; border-left: 4px solid transparent; padding: 0.12rem 0.35rem 0.12rem 0.5rem;
+  margin: 0.3rem -0.8rem; cursor: pointer; position: relative;
+}
+.cmp-seg.status-linked   { background: rgba(34, 197, 94, 0.12); border-left-color: var(--c-linked); }
+.cmp-seg.status-unlinked { background: rgba(203, 213, 225, 0.25); border-left-color: var(--c-unlinked); }
+.cmp-seg.status-broken   { background: rgba(239, 68, 68, 0.14); border-left-color: var(--c-broken); }
+.cmp-seg.dimmed { opacity: 0.28; }
+.cmp-seg.cmp-hot { box-shadow: 0 0 0 2px #3b82f6 inset; }
+.cmp-seg.flash  { animation: flash 1.6s ease-out; }
 </style>
 </head>
 <body>
@@ -800,8 +1070,14 @@ document.querySelectorAll('.view-toggle button').forEach(b => b.addEventListener
   document.getElementById('view-list').classList.toggle('hidden', currentView !== 'list');
   document.getElementById('view-source').classList.toggle('hidden', currentView !== 'source');
   document.getElementById('view-target').classList.toggle('hidden', currentView !== 'target');
-  document.getElementById('sidebar-source').classList.toggle('hidden', currentView === 'target');
-  document.getElementById('sidebar-target').classList.toggle('hidden', currentView !== 'target');
+  document.getElementById('view-compare').classList.toggle('hidden', currentView !== 'compare');
+  // Compare has its own 4-panel layout, so hide the shared sidebar entirely
+  // and let the section span the full width.
+  const cmp = currentView === 'compare';
+  document.querySelector('main').classList.toggle('compare-active', cmp);
+  document.getElementById('sidebar').classList.toggle('hidden', cmp);
+  document.getElementById('sidebar-source').classList.toggle('hidden', !cmp && currentView === 'target');
+  document.getElementById('sidebar-target').classList.toggle('hidden', cmp || currentView !== 'target');
   applyAll();
 }));
 
@@ -870,8 +1146,61 @@ function applyAll() {
   document.querySelectorAll('.src-seg').forEach(s => {
     s.classList.toggle('dimmed', !enabled.has(s.dataset.status));
   });
+  document.querySelectorAll('.cmp-seg').forEach(s => {
+    s.classList.toggle('dimmed', !enabled.has(s.dataset.status));
+  });
 }
 applyAll();
+
+// ---- compare view: bidirectional A <-> B highlighting ----
+function cmpClearHot() {
+  document.querySelectorAll('.cmp-seg.cmp-hot').forEach(x => x.classList.remove('cmp-hot'));
+}
+function cmpFlash(el) {
+  el.classList.add('cmp-hot');
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+}
+// Click an A segment -> highlight + scroll its linked B segments.
+document.querySelectorAll('.cmp-seg-a').forEach(seg => {
+  seg.addEventListener('click', () => {
+    cmpClearHot();
+    cmpFlash(seg);
+    const targets = (seg.dataset.cmpLinks || '').split(/\s+/).filter(Boolean);
+    let first = null;
+    targets.forEach(h => {
+      const t = document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(h)}"]`);
+      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
+    });
+    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
+  });
+});
+// Click a B segment -> highlight + scroll the A segments that point at it.
+document.querySelectorAll('.cmp-seg-b').forEach(seg => {
+  seg.addEventListener('click', () => {
+    cmpClearHot();
+    cmpFlash(seg);
+    const backs = (seg.dataset.cmpBack || '').split(/\s+/).filter(Boolean);
+    let first = null;
+    backs.forEach(h => {
+      const t = document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(h)}"]`);
+      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
+    });
+    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
+  });
+});
+// Compare file lists scroll their panel to the chosen file.
+document.querySelectorAll('.cmp-files-a .file').forEach(f => {
+  f.addEventListener('click', () => {
+    const el = document.querySelector(`.cmp-file-block[data-cmp-file-a="${CSS.escape(f.dataset.cmpFileA)}"]`);
+    if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+  });
+});
+document.querySelectorAll('.cmp-files-b .file').forEach(f => {
+  f.addEventListener('click', () => {
+    const el = document.querySelector(`.cmp-file-block[data-cmp-file-b="${CSS.escape(f.dataset.cmpFileB)}"]`);
+    if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+  });
+});
 
 // Hover tooltips on source segments.
 const tooltip = document.getElementById('tooltip');
@@ -920,14 +1249,14 @@ function hideTipSoon() {
 }
 function cancelHide() { if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; } }
 document.addEventListener('mouseover', ev => {
-  const seg = ev.target.closest('.src-seg, .segment');
+  const seg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
   if (seg && seg.dataset.tip) { cancelHide(); showTip(seg, ev); return; }
   if (ev.target.closest('#tooltip')) { cancelHide(); return; }
 });
 document.addEventListener('mouseout', ev => {
-  const leftSeg = ev.target.closest('.src-seg, .segment');
+  const leftSeg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
   const wentToTooltip = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('#tooltip');
-  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment');
+  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a');
   if (leftSeg && !wentToTooltip && !stillOnSeg) hideTipSoon();
   if (ev.target.closest('#tooltip') && (!ev.relatedTarget || (!ev.relatedTarget.closest('#tooltip') && !ev.relatedTarget.closest('.src-seg, .segment')))) {
     hideTipSoon();

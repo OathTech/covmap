@@ -110,20 +110,71 @@ are unique.
 - Bare `<C>` (no colon) — covering ref by name. `HEAD` resolves to
   the covering named in `.covmap/HEAD`.
 
+## Ignoring files — control what gets covered
+
+**This is the single most important setup step, and it is easy to skip.**
+`covmap cover` turns *every* readable file in the repo into an `unknown`
+whole-file segment. On a real project that means build output, vendored
+dependencies, lockfiles, generated code, fixtures, and docs all land in
+the covering as noise. The `unknown` list becomes overwhelming, `status`
+and `ls` are unreadable, and the human cannot see the files that actually
+matter. **Tight, deliberate control over the tracked file set is what
+makes covmap usable — treat it as a precondition, not an afterthought.**
+
+covmap reads gitignore-lite patterns from **`.covmap/ignore`**, one per
+line, and applies them while walking during `cover`. Ignored directories
+are pruned (covmap never descends into them).
+
+| Pattern | Matches |
+| ------- | ------- |
+| `*.lock` | any file whose basename matches, at any depth |
+| `target/` | the `target` directory and everything under it (trailing `/` = directory) |
+| `/CODEOWNERS` | anchored — only `CODEOWNERS` at the repo root |
+| `vendor/*.go` | path fragment — `*.go` directly inside any `vendor/` |
+| `# comment` | comments and blank lines are skipped |
+
+Globs: `*` and `?` match within a single path component (they do not
+cross `/`). Unanchored patterns are tested against the full relative
+path, each path component, and any trailing path fragment. A missing
+`ignore` file means nothing is ignored.
+
+**Recommended discipline before the first `cover`:**
+
+1. List the repo (`tree` / `ls`) and decide what is *source of truth*
+   versus generated/vendored/binary noise.
+2. Write `.covmap/ignore` to exclude everything that is not source of
+   truth — build dirs (`target/`, `build/`, `dist/`, `node_modules/`),
+   lockfiles, minified assets, generated code, large fixtures, `.git`
+   is already excluded automatically.
+3. *Then* run `covmap cover`. Check the segment count and `covmap ls`:
+   if the `unknown` list still contains noise, tighten `ignore` and
+   re-cover (cover is additive and idempotent, so add the pattern,
+   then refine). It is far cheaper to ignore up front than to prune a
+   bloated covering later.
+
+If a user complains the `unknown`/uncovered list is "overwhelming" or
+"huge", the fix is almost always a tighter `.covmap/ignore` — diagnose
+that first.
+
 ## Workflows
 
 ### A. Bootstrap a new project
 
 1. Identify the two directories. Ask if unclear.
-2. From each, run `covmap init` and `covmap cover`. Each readable
-   UTF-8 file becomes one whole-file `unknown` segment. Binaries are
-   skipped with a warning.
-3. Refine the spec covering. Use `covmap ls -l` to see file:line
+2. From each, run `covmap init`. **Before covering, write
+   `.covmap/ignore`** to exclude build output, vendored deps, lockfiles,
+   and generated files (see "Ignoring files" above) — skipping this is
+   the most common cause of an unusable, noise-filled covering.
+3. From each, run `covmap cover`. Each readable UTF-8 file (minus the
+   ignored set) becomes one whole-file `unknown` segment. Binaries are
+   skipped with a warning. Inspect `covmap ls`; if noise remains,
+   tighten `ignore` and re-cover before refining.
+4. Refine the spec covering. Use `covmap ls -l` to see file:line
    ranges, then `covmap split main:<hash> <line> <lbl_top> <lbl_bot>`
    at each meaningful boundary (`##` headings, function declarations,
    etc.). The first line of the bottom segment is `<line>`.
-4. Run `covmap status` and report cardinality back.
-5. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
+5. Run `covmap status` and report cardinality back.
+6. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
    empty connection — but do not start linking yet.
 
 ### B. Resolve drift after a source edit

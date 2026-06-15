@@ -1,0 +1,11 @@
+# Keep the build context small and the dependency cache layer stable.
+target/
+.cargo/
+.git/
+
+# Not needed inside the image.
+theory/
+skill_playground/
+smoke_test/_out/
+**/.DS_Store
+*.swp

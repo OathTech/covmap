@@ -1,0 +1,22 @@
+[package]
+name = "covmap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Track which parts of a spec are realized by which parts of an implementation — content-addressed and drift-aware."
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://gitlab-ext.galois.com/specfro/covmap"
+keywords = ["specification", "traceability", "coverage", "drift", "cross-reference"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "covmap"
+path = "src/main.rs"
+
+[dependencies]
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

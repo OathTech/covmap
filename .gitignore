@@ -1,0 +1,21 @@
+# Rust
+/target/
+
+# LaTeX build droppings
+theory/main.pdf
+theory/*.aux
+theory/*.fdb_latexmk
+theory/*.fls
+theory/*.log
+theory/*.out
+theory/*.toc
+
+# Smoke-test outputs
+smoke_test/_out/
+
+# Skill playground per-run scratch
+skill_playground/_runs/
+
+# Editor/OS detritus
+.DS_Store
+*.swp

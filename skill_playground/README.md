@@ -10,6 +10,8 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
   implementation segment.
 - **T3_drift_repair** — a spec edit broke one connection pair; recover
   the covering and re-link it.
+- **T4_char_split** — isolate one inline clause with a character-level
+  split (`split <C>:<h> <line>:<col>`), then link it.
 
 ## Running a task
 

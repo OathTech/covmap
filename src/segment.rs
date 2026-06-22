@@ -26,6 +26,70 @@ impl Segment {
     }
 }
 
+/// Number of Unicode scalar values (characters) in a line.
+pub fn char_len(line: &str) -> usize {
+    line.chars().count()
+}
+
+/// Extract the content of a segment range from a file's `lines` (each
+/// line retains its trailing `'\n'` when present, as produced by
+/// `walk::read_text_lines`).
+///
+/// Line numbers `a`/`b` are 1-indexed inclusive. Columns `a_col`/`b_col`
+/// are 1-indexed inclusive character positions within their line:
+/// `a_col = None` means "from the first character of line `a`" and
+/// `b_col = None` means "through the last character of line `b`"
+/// (including its trailing newline, if any). A single-line segment has
+/// `a == b`, and its characters run from `a_col` through `b_col`
+/// inclusive.
+///
+/// Returns `None` when the range does not fit the file (boundary drift)
+/// or the columns are out of range — callers treat that as an error.
+pub fn extract_content(
+    lines: &[String],
+    a: usize,
+    a_col: Option<usize>,
+    b: usize,
+    b_col: Option<usize>,
+) -> Option<String> {
+    if a == 0 || a > b || b > lines.len() {
+        return None;
+    }
+    let mut out = String::new();
+    if a == b {
+        let cs: Vec<char> = lines[a - 1].chars().collect();
+        let len = cs.len();
+        let start = a_col.unwrap_or(1);
+        let end = b_col.unwrap_or(len);
+        if start < 1 || start > len || end > len || start > end {
+            return None;
+        }
+        out.extend(&cs[start - 1..end]);
+    } else {
+        // First line: from a_col through end of line (incl. newline).
+        let first: Vec<char> = lines[a - 1].chars().collect();
+        let flen = first.len();
+        let start = a_col.unwrap_or(1);
+        if start < 1 || start > flen {
+            return None;
+        }
+        out.extend(&first[start - 1..]);
+        // Middle lines (file lines a+1 ..= b-1): whole.
+        for line in &lines[a..b - 1] {
+            out.push_str(line);
+        }
+        // Last line: from its first character through b_col.
+        let last: Vec<char> = lines[b - 1].chars().collect();
+        let llen = last.len();
+        let end = b_col.unwrap_or(llen);
+        if end < 1 || end > llen {
+            return None;
+        }
+        out.extend(&last[..end]);
+    }
+    Some(out)
+}
+
 pub fn hash_of(label: &str, content: &str) -> String {
     let mut h = Sha256::new();
     h.update(label.as_bytes());
@@ -209,6 +273,70 @@ mod tests {
         let resolved = resolve_prefix(&dir, prefix).unwrap();
         assert_eq!(resolved, h);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn ls(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn extract_whole_lines_when_cols_none() {
+        let lines = ls(&["alpha\n", "beta\n", "gamma\n"]);
+        assert_eq!(
+            extract_content(&lines, 1, None, 3, None).unwrap(),
+            "alpha\nbeta\ngamma\n"
+        );
+        assert_eq!(extract_content(&lines, 2, None, 2, None).unwrap(), "beta\n");
+    }
+
+    #[test]
+    fn extract_single_line_columns_inclusive() {
+        // "hello world\n" — cols 1..5 inclusive = "hello".
+        let lines = ls(&["hello world\n"]);
+        assert_eq!(
+            extract_content(&lines, 1, Some(1), 1, Some(5)).unwrap(),
+            "hello"
+        );
+        // col 7 to end-of-line includes the newline.
+        assert_eq!(
+            extract_content(&lines, 1, Some(7), 1, None).unwrap(),
+            "world\n"
+        );
+    }
+
+    #[test]
+    fn extract_multi_line_with_columns() {
+        let lines = ls(&["hello world\n", "second\n", "third line\n"]);
+        // From line 1 col 7 through line 3 col 5: "world\n" + "second\n" + "third".
+        assert_eq!(
+            extract_content(&lines, 1, Some(7), 3, Some(5)).unwrap(),
+            "world\nsecond\nthird"
+        );
+    }
+
+    #[test]
+    fn extract_rejects_out_of_range() {
+        let lines = ls(&["abc\n"]);
+        assert!(extract_content(&lines, 1, Some(1), 1, Some(5)).is_none()); // col past end
+        assert!(extract_content(&lines, 1, Some(3), 1, Some(2)).is_none()); // start > end
+        assert!(extract_content(&lines, 1, None, 2, None).is_none()); // line past eof
+    }
+
+    #[test]
+    fn extract_handles_no_trailing_newline() {
+        let lines = ls(&["abc\n", "xyz"]); // last line has no '\n'
+        assert_eq!(extract_content(&lines, 2, None, 2, None).unwrap(), "xyz");
+        assert_eq!(extract_content(&lines, 2, Some(1), 2, Some(3)).unwrap(), "xyz");
+    }
+
+    #[test]
+    fn extract_multibyte_chars_are_one_column_each() {
+        // "héllo\n": é is one char but two bytes; cols are char positions.
+        let lines = ls(&["héllo\n"]);
+        assert_eq!(
+            extract_content(&lines, 1, Some(1), 1, Some(2)).unwrap(),
+            "hé"
+        );
     }
 
     #[test]

@@ -44,41 +44,60 @@ from a single whole-file bootstrap.
 
 \begin{definition}[Repository]\label{def:repo}
 A \emph{repository} $A$ is a finite set of files, each a finite
-sequence of lines. We write $|f|_A$ for the number of lines of file
-$f$ in $A$, and $\mathrm{content}_A(f, i)$ for the text of line $i$ of
-file $f$. \texttt{covmap} considers only files whose bytes are valid
-UTF-8; other files are skipped on bootstrap and never appear in any
-covering.
+sequence of lines, each line a finite sequence of characters (Unicode
+scalar values, the trailing newline counted as the line's last
+character when present). We write $|f|_A$ for the number of lines of
+file $f$ in $A$, $\mathrm{content}_A(f, i)$ for the text of line $i$
+of file $f$, and $|f, i|_A$ for the number of characters of that line.
+\texttt{covmap} considers only files whose bytes are valid UTF-8;
+other files are skipped on bootstrap and never appear in any covering.
 \end{definition}
 
-\subsection{Segments}
+\subsection{Positions and segments}
 
-A segment is a contiguous range of lines inside a single file.
+A segment is a contiguous range of \emph{characters} inside a single
+file, delimited by two positions.
+
+\begin{definition}[Position]\label{def:position}
+A \emph{position} in file $f$ is a pair $p = (i, c)$ of a line index
+$i$ with $1 \le i \le |f|_A$ and an optional column $c$, written
+$c = \bot$ when absent. Columns are 1-indexed characters within the
+line. A start position with $c = \bot$ denotes the first character of
+line $i$ (equivalently $c = 1$); an end position with $c = \bot$
+denotes the last character of line $i$ (its trailing newline, when
+present). The character offset of a non-$\bot$ start position is taken
+inclusively, so $(i, 1)$ and $(i, \bot)$ name the same boundary.
+\end{definition}
 
 \begin{definition}[Segment]\label{def:segment}
-Fix a set of \emph{labels} $L$. A \emph{segment} of $A$ is a
-quadruple $s = (f, a, b, \lambda)$ where $f$ is a file of $A$,
-$1 \le a \le b \le |f|_A$, and $\lambda \in L$. Its \emph{lines} are
-\[
-  \mathrm{lines}(s) \;=\; \{(f, i) \mid a \le i \le b\},
-\]
-its \emph{content} is the concatenation
-\[
-  \mathrm{content}_A(s)
-  \;=\;
-  \mathrm{content}_A(f, a) \;\Vert\;
-  \mathrm{content}_A(f, a+1) \;\Vert\;
-  \cdots \;\Vert\;
-  \mathrm{content}_A(f, b),
-\]
-and its \emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash
-function $h$ and define the \emph{content hash} of $s$ as
+Fix a set of \emph{labels} $L$. A \emph{segment} of $A$ is a tuple
+$s = (f, a, a_c, b, b_c, \lambda)$ where $f$ is a file of $A$, the
+start position $(a, a_c)$ does not lie after the end position
+$(b, b_c)$ within $f$, both lie within $f$, and $\lambda \in L$. Its
+\emph{content} $\mathrm{content}_A(s)$ is the substring of $f$ running
+from the start character through the end character inclusive: when
+$a = b$ it is characters $a_c$ through $b_c$ of line $a$; otherwise it
+is the suffix of line $a$ from $a_c$, followed by lines $a+1, \dots,
+b-1$ in full, followed by the prefix of line $b$ through $b_c$. Its
+\emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash function
+$h$ and define the \emph{content hash} of $s$ as
 \[
   \hash(s) \;=\; \mathrm{trunc}_{16}\bigl(h\bigl(\lambda \;\Vert\; \texttt{NUL} \;\Vert\; \mathrm{content}_A(s)\bigr)\bigr),
 \]
 the first 16 hex characters (64 bits) of the SHA-256 of the labelled
 content. The truncated hash is the segment's identity.
 \end{definition}
+
+\begin{remark}[Line-level segments]\label{rem:line-level}
+The common case takes $a_c = b_c = \bot$, recovering the line-range
+segment $(f, a, b, \lambda)$ with
+$\mathrm{content}_A(s) = \mathrm{content}_A(f,a) \Vert \cdots \Vert
+\mathrm{content}_A(f,b)$. Character columns are an optional
+refinement: \texttt{covmap} bootstraps every segment at line
+granularity, and on disk a boundary records its column only when it is
+not $\bot$, so the format is backward compatible with line-only
+coverings.
+\end{remark}
 
 \begin{remark}[Why 64-bit identity]
 With $n$ segments in play, the birthday-bound collision probability
@@ -95,10 +114,15 @@ re-labels include \emph{ignored}, \emph{reviewed}, and \emph{mapped},
 used to record per-segment status while preserving content-based
 sharing among segments that agree in both content and label.
 
-Two segments $s_1 = (f, a_1, b_1, \lambda_1)$ and
-$s_2 = (f, a_2, b_2, \lambda_2)$ in the same file are
-\emph{adjacent} if $b_1 + 1 = a_2$, and they \emph{overlap} if their
-line ranges intersect (regardless of label).
+Let the \emph{successor} of an end position $(b, b_c)$ be the next
+character position: $(b+1, \bot)$ when $b_c = \bot$ (the end ran
+through the newline, so the next character is the start of line
+$b+1$), and $(b, b_c + 1)$ otherwise. Two segments $s_1, s_2$ in the
+same file are \emph{adjacent} if the successor of $s_1$'s end equals
+$s_2$'s start (treating $(i,1)$ and $(i,\bot)$ as equal), and they
+\emph{overlap} if their character ranges intersect (regardless of
+label). At line granularity ($a_c = b_c = \bot$) adjacency reduces to
+$b_1 + 1 = a_2$.
 
 \subsection{Coverings}
 
@@ -109,8 +133,8 @@ for every file $f \in F$, the segments of $\Cov$ that lie in $f$ form
 a partition of $f$ into contiguous blocks:
 \begin{enumerate}[label=(C\arabic*),leftmargin=2.5em]
 \item \textbf{Disjointness:} no two segments of $\Cov$ overlap;
-\item \textbf{Completeness:} every line $(f, i)$ with $f \in F$ and
-      $1 \le i \le |f|_A$ lies in some segment of $\Cov$;
+\item \textbf{Completeness:} every character of every file $f \in F$
+      lies in some segment of $\Cov$;
 \item \textbf{Confinement:} every segment of $\Cov$ lies in some
       file of $F$.
 \end{enumerate}
@@ -123,13 +147,18 @@ covered by re-running the bootstrap on $\Cov$ (\S\ref{sec:bootstrap}),
 which is additive and never disturbs existing segments.
 
 Equivalently, for each file $f \in F$ a covering supplies a sequence
-of cut points $1 = c_0 < c_1 < \cdots < c_{k_f} = |f|_A + 1$ together
-with a label $\lambda_j \in L$ for each block, and the segments in
-$f$ are $(f, c_{j-1}, c_j - 1, \lambda_j)$.
+of cut \emph{positions} $p_0 \prec p_1 \prec \cdots \prec p_{k_f}$,
+where $p_0$ is the start of the file, $p_{k_f}$ is one past its last
+character, $\prec$ is the within-file character order, and each
+$p_{j}$ is the start of block $j+1$ as well as the successor of the
+end of block $j$; together with a label $\lambda_j \in L$ per block.
+When every cut falls on a line boundary this is the line-level
+covering with cut points $1 = c_0 < \cdots < c_{k_f} = |f|_A + 1$ and
+segments $(f, c_{j-1}, c_j - 1, \lambda_j)$.
 
 \begin{proposition}[Block lookup]\label{prop:lookup}
-For any covering $\Cov$ and any line $(f, i)$ of $A$ with
-$f \in F(\Cov)$, exactly one segment of $\Cov$ contains $(f, i)$.
+For any covering $\Cov$ and any character of $A$ in a file
+$f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
 \end{proposition}
 
 \subsection{Multiple coverings and sharing}\label{sec:sharing}
@@ -205,9 +234,12 @@ Connections support
 
 A covering can be characterized by several quantitative measures.
 
-Let $\ell(s) = b - a + 1$ be the \emph{length} of a segment
-$s = (f, a, b)$, and let $N_\Cov = \sum_{s \in \Cov} \ell(s)$ be the
-total number of covered lines.
+Let $\ell(s) = b - a + 1$ be the \emph{length} of a segment, measured
+in lines spanned (a character-level segment within one line has
+$\ell = 1$), and let $N_\Cov = \sum_{s \in \Cov} \ell(s)$ be the total
+number of covered lines. The complexity measures below are defined in
+terms of this line-span length; refining a covering with
+character-level cuts increases cardinality without changing $N_\Cov$.
 
 \subsection{Cardinality and granularity}
 
@@ -319,10 +351,16 @@ bootstrap operation and two refinement operations.
       \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
       adds segments only for new files. Existing segments are never
       touched, so any user-driven refinement is preserved.
-\item \texttt{covmap split $C$:$h$ $c$ [$\lambda_t$] [$\lambda_b$]}\\
-      Replace the segment with hash $h$ by two adjacent segments
-      $(f, a, c-1, \lambda_t)$ and $(f, c, b, \lambda_b)$, where
-      $a \le c \le b$ and $a < c$. Both new labels default to
+\item \texttt{covmap split $C$:$h$ $\ell$\texttt{[:}$k$\texttt{]} [$\lambda_t$] [$\lambda_b$]}\\
+      Cut the segment with hash $h$ at the position $(\ell, k)$, which
+      becomes the first character of the bottom block; the top block
+      ends at the immediately preceding character. With the column
+      omitted, the cut is the line boundary $(\ell, \bot)$, recovering
+      the line-level split into $(f, a, \ell-1, \lambda_t)$ and
+      $(f, \ell, b, \lambda_b)$. The cut must leave both blocks
+      non-empty. The split is computed on the stored content, so
+      $\mathrm{content}(\text{top}) \Vert \mathrm{content}(\text{bot})
+      = \mathrm{content}(s)$ exactly. Both new labels default to
       \texttt{unknown}.
 \item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
@@ -379,7 +417,7 @@ is the most general covering one can ask for.
 Lower-level commands meant for scripts.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
-\item \texttt{covmap hash-segment <file> <a> <b> [<label>] [-w]}
+\item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [<label>] [-w]}
 \item \texttt{covmap cat-segment <hash>}
 \item \texttt{covmap ls-segments $C$}
 \item \texttt{covmap ls-pairs $K$}

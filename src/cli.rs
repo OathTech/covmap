@@ -85,7 +85,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
-        "split" => "covmap split <C>:<h> <line> [<top>] [<bot>] split one segment at <line>",
+        "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h>                         refresh a segment's hash from current disk bytes",
         "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a pair to connection K",
@@ -93,7 +93,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
         "repair" => "covmap repair <K>                            drop pairs whose endpoints are no longer in their coverings",
         "html" => "covmap html [-o <path>]                      render a static HTML browser",
-        "hash-segment" => "covmap hash-segment <file> <a> <b> [<lbl>] [-w]",
+        "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
         "ls-pairs" => "covmap ls-pairs <connection>",
@@ -119,7 +119,7 @@ PORCELAIN
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
-  split <C>:<h> <line> [<lbl_top>] [<lbl_bot>]   split one segment at <line>
+  split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h>                       refresh a segment's hash from current disk bytes
   link <K> <h_A> <h_B> [<note>]       add a pair to connection K
@@ -129,7 +129,7 @@ PORCELAIN
   html [-o <path>]                    render a static HTML browser
 
 PLUMBING
-  hash-segment <file> <a> <b> [<lbl>] [-w]
+  hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]
   cat-segment <hash>
   ls-segments <covering>
   ls-pairs <connection>
@@ -163,6 +163,34 @@ fn parse_addr(s: &str) -> (Option<String>, String) {
         (Some(c.to_string()), h.to_string())
     } else {
         (None, s.to_string())
+    }
+}
+
+/// Parse a `<line>` or `<line>:<col>` argument (both 1-indexed). A bare
+/// line number yields `col = None` (the first character of the line).
+fn parse_line_col(s: &str) -> io::Result<(usize, Option<usize>)> {
+    let bad = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "<line> must be a positive integer, optionally <line>:<col>",
+        )
+    };
+    match s.split_once(':') {
+        Some((l, c)) => {
+            let line: usize = l.parse().map_err(|_| bad())?;
+            let col: usize = c.parse().map_err(|_| bad())?;
+            if line == 0 || col == 0 {
+                return Err(bad());
+            }
+            Ok((line, Some(col)))
+        }
+        None => {
+            let line: usize = s.parse().map_err(|_| bad())?;
+            if line == 0 {
+                return Err(bad());
+            }
+            Ok((line, None))
+        }
     }
 }
 
@@ -249,7 +277,9 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
             hash: seg.hash(),
             file: seg.file,
             a: seg.a,
+            a_col: None,
             b: seg.b,
+            b_col: None,
             label: seg.label,
         });
         added += 1;
@@ -377,15 +407,22 @@ fn file_matches_segments(
     entries: &[&CoveringEntry],
     repo: &Repo,
 ) -> io::Result<bool> {
-    let mut expected = 1usize;
-    for e in entries {
-        if e.a != expected {
+    let mut sorted: Vec<&&CoveringEntry> = entries.iter().collect();
+    sorted.sort_by_key(|e| e.sort_key());
+    // The next start position the partition must supply, beginning at
+    // the first character of the file.
+    let mut expected = covering::Pos {
+        line: 1,
+        col: None,
+    };
+    for e in &sorted {
+        if !covering::same_start(expected, e.start_pos()) {
             return Ok(false);
         }
-        if e.b > lines.len() {
-            return Ok(false);
-        }
-        let on_disk: String = lines[e.a - 1..e.b].concat();
+        let on_disk = match segment::extract_content(lines, e.a, e.a_col, e.b, e.b_col) {
+            Some(c) => c,
+            None => return Ok(false),
+        };
         let recorded = match segment::read_object(&repo.objects_dir(), &e.hash) {
             Ok((_, c)) => c,
             Err(_) => return Ok(false),
@@ -393,9 +430,10 @@ fn file_matches_segments(
         if on_disk != recorded {
             return Ok(false);
         }
-        expected = e.b + 1;
+        expected = covering::successor_of_end(e.end_pos());
     }
-    Ok(expected == lines.len() + 1)
+    // The covering must reach exactly one past the end of the file.
+    Ok(covering::same_start(expected, covering::file_end(lines.len())))
 }
 
 fn object_exists(repo: &Repo, hash: &str) -> bool {
@@ -439,11 +477,9 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         );
         for e in &c.entries {
             println!(
-                "  {} {}:{}-{}\t{}",
+                "  {} {}\t{}",
                 short(&e.hash),
-                e.file,
-                e.a,
-                e.b,
+                e.loc(),
                 if e.label.is_empty() { "-" } else { &e.label }
             );
         }
@@ -494,16 +530,14 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     for e in &c.entries {
         if long {
             println!(
-                "{}\t{}\t{}:{}-{}\t{}",
+                "{}\t{}\t{}\t{}",
                 e.hash,
                 if e.label.is_empty() { "-" } else { &e.label },
-                e.file,
-                e.a,
-                e.b,
+                e.loc(),
                 e.b - e.a + 1
             );
         } else {
-            println!("{}\t{}:{}-{}", e.hash, e.file, e.a, e.b);
+            println!("{}\t{}", e.hash, e.loc());
         }
     }
     Ok(0)
@@ -554,12 +588,10 @@ fn cmd_grep(args: &[String]) -> io::Result<u8> {
             println!("{}", e.hash);
         } else {
             println!(
-                "{}\t{}\t{}:{}-{}",
+                "{}\t{}\t{}",
                 e.hash,
                 if e.label.is_empty() { "-" } else { &e.label },
-                e.file,
-                e.a,
-                e.b
+                e.loc()
             );
         }
     }
@@ -582,17 +614,17 @@ fn cmd_diff(args: &[String]) -> io::Result<u8> {
     let h2 = covering::hashes(&c2);
     for h in h1.difference(&h2) {
         if let Some(e) = covering::entry_by_hash(&c1, h) {
-            println!("- {}\t{}:{}-{}\t{}", h, e.file, e.a, e.b, e.label);
+            println!("- {}\t{}\t{}", h, e.loc(), e.label);
         }
     }
     for h in h2.difference(&h1) {
         if let Some(e) = covering::entry_by_hash(&c2, h) {
-            println!("+ {}\t{}:{}-{}\t{}", h, e.file, e.a, e.b, e.label);
+            println!("+ {}\t{}\t{}", h, e.loc(), e.label);
         }
     }
     for h in h1.intersection(&h2) {
         if let Some(e) = covering::entry_by_hash(&c1, h) {
-            println!("= {}\t{}:{}-{}\t{}", h, e.file, e.a, e.b, e.label);
+            println!("= {}\t{}\t{}", h, e.loc(), e.label);
         }
     }
     Ok(0)
@@ -633,12 +665,7 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
     }
     let (covname, prefix) = parse_addr(&args[0]);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
-    let cut: usize = args[1].parse().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "<line> must be a positive integer",
-        )
-    })?;
+    let (cut_line, cut_col) = parse_line_col(&args[1])?;
     let label_top = args
         .get(2)
         .cloned()
@@ -650,7 +677,9 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
     let old = covering::resolve_in_covering(&c, &prefix)?;
-    let (top, bot) = covering::split(&repo, &mut c, &old, cut, &label_top, &label_bot)?;
+    let (top, bot) = covering::split(
+        &repo, &mut c, &old, cut_line, cut_col, &label_top, &label_bot,
+    )?;
     c.write(&repo)?;
     println!("split {} -> {} + {}", old, top, bot);
     Ok(0)
@@ -956,12 +985,8 @@ fn cmd_hash_segment(args: &[String]) -> io::Result<u8> {
         ));
     }
     let file = &args[0];
-    let a: usize = args[1]
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a must be a positive integer"))?;
-    let b: usize = args[2]
-        .parse()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "b must be a positive integer"))?;
+    let (a, a_col) = parse_line_col(&args[1])?;
+    let (b, b_col) = parse_line_col(&args[2])?;
     let mut label = String::new();
     let mut write = false;
     for a in &args[3..] {
@@ -972,17 +997,18 @@ fn cmd_hash_segment(args: &[String]) -> io::Result<u8> {
         }
     }
     let raw = fs::read_to_string(file)?;
-    let lines: Vec<&str> = raw.split_inclusive('\n').collect();
-    if a == 0 || b < a || b > lines.len() {
-        return Err(io::Error::new(
+    let lines: Vec<String> = raw.split_inclusive('\n').map(|s| s.to_string()).collect();
+    let content = segment::extract_content(&lines, a, a_col, b, b_col).ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "line range {a}:{b} out of bounds for {file} ({} lines)",
+                "range {}..{} out of bounds for {file} ({} lines)",
+                args[1],
+                args[2],
                 lines.len()
             ),
-        ));
-    }
-    let content: String = lines[a - 1..b].concat();
+        )
+    })?;
     let seg = Segment {
         file: file.to_string(),
         a,
@@ -1071,19 +1097,28 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
             by_file.entry(e.file.as_str()).or_default().push(e);
         }
         for (f, mut entries) in by_file {
-            entries.sort_by_key(|e| e.a);
-            let mut expected = 1usize;
+            entries.sort_by_key(|e| e.sort_key());
+            // The partition must begin at the first character of the
+            // file and proceed with each segment abutting the previous
+            // one (no gap, no overlap), down to the character.
+            let mut expected = covering::Pos {
+                line: 1,
+                col: None,
+            };
             for e in &entries {
-                if e.a != expected {
+                if !covering::same_start(expected, e.start_pos()) {
                     if !broken_only {
                         eprintln!(
-                            "fsck: covering {} file {} has gap or overlap at line {} (got {})",
-                            cn, f, expected, e.a
+                            "fsck: covering {} file {} has gap or overlap before {} (expected start {})",
+                            cn,
+                            f,
+                            e.range(),
+                            covering::fmt_pos(expected)
                         );
                     }
                     errs += 1;
                 }
-                expected = e.b + 1;
+                expected = covering::successor_of_end(e.end_pos());
             }
         }
         for e in &c.entries {

@@ -16,9 +16,14 @@ binary path is `covmap/target/release/covmap`.
 
 ## Mental model
 
-- A **segment** is a contiguous range of lines `(file, a, b, label)`
-  in one repository. Its identity is the first 16 hex chars (64 bits)
-  of `sha256(label || NUL || content)`. Segments are stored under
+- A **segment** is a contiguous range of one file `(file, a, b, label)`
+  in one repository, displayed as `file:a..b`. `a` and `b` are
+  1-indexed line numbers; each may carry an optional 1-indexed
+  inclusive character column (`a:col`), so a range can be
+  character-precise: `file:5:3..7:9`. An omitted column means the line
+  boundary (start of the line for `a`, through the newline for `b`).
+  Its identity is the first 16 hex chars (64 bits) of
+  `sha256(label || NUL || content)`. Segments are stored under
   `.covmap/objects/`.
 - A **covering** is a partition of (some files of) a repository into
   segments. It is a ref under `.covmap/coverings/<name>` listing one
@@ -81,7 +86,7 @@ are unique.
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (re-hashes). | no |
-| `covmap split <C>:<h> <line> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment). | yes |
+| `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). | yes |
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. | yes |
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. | yes |
 | `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
@@ -172,7 +177,10 @@ that first.
 4. Refine the spec covering. Use `covmap ls -l` to see file:line
    ranges, then `covmap split main:<hash> <line> <lbl_top> <lbl_bot>`
    at each meaningful boundary (`##` headings, function declarations,
-   etc.). The first line of the bottom segment is `<line>`.
+   etc.). The first line of the bottom segment is `<line>`. To cut
+   inside a line — e.g. to isolate an inline term or a clause — pass
+   `<line>:<col>` instead; the bottom segment then begins at character
+   `<col>` (1-indexed, inclusive) of that line.
 5. Run `covmap status` and report cardinality back.
 6. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
    empty connection — but do not start linking yet.
@@ -261,8 +269,10 @@ connections:
   `covmap ls -l` to find a current one.
 - `covmap: ambiguous: N segments match '<prefix>'` → use a longer
   prefix.
-- `covmap: split cut=<n> out of range (a, b]` → you asked to split
-  outside the segment; check `covmap ls -l` for the actual range.
+- `covmap: split cut=<n> out of range for segment <file:a..b>` → you
+  asked to split outside the segment, or at a position that would make
+  one side empty; check `covmap ls -l` for the actual range. The cut
+  may be a line (`<n>`) or a character position (`<n>:<col>`).
 
 ## Minimum-viable session
 
@@ -274,9 +284,9 @@ $ covmap status
 covering main: segments=3 lines=120 entropy=1.485
   drift: clean
 $ covmap ls -l
-e76e5429f980abcd  unknown  README.md:1-30   30
-38f1a9c45dcd1234  unknown  src/lib.rs:1-50  50
-9a0947eeea4ab16c  unknown  spec.md:1-40     40
+e76e5429f980abcd  unknown  README.md:1..30   30
+38f1a9c45dcd1234  unknown  src/lib.rs:1..50  50
+9a0947eeea4ab16c  unknown  spec.md:1..40     40
 $ covmap split main:9a0947ee 10 "Intro" "Body"
 split 9a0947eeea4ab16c -> 5b3a... + 8c4e...
 $ covmap connect main /path/to/impl:main spec_to_impl

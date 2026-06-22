@@ -57,10 +57,18 @@ split_at() {
   local cwd="$1" line="$2" lt="$3" lb="$4"
   local h
   # find the hash whose [a,b] range contains <line>
+  # $3 is "file:a..b" where a/b are line numbers (line-level segments
+  # have no ":col"). Parse the file before the first ':' and the line
+  # range around "..".
   h=$( cd "$cwd" && "$COVMAP_BIN" ls -l | awk -F'\t' -v l="$line" '
     {
-      split($3, fr, /[: -]/)
-      file=fr[1]; a=fr[2]; b=fr[3]
+      loc=$3
+      ci=index(loc, ":")
+      file=substr(loc, 1, ci-1)
+      range=substr(loc, ci+1)
+      di=index(range, "..")
+      a=substr(range, 1, di-1) + 0
+      b=substr(range, di+2) + 0
       if (file=="widget.md" && a<=l && l<=b) { print $1; exit }
     }')
   ( cd "$cwd" && "$COVMAP_BIN" split "main:$h" "$line" "$lt" "$lb" )

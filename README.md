@@ -4,7 +4,7 @@
 implementation — content-addressed and drift-aware.**
 
 covmap is a small CLI for cross-referencing two repositories at the
-granularity of arbitrary line ranges. Typical use: a Markdown
+granularity of arbitrary line — or character — ranges. Typical use: a Markdown
 specification and the code that implements it; or a paper and a
 mechanized proof. You partition each side into named **coverings**
 and record **connections** between them. When either side is edited,
@@ -47,9 +47,11 @@ There are no runtime dependencies beyond `sha2`.
 
 ## Mental model
 
-- A **segment** is `(file, line_a, line_b, label)` plus its content.
-  Its identity is the first 16 hex chars of
-  `sha256(label || NUL || content)`.
+- A **segment** is a contiguous range of a file plus a label and its
+  content. The range is given by a start and end position
+  `file:a[:col]..b[:col]`, where each `col` is an optional 1-indexed
+  inclusive character column (omitted = line boundary). Its identity is
+  the first 16 hex chars of `sha256(label || NUL || content)`.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
@@ -82,9 +84,11 @@ covmap status
 
 # 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+).
 covmap ls -l                          # find the spec.md hash
-# 7f0a8e83a07ef76d  unknown  spec.md:1-42  42
+# 7f0a8e83a07ef76d  unknown  spec.md:1..42  42
 covmap split main:7f0a8e83 10 "Intro" "Body"
 # split 7f0a8e83a07ef76d -> 838a4a248219f38c + 8c39d43caabe6fc6
+# A cut can also fall mid-line: `covmap split main:<h> 10:5` begins the
+# bottom segment at character 5 of line 10 (1-indexed, inclusive).
 
 # 3. Cover the implementation side.
 cd ../impl/
@@ -124,7 +128,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (re-hashes). |
-| `split <C>:<h> <line> [<top>] [<bot>]` | Split a segment at a line. |
+| `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |

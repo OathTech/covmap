@@ -82,7 +82,7 @@ change touches the skill or tutorial:
 
 ```sh
 ./tutorial/run_tutorial.sh                 # integration test for artifact e
-./skill_playground/run_task.sh T1_bootstrap   # (and the other tasks you touched)
+./skill_playground/run_task.sh T1_initial_cover   # (and the other tasks you touched)
 ```
 
 Self-consistency of the theory↔requirements map lives in this repo's own

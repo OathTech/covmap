@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap, refine spec/policy.md at its headings, NAME + link the
+# Cover, refine spec/policy.md at its headings, NAME + link the
 # "Audit logs" section, then MOVE that section to the end of the file.
 #
 # Moving a block is the case diff-remap cannot resolve on its own: the

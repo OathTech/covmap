@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap, refine spec/api.md at its headings, NAME + link the Read and
+# Cover, refine spec/api.md at its headings, NAME + link the Read and
 # Delete sections, then INSERT lines into the Create section.
 #
 # The insertion is a boundary-moving edit: it pushes the Read and Delete

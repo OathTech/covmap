@@ -129,8 +129,9 @@ covmap cover
 ```
 
 `cover` adds one whole-file `unknown` segment per readable file it has
-not yet covered. It is additive and idempotent. `build/artifact.txt` is
-absent from the covering because `build/` is ignored.
+not yet covered — this first, unrefined covering is the *initial cover*.
+It is additive and idempotent. `build/artifact.txt` is absent from the
+covering because `build/` is ignored.
 
 ```
 Covering 'main': 2 segments, 20 lines, entropy 0.722 bits (2 added)

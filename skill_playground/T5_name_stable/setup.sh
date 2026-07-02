@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap, refine spec/auth.md at its headings, NAME the Login slot,
+# Cover, refine spec/auth.md at its headings, NAME the Login slot,
 # link it to the implementation, then edit Login's prose in place.
 #
 # The edit changes bytes inside the Login slot WITHOUT moving any line

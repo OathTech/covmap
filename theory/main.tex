@@ -33,7 +33,7 @@ repositories, segments, coverings, sharing of segments across
 coverings, and connections, then describes the command interface that
 realizes them. The implementation deliberately ships no segmentation
 \emph{rule}: every covering is built up by hand, segment by segment,
-from a single whole-file bootstrap.
+from a single whole-file \texttt{cover}.
 \end{abstract}
 
 \tableofcontents
@@ -50,7 +50,7 @@ character when present). We write $|f|_A$ for the number of lines of
 file $f$ in $A$, $\mathrm{content}_A(f, i)$ for the text of line $i$
 of file $f$, and $|f, i|_A$ for the number of characters of that line.
 \texttt{covmap} considers only files whose bytes are valid UTF-8;
-other files are skipped on bootstrap and never appear in any covering.
+other files are skipped by \texttt{cover} and never appear in any covering.
 \end{definition}
 
 \subsection{Positions and segments}
@@ -93,7 +93,7 @@ The common case takes $a_c = b_c = \bot$, recovering the line-range
 segment $(f, a, b, \lambda)$ with
 $\mathrm{content}_A(s) = \mathrm{content}_A(f,a) \Vert \cdots \Vert
 \mathrm{content}_A(f,b)$. Character columns are an optional
-refinement: \texttt{covmap} bootstraps every segment at line
+refinement: \texttt{covmap cover} creates every segment at line
 granularity, and on disk a boundary records its column only when it is
 not $\bot$, so the format is backward compatible with line-only
 coverings.
@@ -108,8 +108,8 @@ display and storage compared to full SHA-256 is significant.
 
 The label is part of identity: two segments with identical content
 but different labels have different hashes and are therefore
-distinguishable as endpoints of a connection. \texttt{covmap}
-bootstraps every segment with the label \texttt{unknown}; typical
+distinguishable as endpoints of a connection. \texttt{covmap cover}
+labels every segment \texttt{unknown}; typical
 re-labels include \emph{ignored}, \emph{reviewed}, and \emph{mapped},
 used to record per-segment status while preserving content-based
 sharing among segments that agree in both content and label.
@@ -143,7 +143,7 @@ We call $F = F(\Cov)$ the \emph{covered set} of $\Cov$.
 
 A covering need not partition the whole repository. It declares which
 files it accepts responsibility for. New files appearing in $A$ are
-covered by re-running the bootstrap on $\Cov$ (\S\ref{sec:bootstrap}),
+covered by re-running \texttt{cover} on $\Cov$ (\S\ref{sec:bootstrap}),
 which is additive and never disturbs existing segments.
 
 Equivalently, for each file $f \in F$ a covering supplies a sequence
@@ -297,7 +297,7 @@ The \emph{cardinality} of $\Cov$ is $|\Cov|$, and its
 \]
 \end{definition}
 
-A bootstrap covering (one segment per covered file) has $g$ close to
+The initial cover (one segment per covered file) has $g$ close to
 $0$; the one-line-per-segment covering has $g = 1$.
 
 \subsection{Partition entropy}
@@ -468,10 +468,10 @@ ambiguity is an error. An \texttt{@$\nu$} address selects a slot by its
 name-tag; connection endpoints store \texttt{@$\nu$} for named slots so
 that links survive content edits.
 
-\subsection{Bootstrap and refinement}\label{sec:bootstrap}
+\subsection{Initial cover and refinement}\label{sec:bootstrap}
 
 There is no segmentation rule. The interface gives the user one
-bootstrap operation and two refinement operations.
+\texttt{cover} operation and two refinement operations.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap init}\\
@@ -528,7 +528,7 @@ bootstrap operation and two refinement operations.
 
 These operations are the only way to change a covering after
 \texttt{cover}. Together they are complete: any covering reachable
-from the bootstrap by repeated splits / merges / recuts / relabels /
+from the initial cover by repeated splits / merges / recuts / relabels /
 re-tags
 is the most general covering one can ask for.
 

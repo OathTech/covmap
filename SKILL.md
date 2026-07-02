@@ -61,7 +61,7 @@ Use covmap whenever the user asks you to:
 - **Resolve drift**: repo A was edited; what links broke and how do we
   fix them?
 - **Triage** a `covmap status` or `covmap fsck` paste.
-- **Bootstrap** covmap on a new pair of directories.
+- **Set up** covmap on a new pair of directories (init + cover).
 
 Do **not** use covmap to verify that an implementation is
 *semantically* correct. covmap tracks links, not meaning.
@@ -182,7 +182,7 @@ that first.
 
 ## Workflows
 
-### A. Bootstrap a new project
+### A. Set up a new project
 
 1. Identify the two directories. Ask if unclear.
 2. From each, run `covmap init`. **Before covering, write

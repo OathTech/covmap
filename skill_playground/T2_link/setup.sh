@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-bootstrap both repos and split spec/queue.md at its three `##`
+# Pre-cover both repos and split spec/queue.md at its three `##`
 # headings, so the agent can focus on linking.
 set -euo pipefail
 

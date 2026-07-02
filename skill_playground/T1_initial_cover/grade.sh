@@ -19,7 +19,7 @@ check() {
   fi
 }
 
-echo "== T1 bootstrap =="
+echo "== T1 initial cover =="
 check "spec/.covmap/ exists"          test -d spec/.covmap
 check "impl_rs/.covmap/ exists"       test -d impl_rs/.covmap
 check "spec HEAD names a covering"    test -s spec/.covmap/HEAD

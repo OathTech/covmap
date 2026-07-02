@@ -57,12 +57,18 @@ derived operations the model gives connections: *inverse* (`κ⁻¹`),
 future release once a concrete need appears (e.g. composing a docs→code
 map with a code→test map to derive docs→test).
 
-**Cover (bootstrap)** **[T][R][S]** — the `covmap cover` operation that
-seeds a covering with one **whole-file segment** (labelled `unknown`)
-per readable UTF-8 file. Additive and idempotent: re-running adds only
-new files and never disturbs existing refinements. covmap ships no
-automatic segmentation rule, so this is the only non-manual step. The
-theory and requirements call it *bootstrap*; the CLI verb is `cover`.
+**Cover** **[T][R][S]** — the `covmap cover` operation that seeds a
+covering with one **whole-file segment** (labelled `unknown`) per
+readable UTF-8 file. Additive and idempotent: re-running adds only new
+files and never disturbs existing refinements. covmap ships no automatic
+segmentation rule, so this is the only non-manual step. Has one
+sub-concept (below).
+
+**Initial cover** **[T][R][S]** — the particular covering produced by the
+first `cover` on a repository: one whole-file `unknown` segment per file,
+before any **split**/**merge** refinement. Its **granularity** is near 0.
+Sub-concept of **cover**. (Earlier drafts and older theory/requirements
+text called this the *bootstrap*; that word is retired.)
 
 **Coverage (source / target)** **[T][S]** — the fraction of a covering's
 segments that appear in at least one link of a connection. A connection
@@ -146,9 +152,9 @@ segment ↔ segment.
 generated files out of coverings. Dot-directories are always skipped.
 
 **Label** **[T][R][S]** — a per-segment status string, part of the
-segment hash. Bootstrap assigns `unknown`; typical relabels are
-`ignored`, `reviewed`, and `mapped`. Two segments with equal content but
-different labels are distinct.
+segment hash. `cover` assigns `unknown`; typical relabels are `ignored`,
+`reviewed`, and `mapped`. Two segments with equal content but different
+labels are distinct.
 
 **Line map** **[T][S]** — a monotone partial injection from old to new
 line indices (line `i` maps to `j` only if the lines are equal),
@@ -323,9 +329,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Naming choices applied in this revision (please confirm)
 
-- **Cover, not bootstrap.** T and R say *bootstrap*; the CLI verb is
-  `cover`. Entry now titled **Cover (bootstrap)**. If you agree, one word
-  should win across T/R/S — *cover* is the verb users actually type.
 - **Segment hash — *content hash* retired.** The hash covers
   `label ‖ NUL ‖ content`, not content alone, so *content hash* was
   actively misleading. *Segment hash* is now the only name; T/R/S should

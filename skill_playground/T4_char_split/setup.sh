@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-bootstrap both repos and split spec/buffer.md at its two `##`
+# Pre-cover both repos and split spec/buffer.md at its two `##`
 # headings, so the agent can focus on the character-level split + link.
 set -euo pipefail
 

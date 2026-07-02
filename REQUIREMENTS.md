@@ -41,10 +41,10 @@ contiguous, file-confined blocks, and this invariant shall be checkable.
 A covering need not span the whole repository; it shall explicitly declare
 the set of files it accepts responsibility for.
 
-## req7 — Additive, idempotent bootstrap
+## req7 — Additive, idempotent cover
 covmap shall seed a covering with one whole-file segment per readable
-file, and re-running it shall add only new files, never disturbing
-existing refinements.
+file — the *initial cover* — and re-running it shall add only new files,
+never disturbing existing refinements.
 
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined

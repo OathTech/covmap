@@ -46,7 +46,7 @@
 ## Why this matters
 
 Diff-remap (T6) handles edits that keep boundaries in unchanged regions.
-A **moved** block defeats it — but the block's content still exists
+A **moved** segment defeats it — but the segment's content still exists
 somewhere in the file. Fingerprinting finds the most similar location
 and proposes it, turning "the link is broken, hunt for where it went"
 into "covmap thinks it's here (NN%), confirm." The proposal is advisory:
@@ -57,7 +57,7 @@ covmap never relinks on a fuzzy match by itself.
 The grader runs `covmap recut --remap` itself and checks that:
 
 - it reports an **unresolved** slot and prints a fingerprint proposal
-  naming `@audit-retention`, pointing at the moved block, with a match
+  naming `@audit-retention`, pointing at the moved segment, with a match
   percentage;
 - the covering ref was **not mutated** by the remap (propose-only);
 - the `@audit-retention` slot and its `policy_links` link are still

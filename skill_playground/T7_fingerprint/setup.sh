@@ -2,10 +2,10 @@
 # Cover, refine spec/policy.md at its headings, NAME + link the
 # "Audit logs" section, then MOVE that section to the end of the file.
 #
-# Moving a block is the case diff-remap cannot resolve on its own: the
-# block's boundary lines were deleted from their old position, so they
+# Moving a segment is the case diff-remap cannot resolve on its own: the
+# segment's boundary lines were deleted from their old position, so they
 # fall in a changed region. `recut --remap` reports the slot as
-# unresolved and prints a *fingerprint proposal* pointing at the block's
+# unresolved and prints a *fingerprint proposal* pointing at the segment's
 # new location. The agent confirms the proposal and relinks. Nothing is
 # moved automatically -- fingerprinting is propose-only.
 set -euo pipefail

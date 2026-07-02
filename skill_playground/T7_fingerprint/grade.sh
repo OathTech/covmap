@@ -30,7 +30,7 @@ out=$( ( cd spec && "$COVMAP_BIN" recut --remap ) 2>&1 || true )
 
 check "reports an unresolved slot"       bash -c "printf '%s' \"\$0\" | grep -q 'unresolved'" "$out"
 check "names @audit-retention in proposal" bash -c "printf '%s' \"\$0\" | grep -q '@audit-retention'" "$out"
-check "proposal points at the moved block (lines 12-15)" bash -c "
+check "proposal points at the moved segment (lines 12-15)" bash -c "
   printf '%s' \"\$0\" | grep -Eq 'policy\.md:1[0-9]\.\.1[0-9].*match'
 " "$out"
 check "proposal includes a match percentage" bash -c "printf '%s' \"\$0\" | grep -Eq '[0-9]+% match'" "$out"

@@ -106,7 +106,7 @@ hr "3. refine queue.md into one segment per section  (REQ5, REQ8)"
 # The `##` headings sit at lines 5, 10, 14 (the Enqueue body wraps onto
 # two lines, so the sections are not uniform). We address each segment
 # *positionally* — `main:queue.md:<line>` is "the segment of queue.md
-# that covers <line>" (unique by Block Lookup), a stable handle that
+# that covers <line>" (unique by Segment Lookup), a stable handle that
 # never depends on a segment hash. Each split's SECOND argument is the
 # cut line.
 ( cd "$WORK/spec" && run split main:queue.md:1  5 preamble Enqueue )

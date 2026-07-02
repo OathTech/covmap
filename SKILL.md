@@ -34,7 +34,7 @@ binary path is `covmap/target/release/covmap`.
   segments you intend to map: a connection referencing a slot by
   `@name` survives edits to the slot's content, because identity is the
   name, not the hash. Anonymous segments (the default, e.g. `unknown`
-  blocks) are referenced by segment hash, which changes on every edit.
+  segments) are referenced by segment hash, which changes on every edit.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
@@ -271,7 +271,7 @@ survived — a slot whose own anchor lines were rewritten is reported
 unresolved rather than guessed.
 
 **Moved or rewritten slots — fingerprint proposals.** When a slot can't
-be placed by diff-remap (typically because the block was *moved*),
+be placed by diff-remap (typically because the segment was *moved*),
 `recut --remap` prints a **propose-only** relocation guess for it: the
 most similar line range in the new file, with a match score, e.g.
 

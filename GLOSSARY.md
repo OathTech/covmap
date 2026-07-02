@@ -199,8 +199,8 @@ covered file: disjoint, complete, contiguous, file-confined segments.
 See **covering invariants**.
 
 **Partition entropy** **[T][S]** — `H(C) = −Σ p·log₂ p` over each
-segment's share of the covering's total lines; 0 for a single block,
-`log₂ N_C` for one-block-per-line, maximized by equal-sized blocks.
+segment's share of the covering's total lines; 0 for a single segment,
+`log₂ N_C` for one-segment-per-line, maximized by equal-sized segments.
 Computed by `stats()` and printed by `status` as a one-number gauge of
 how evenly a covering is cut. Purely diagnostic today — nothing consumes
 it (see observations).
@@ -366,9 +366,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Still-unreconciled vocabulary across T / R / S
 
-- **block ≈ segment.** Theory prose says *block* (and "Block lookup");
-  code and interface always say *segment*. Standardize on *segment*,
-  reserve *block* for informal prose.
 - **residue (T) = unresolved (S).** Folded into **Repair residue**; the
   sources themselves still use two words.
 - **auto-heal rate (T) vs. healed / refreshed counts (S output).** Same

@@ -35,7 +35,7 @@ content sharing. (Name-tags, by contrast, are not hashed — see req3.)
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
-contiguous, file-confined blocks, and this invariant shall be checkable.
+contiguous, file-confined segments, and this invariant shall be checkable.
 
 ## req6 — Partial, declared coverage
 A covering need not span the whole repository; it shall explicitly declare

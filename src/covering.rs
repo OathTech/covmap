@@ -17,7 +17,7 @@
 //! slot identity that connections can reference instead of the content
 //! hash, so a link survives an edit that changes the slot's bytes. A
 //! line without a sixth field is an anonymous slot (the common case for
-//! `unknown` blocks). Older refs that never wrote the field parse
+//! `unknown` segments). Older refs that never wrote the field parse
 //! unchanged, so this is a backward-compatible extension (no format
 //! version bump).
 //!
@@ -909,7 +909,7 @@ pub fn resolve_slot_hash(c: &Covering, addr: &str) -> io::Result<String> {
 
 /// Resolve a positional address `file:line[:col]` to the index of the
 /// segment whose range contains that position. By covering completeness
-/// (Block Lookup) at most one segment qualifies. `col` defaults to 1
+/// (Segment Lookup) at most one segment qualifies. `col` defaults to 1
 /// (the first character of the line).
 fn resolve_position(c: &Covering, addr: &str) -> io::Result<usize> {
     let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidInput, m.to_string());

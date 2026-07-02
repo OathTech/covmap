@@ -130,7 +130,7 @@ $b_1 + 1 = a_2$.
 Let $F \subseteq \mathrm{files}(A)$. A \emph{covering of $A$ on $F$}
 is a finite set of segments $\Cov = \{s_1, \dots, s_n\}$ such that,
 for every file $f \in F$, the segments of $\Cov$ that lie in $f$ form
-a partition of $f$ into contiguous blocks:
+a partition of $f$ into contiguous segments:
 \begin{enumerate}[label=(C\arabic*),leftmargin=2.5em]
 \item \textbf{Disjointness:} no two segments of $\Cov$ overlap;
 \item \textbf{Completeness:} every character of every file $f \in F$
@@ -150,13 +150,13 @@ Equivalently, for each file $f \in F$ a covering supplies a sequence
 of cut \emph{positions} $p_0 \prec p_1 \prec \cdots \prec p_{k_f}$,
 where $p_0$ is the start of the file, $p_{k_f}$ is one past its last
 character, $\prec$ is the within-file character order, and each
-$p_{j}$ is the start of block $j+1$ as well as the successor of the
-end of block $j$; together with a label $\lambda_j \in L$ per block.
+$p_{j}$ is the start of segment $j+1$ as well as the successor of the
+end of segment $j$; together with a label $\lambda_j \in L$ per segment.
 When every cut falls on a line boundary this is the line-level
 covering with cut points $1 = c_0 < \cdots < c_{k_f} = |f|_A + 1$ and
 segments $(f, c_{j-1}, c_j - 1, \lambda_j)$.
 
-\begin{proposition}[Block lookup]\label{prop:lookup}
+\begin{proposition}[Segment lookup]\label{prop:lookup}
 For any covering $\Cov$ and any character of $A$ in a file
 $f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
 \end{proposition}
@@ -164,7 +164,7 @@ $f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
 \subsection{Multiple coverings and sharing}\label{sec:sharing}
 
 A repository may carry several coverings simultaneously. Different
-coverings often agree on some blocks. Because identity is
+coverings often agree on some segments. Because identity is
 content-addressed, agreement is automatic: two coverings $\Cov_1$ and
 $\Cov_2$ \emph{share} a segment $s$ exactly when $s \in \Cov_1$,
 $s \in \Cov_2$, and $\hash(s)$ is the same in both.
@@ -228,8 +228,8 @@ not.
 \end{definition}
 
 Operations propagate name-tags as follows: \texttt{split} keeps the
-name on the top block and leaves the bottom anonymous; \texttt{merge}
-keeps the single surviving name (the earlier block's if both are
+name on the top segment and leaves the bottom anonymous; \texttt{merge}
+keeps the single surviving name (the earlier segment's if both are
 named); \texttt{recut} and \texttt{label} preserve the name. A
 first-class \texttt{name} operation sets, renames, or clears a tag.
 
@@ -309,9 +309,9 @@ Let $p_\Cov(s) = \ell(s)/N_\Cov$. The \emph{entropy} of $\Cov$ is
 \]
 \end{definition}
 
-Entropy ranges from $0$ (a single block covering one one-line file)
-to $\log_2 N_\Cov$ (one block per line). Coverings with equal-length
-blocks maximize entropy at fixed cardinality.
+Entropy ranges from $0$ (a single segment covering one one-line file)
+to $\log_2 N_\Cov$ (one segment per line). Coverings with equal-length
+segments maximize entropy at fixed cardinality.
 
 \subsection{Edit stability and drift}
 
@@ -485,11 +485,11 @@ There is no segmentation rule. The interface gives the user one
       touched, so any user-driven refinement is preserved.
 \item \texttt{covmap split $C$:$h$ $\ell$\texttt{[:}$k$\texttt{]} [$\lambda_t$] [$\lambda_b$]}\\
       Cut the segment with hash $h$ at the position $(\ell, k)$, which
-      becomes the first character of the bottom block; the top block
+      becomes the first character of the bottom segment; the top segment
       ends at the immediately preceding character. With the column
       omitted, the cut is the line boundary $(\ell, \bot)$, recovering
       the line-level split into $(f, a, \ell-1, \lambda_t)$ and
-      $(f, \ell, b, \lambda_b)$. The cut must leave both blocks
+      $(f, \ell, b, \lambda_b)$. The cut must leave both segments
       non-empty. The split is computed on the stored content, so
       $\mathrm{content}(\text{top}) \Vert \mathrm{content}(\text{bot})
       = \mathrm{content}(s)$ exactly. Both new labels default to

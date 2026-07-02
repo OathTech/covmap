@@ -195,9 +195,12 @@ covmap/
   Cargo.toml
   LICENSE
   README.md
+  DEVELOPER.md         # how to evolve covmap (five-artifact consistency contract)
   SKILL.md             # agent-facing workflow guide
-  src/                 # Rust implementation
+  GLOSSARY.md          # vocabulary across theory / requirements / source
+  src/                 # Rust implementation (incl. unit tests)
   theory/main.tex      # mathematical foundation
+  tutorial/            # guided end-to-end tour (run_tutorial.sh is an integration test)
   smoke_test/          # end-to-end shell test
   skill_playground/    # self-contained agent evaluation tasks
 ```
@@ -218,6 +221,15 @@ agents (Claude Code's skill mechanism reads its frontmatter, but the
 content is plain Markdown). The
 [`skill_playground/`](skill_playground/README.md) directory has
 fixture-based tasks for evaluating how well an agent drives covmap.
+
+## Contributing / evolving covmap
+
+covmap is described by five artifacts that must be kept consistent with
+each other — theory, requirements, implementation + tests, skill, and
+tutorial. Any change to one must be reconciled across the rest.
+[`DEVELOPER.md`](DEVELOPER.md) is the contract: propagation rules by
+change type, the gates to run, and the definition of done. Agents should
+also read [`AGENT.md`](AGENT.md).
 
 ## License
 

@@ -8,7 +8,6 @@ use crate::covering::{self, Covering, CoveringEntry};
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
 use crate::walk::{self, DEFAULT_LABEL};
-use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -46,6 +45,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "grep" => cmd_grep(&rest),
         "diff" => cmd_diff(&rest),
         "label" => cmd_label(&rest),
+        "name" => cmd_name(&rest),
         "split" => cmd_split(&rest),
         "merge" => cmd_merge(&rest),
         "recut" => cmd_recut(&rest),
@@ -85,9 +85,10 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
+        "name" => "covmap name <C>:<h|@slot> <tag|->          set, rename, or clear (-) a slot's name-tag",
         "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
-        "recut" => "covmap recut <C>:<h>                         refresh a segment's hash from current disk bytes",
+        "recut" => "covmap recut <C>:<h|@slot> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's slots onto the edited file",
         "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a pair to connection K",
         "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a pair",
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
@@ -119,9 +120,11 @@ PORCELAIN
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
+  name <C>:<h|@slot> <tag|->          set, rename, or clear (-) a slot's name-tag
   split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
-  recut <C>:<h>                       refresh a segment's hash from current disk bytes
+  recut <C>:<h|@slot>                 refresh a segment's hash from current disk bytes
+  recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved slots, print fingerprint relocation proposals (propose-only)
   link <K> <h_A> <h_B> [<note>]       add a pair to connection K
   unlink <K> <h_A> <h_B>              remove a pair
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
@@ -197,6 +200,16 @@ fn parse_line_col(s: &str) -> io::Result<(usize, Option<usize>)> {
 fn short(h: &str) -> &str {
     let n = h.len().min(HASH_LEN);
     &h[..n]
+}
+
+/// Display a pair endpoint: `@name` endpoints are shown verbatim, hash
+/// endpoints are truncated to the short form.
+fn short_endpoint(ep: &str) -> &str {
+    if ep.starts_with('@') {
+        ep
+    } else {
+        short(ep)
+    }
 }
 
 // ---- init -----------------------------------------------------------------
@@ -281,6 +294,7 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
             b: seg.b,
             b_col: None,
             label: seg.label,
+            name: None,
         });
         added += 1;
     }
@@ -372,17 +386,15 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
         for cn in conns {
             let k = Connection::read(&repo, &cn)?;
             let src = Covering::read(&repo, &k.source_covering)?;
-            let src_set = covering::hashes(&src);
             let tgt_repo = Repo {
                 root: PathBuf::from(&k.target_repo),
             };
-            let tgt_set = match Covering::read(&tgt_repo, &k.target_covering) {
-                Ok(t) => covering::hashes(&t),
-                Err(_) => BTreeSet::new(),
-            };
+            let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
             let mut broken = 0usize;
             for p in &k.pairs {
-                if !src_set.contains(&p.a) || !tgt_set.contains(&p.b) {
+                let a_ok = covering::endpoint_resolves(&src, &p.a);
+                let b_ok = tgt.as_ref().map_or(false, |t| covering::endpoint_resolves(t, &p.b));
+                if !a_ok || !b_ok {
                     broken += 1;
                 }
             }
@@ -459,9 +471,14 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         println!("  pairs:           {}", k.pairs.len());
         for p in &k.pairs {
             if p.note.is_empty() {
-                println!("    {} {}", short(&p.a), short(&p.b));
+                println!("    {} {}", short_endpoint(&p.a), short_endpoint(&p.b));
             } else {
-                println!("    {} {}  ({})", short(&p.a), short(&p.b), p.note);
+                println!(
+                    "    {} {}  ({})",
+                    short_endpoint(&p.a),
+                    short_endpoint(&p.b),
+                    p.note
+                );
             }
         }
         return Ok(0);
@@ -476,11 +493,17 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
             c.name, st.cardinality, st.total_lines, st.entropy_bits
         );
         for e in &c.entries {
+            let name = e
+                .name
+                .as_deref()
+                .map(|n| format!("\t@{n}"))
+                .unwrap_or_default();
             println!(
-                "  {} {}\t{}",
+                "  {} {}\t{}{}",
                 short(&e.hash),
                 e.loc(),
-                if e.label.is_empty() { "-" } else { &e.label }
+                if e.label.is_empty() { "-" } else { &e.label },
+                name
             );
         }
         return Ok(0);
@@ -489,7 +512,7 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     let full = match covering {
         Some(cname) => {
             let c = resolve_covering(&repo, &cname)?;
-            covering::resolve_in_covering(&c, &prefix)?
+            covering::resolve_slot_hash(&c, &prefix)?
         }
         None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
     };
@@ -529,12 +552,21 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     let c = resolve_covering(&repo, &n)?;
     for e in &c.entries {
         if long {
+            // Columns: hash, label, loc, lines, name. The name-tag is
+            // appended last so the historical column order (hash, label,
+            // loc, lines) is unchanged for existing scripts.
+            let name = e
+                .name
+                .as_deref()
+                .map(|n| format!("@{n}"))
+                .unwrap_or_else(|| "-".to_string());
             println!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 e.hash,
                 if e.label.is_empty() { "-" } else { &e.label },
                 e.loc(),
-                e.b - e.a + 1
+                e.b - e.a + 1,
+                name
             );
         } else {
             println!("{}\t{}", e.hash, e.loc());
@@ -644,13 +676,48 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
     let new_label = args[1].clone();
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_in_covering(&c, &prefix)?;
+    let old = covering::resolve_slot_hash(&c, &prefix)?;
     let new_hash = covering::relabel(&repo, &mut c, &old, &new_label)?;
     c.write(&repo)?;
     println!(
         "{} -> {}  (label '{}' in covering '{}')",
         old, new_hash, new_label, c.name
     );
+    Ok(0)
+}
+
+// ---- name -----------------------------------------------------------------
+
+/// `name <C>:<h|@slot> <tag|->` — set, rename, or clear a slot's
+/// name-tag. The address may itself be a hash prefix or an existing
+/// `@name`. A `<tag>` of `-` clears the name (slot becomes anonymous).
+fn cmd_name(args: &[String]) -> io::Result<u8> {
+    if args.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "name <covering>:<hash|@slot> <tag|->",
+        ));
+    }
+    let (covname, addr) = parse_addr(&args[0]);
+    let covname = covname.unwrap_or_else(|| "HEAD".to_string());
+    let tag = args[1].as_str();
+    let repo = current_repo()?;
+    let mut c = resolve_covering(&repo, &covname)?;
+    let idx = covering::resolve_slot(&c, &addr)?;
+    let old = c.entries[idx].name.clone();
+    let new_name = if tag == "-" { None } else { Some(tag) };
+    covering::set_name(&mut c, idx, new_name)?;
+    c.write(&repo)?;
+    let h = covering::short_hash(&c.entries[idx].hash);
+    match (old, new_name) {
+        (None, Some(n)) => println!("named {h} -> @{n}"),
+        (Some(o), Some(n)) if o != n => {
+            println!("renamed @{o} -> @{n}  (re-point connections that used '@{o}')")
+        }
+        (Some(o), Some(_)) => println!("@{o} (unchanged)"),
+        (Some(o), None) => println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)"),
+        (None, None) => println!("{h} (already anonymous)"),
+    }
     Ok(0)
 }
 
@@ -676,7 +743,7 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
         .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_in_covering(&c, &prefix)?;
+    let old = covering::resolve_slot_hash(&c, &prefix)?;
     let (top, bot) = covering::split(
         &repo, &mut c, &old, cut_line, cut_col, &label_top, &label_bot,
     )?;
@@ -688,14 +755,56 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
 // ---- recut ----------------------------------------------------------------
 
 fn cmd_recut(args: &[String]) -> io::Result<u8> {
-    let addr = args
-        .first()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<hash>"))?;
-    let (covname, prefix) = parse_addr(addr);
+    let mut remap = false;
+    let mut addr: Option<String> = None;
+    let mut threshold = 0.4f64;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--remap" => remap = true,
+            "--threshold" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--threshold needs a value")
+                })?;
+                threshold = v.parse().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--threshold must be a number in [0,1]",
+                    )
+                })?;
+                i += 1;
+            }
+            other if other.starts_with('-') => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("recut: unexpected flag '{other}'"),
+                ));
+            }
+            other => {
+                if addr.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "recut accepts a single address",
+                    ));
+                }
+                addr = Some(other.to_string());
+            }
+        }
+        i += 1;
+    }
+    if remap {
+        return cmd_recut_remap(addr.as_deref(), threshold);
+    }
+    let addr = addr.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<hash|@slot>")
+    })?;
+    let (covname, prefix) = parse_addr(&addr);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_in_covering(&c, &prefix)?;
+    // Accept either a hash prefix or an `@name` slot address.
+    let idx = covering::resolve_slot(&c, &prefix)?;
+    let old = c.entries[idx].hash.clone();
     let new_hash = covering::recut(&repo, &mut c, &old)?;
     c.write(&repo)?;
     if old == new_hash {
@@ -704,6 +813,181 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
         println!("{} -> {}", old, new_hash);
     }
     Ok(0)
+}
+
+/// `recut --remap [<C>[:<addr>]]` — diff-remap. Reconstruct each covered
+/// file from the covering, diff against the bytes on disk, and re-fit
+/// every slot's boundaries through the unchanged regions, refreshing
+/// content and preserving names so connections carry forward. Per-file
+/// all-or-nothing: a file whose boundaries fall in changed regions is
+/// left untouched and its slots reported as residue. With an address
+/// `<C>:<addr>` only that slot's file is remapped; otherwise every
+/// drifted file in the covering is.
+fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let (covname, only_file) = match addr {
+        Some(a) => {
+            let (cn, slot) = parse_addr(a);
+            let covname = cn.unwrap_or_else(|| "HEAD".to_string());
+            let c = resolve_covering(&repo, &covname)?;
+            let idx = covering::resolve_slot(&c, &slot)?;
+            (covname, Some(c.entries[idx].file.clone()))
+        }
+        None => ("HEAD".to_string(), None),
+    };
+    let mut c = resolve_covering(&repo, &covname)?;
+
+    // Group entry indices by file.
+    let mut files: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, e) in c.entries.iter().enumerate() {
+        files.entry(e.file.clone()).or_default().push(i);
+    }
+
+    let mut healed_files = 0usize;
+    let mut total_refreshed = 0usize;
+    let mut residue = 0usize;
+    // Accumulate the rebuilt entry list; replace whole files atomically.
+    let mut new_entries: Vec<CoveringEntry> = Vec::with_capacity(c.entries.len());
+    // Process files in covering order so the rebuilt list stays ordered.
+    let mut handled: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for e in &c.entries {
+        if handled.contains(&e.file) {
+            continue;
+        }
+        handled.insert(e.file.clone());
+        let file = &e.file;
+        let idxs = &files[file];
+        let old_entries: Vec<CoveringEntry> = idxs.iter().map(|&i| c.entries[i].clone()).collect();
+
+        if let Some(target) = &only_file {
+            if file != target {
+                new_entries.extend(old_entries);
+                continue;
+            }
+        }
+
+        // Reconstruct O from the covering; read N from disk.
+        let mut ordered = old_entries.clone();
+        ordered.sort_by_key(|e| e.sort_key());
+        let mut o_lines: Vec<String> = Vec::new();
+        let mut reconstruct_ok = true;
+        for oe in &ordered {
+            match segment::read_object(&repo.objects_dir(), &oe.hash) {
+                Ok((_, content)) => {
+                    for piece in content.split_inclusive('\n') {
+                        o_lines.push(piece.to_string());
+                    }
+                }
+                Err(_) => {
+                    reconstruct_ok = false;
+                    break;
+                }
+            }
+        }
+        let abs = repo.root.join(file);
+        let n_lines = match walk::read_text_lines(&abs) {
+            Ok(Some(l)) => l,
+            _ => {
+                eprintln!("{file}: cannot read as UTF-8 — skipped");
+                new_entries.extend(old_entries);
+                continue;
+            }
+        };
+        if !reconstruct_ok {
+            eprintln!("{file}: object store incomplete — skipped");
+            new_entries.extend(old_entries);
+            continue;
+        }
+
+        match covering::remap_file(&old_entries, &o_lines, &n_lines) {
+            Ok(fr) => {
+                for (entry, content) in &fr.entries {
+                    let seg = Segment {
+                        file: entry.file.clone(),
+                        a: entry.a,
+                        b: entry.b,
+                        label: entry.label.clone(),
+                        content: content.clone(),
+                    };
+                    segment::write_object(&repo.objects_dir(), &seg)?;
+                }
+                total_refreshed += fr.refreshed;
+                if fr.refreshed > 0 {
+                    healed_files += 1;
+                    println!(
+                        "{file}: remapped {} slot(s) ({} refreshed, {} unchanged)",
+                        fr.entries.len(),
+                        fr.refreshed,
+                        fr.unchanged
+                    );
+                }
+                new_entries.extend(fr.entries.into_iter().map(|(e, _)| e));
+            }
+            Err(covering::RemapError::NotDrifted) => {
+                new_entries.extend(old_entries);
+            }
+            Err(covering::RemapError::CharLevel(locs)) => {
+                eprintln!(
+                    "{file}: has character-level slot(s) ({}) — diff-remap handles \
+                     line-aligned slots only; left untouched",
+                    locs.join(", ")
+                );
+                residue += locs.len();
+                new_entries.extend(old_entries);
+            }
+            Err(covering::RemapError::Unresolved(items)) => {
+                eprintln!(
+                    "{file}: {} slot boundary(ies) fall in changed regions — left \
+                     untouched. Fingerprint proposals (confirm manually; nothing \
+                     was changed):",
+                    items.len()
+                );
+                residue += items.len();
+                for it in &items {
+                    let who = it
+                        .name
+                        .as_deref()
+                        .map(|n| format!("@{n}"))
+                        .unwrap_or_else(|| format!("{} ({})", covering::short_hash(&it.hash), it.loc()));
+                    // Read the slot's recorded content and rank candidate
+                    // locations in the new file. Propose-only.
+                    let target = match segment::read_object(&repo.objects_dir(), &it.hash) {
+                        Ok((_, c)) => c,
+                        Err(_) => {
+                            eprintln!("  {who}: (content unavailable)");
+                            continue;
+                        }
+                    };
+                    let cands = crate::fingerprint::locate(&target, &n_lines, 3);
+                    let shown: Vec<_> =
+                        cands.iter().filter(|c| c.score >= threshold).collect();
+                    if shown.is_empty() {
+                        eprintln!("  {who}: no candidate ≥ {:.2}", threshold);
+                    } else {
+                        for c in shown {
+                            eprintln!(
+                                "  {who}: {}:{}..{}  ({:.0}% match)  — covmap unlink/link to relocate",
+                                file,
+                                c.a,
+                                c.b,
+                                c.score * 100.0
+                            );
+                        }
+                    }
+                }
+                new_entries.extend(old_entries);
+            }
+        }
+    }
+
+    c.entries = new_entries;
+    c.write(&repo)?;
+    println!(
+        "remap: {healed_files} file(s) healed, {total_refreshed} slot(s) refreshed, \
+         {residue} unresolved"
+    );
+    Ok(if residue > 0 { 1 } else { 0 })
 }
 
 // ---- merge ----------------------------------------------------------------
@@ -731,8 +1015,8 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
         .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &cn1)?;
-    let h1 = covering::resolve_in_covering(&c, &p1)?;
-    let h2 = covering::resolve_in_covering(&c, &p2)?;
+    let h1 = covering::resolve_slot_hash(&c, &p1)?;
+    let h2 = covering::resolve_slot_hash(&c, &p2)?;
     let h = covering::merge(&repo, &mut c, &h1, &h2, &label)?;
     c.write(&repo)?;
     println!("merged {} + {} -> {}", h1, h2, h);
@@ -753,13 +1037,18 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
     let src = Covering::read(&repo, &k.source_covering)?;
-    let ha = covering::resolve_in_covering(&src, ha_in)?;
+    // Resolve each endpoint to a slot. The stored endpoint is the slot's
+    // name-tag (`@name`) when it is named — so the link survives content
+    // edits — otherwise its content hash (legacy / anonymous slots).
+    let ia = covering::resolve_slot(&src, ha_in)?;
+    let ha = src.entries[ia].endpoint();
 
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-    let hb = covering::resolve_in_covering(&tgt, hb_in)?;
+    let ib = covering::resolve_slot(&tgt, hb_in)?;
+    let hb = tgt.entries[ib].endpoint();
 
     if k.pairs.iter().any(|p| p.a == ha && p.b == hb) {
         eprintln!("(pair already present)");
@@ -785,8 +1074,11 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
-    let ha = resolve_pair_hash(&k, ha_in, true)?;
-    let hb = resolve_pair_hash(&k, hb_in, false)?;
+    // Accept either a slot address (hash prefix / `@name`, resolved
+    // against the covering to the slot's stored endpoint) or a literal
+    // pair-endpoint prefix (covers pairs whose slot has since vanished).
+    let ha = resolve_endpoint_arg(&repo, &k, ha_in, true)?;
+    let hb = resolve_endpoint_arg(&repo, &k, hb_in, false)?;
     let before = k.pairs.len();
     k.pairs.retain(|p| !(p.a == ha && p.b == hb));
     if k.pairs.len() == before {
@@ -796,6 +1088,45 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     k.write(&repo)?;
     println!("unlinked {} -> {}", ha, hb);
     Ok(0)
+}
+
+/// Resolve an `unlink` endpoint argument to the exact string stored in
+/// a pair. Tries, in order: (1) `@name` literal already present in a
+/// pair; (2) resolving the arg against the relevant covering to a slot
+/// endpoint; (3) prefix-matching the raw pair endpoints (legacy hashes,
+/// or slots that have since disappeared). `source_side` picks the A or
+/// B column of each pair.
+fn resolve_endpoint_arg(
+    repo: &Repo,
+    k: &Connection,
+    arg: &str,
+    source_side: bool,
+) -> io::Result<String> {
+    // (1) exact @name endpoint already present?
+    if arg.starts_with('@')
+        && k.pairs.iter().any(|p| {
+            let ep = if source_side { &p.a } else { &p.b };
+            ep == arg
+        })
+    {
+        return Ok(arg.to_string());
+    }
+    // (2) resolve against the covering on the relevant side.
+    let cov = if source_side {
+        Covering::read(repo, &k.source_covering)
+    } else {
+        let tgt_repo = Repo {
+            root: PathBuf::from(&k.target_repo),
+        };
+        Covering::read(&tgt_repo, &k.target_covering)
+    };
+    if let Ok(c) = cov {
+        if let Ok(idx) = covering::resolve_slot(&c, arg) {
+            return Ok(c.entries[idx].endpoint());
+        }
+    }
+    // (3) fall back to raw prefix match against pair endpoints.
+    resolve_pair_hash(k, arg, source_side)
 }
 
 fn resolve_pair_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Result<String> {
@@ -901,14 +1232,12 @@ fn cmd_repair(args: &[String]) -> io::Result<u8> {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-    let src_set = covering::hashes(&src);
-    let tgt_set = covering::hashes(&tgt);
 
     let mut kept: Vec<Pair> = Vec::new();
     let mut dropped = 0usize;
     for p in &k.pairs {
-        let a_ok = src_set.contains(&p.a);
-        let b_ok = tgt_set.contains(&p.b);
+        let a_ok = covering::endpoint_resolves(&src, &p.a);
+        let b_ok = covering::endpoint_resolves(&tgt, &p.b);
         if a_ok && b_ok {
             kept.push(p.clone());
         } else {
@@ -1072,7 +1401,7 @@ fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {
     let full = match covering {
         Some(cn) => {
             let c = resolve_covering(&repo, &cn)?;
-            covering::resolve_in_covering(&c, &prefix)?
+            covering::resolve_slot_hash(&c, &prefix)?
         }
         None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
     };
@@ -1140,11 +1469,9 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
             root: PathBuf::from(&k.target_repo),
         };
         let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-        let src_set = covering::hashes(&src);
-        let tgt_set = covering::hashes(&tgt);
         for p in &k.pairs {
-            let a_ok = src_set.contains(&p.a);
-            let b_ok = tgt_set.contains(&p.b);
+            let a_ok = covering::endpoint_resolves(&src, &p.a);
+            let b_ok = covering::endpoint_resolves(&tgt, &p.b);
             if !a_ok || !b_ok {
                 println!("{}\t{}\t{}", kn, p.a, p.b);
                 errs += 1;

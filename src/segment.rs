@@ -180,12 +180,17 @@ mod tests {
     use super::*;
 
     fn tmpdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let mut p = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        p.push(format!("covmap-segment-test-{nanos}"));
+        // Per-process counter avoids same-nanosecond path collisions
+        // when tests run in parallel.
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        p.push(format!("covmap-segment-test-{nanos}-{seq}"));
         std::fs::create_dir_all(&p).unwrap();
         p
     }

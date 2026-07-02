@@ -49,31 +49,36 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     let mut incoming: BTreeMap<(String, String), Vec<IncomingLink>> = BTreeMap::new();
     // key for incoming: (target_repo, target_hash)
     if let Some(src) = &src_cov {
-        let src_set = covering::hashes(src);
         for cv in &conn_data {
-            let tgt_set = cv
-                .tgt_cov
-                .as_ref()
-                .map(covering::hashes)
-                .unwrap_or_default();
             for p in &cv.k.pairs {
-                let a_in = src_set.contains(&p.a);
-                let b_in = tgt_set.contains(&p.b);
-                outgoing.entry(p.a.clone()).or_default().push(OutgoingLink {
+                // Endpoints may be `@name` slot references or bare
+                // hashes. Resolve each to the slot's *current* hash so
+                // the views (which key on hashes) stay correct after a
+                // content edit; `None` means the endpoint is broken.
+                let a_hash = covering::endpoint_to_hash(src, &p.a);
+                let b_hash = cv
+                    .tgt_cov
+                    .as_ref()
+                    .and_then(|t| covering::endpoint_to_hash(t, &p.b));
+                let a_in = a_hash.is_some();
+                let b_in = b_hash.is_some();
+                let a_key = a_hash.unwrap_or_else(|| p.a.clone());
+                let b_key = b_hash.unwrap_or_else(|| p.b.clone());
+                outgoing.entry(a_key.clone()).or_default().push(OutgoingLink {
                     conn_name: cv.k.name.clone(),
                     target_repo: cv.k.target_repo.clone(),
                     target_covering: cv.k.target_covering.clone(),
-                    target_hash: p.b.clone(),
+                    target_hash: b_key.clone(),
                     note: p.note.clone(),
                     src_resolved: a_in,
                     tgt_resolved: b_in,
                 });
                 incoming
-                    .entry((cv.k.target_repo.clone(), p.b.clone()))
+                    .entry((cv.k.target_repo.clone(), b_key.clone()))
                     .or_default()
                     .push(IncomingLink {
                         conn_name: cv.k.name.clone(),
-                        source_hash: p.a.clone(),
+                        source_hash: a_key.clone(),
                         note: p.note.clone(),
                         src_resolved: a_in,
                         tgt_resolved: b_in,

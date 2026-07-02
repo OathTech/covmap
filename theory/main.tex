@@ -191,14 +191,60 @@ This graph is acyclic, and a segment that belongs to several
 coverings is represented exactly once.
 \end{proposition}
 
+\subsection{Slots and name-tags}\label{sec:slots}
+
+Content-addressing makes identity coincide with content: editing a
+segment's bytes changes its hash, hence its identity. That is exactly
+what makes sharing (\S\ref{sec:sharing}) and drift detection
+(\S\ref{sec:complexity}) automatic, but it also means anything that
+points \emph{at} a segment by hash is invalidated by any edit. To let a
+reference survive content edits, we add a second, optional identity
+axis.
+
+\begin{definition}[Name-tag, slot]\label{def:slot}
+Fix a set of \emph{names} $\mathcal{N}$. A covering may assign to some
+of its segments a \emph{name-tag} $\nu \in \mathcal{N}$, injectively:
+no two segments of one covering share a name. A segment carrying a
+name-tag is a \emph{slot}; a segment without one is \emph{anonymous}.
+The name-tag is covering-local metadata: it is \emph{not} an input to
+$\hash$, so naming, relabelling, or recutting a slot leaves the shared
+object store (\S\ref{sec:sharing}) untouched.
+\end{definition}
+
+Identity is thus two-level: the \emph{object identity} of a segment is
+its content hash $\hash(s)$ (immutable, shared); the \emph{slot
+identity} of a named segment is its name-tag $\nu$ (stable across
+content edits, local to one covering). A reference may name a segment
+by either axis.
+
+\begin{definition}[Endpoint resolution]\label{def:endpoint}
+An \emph{endpoint} into a covering $\Cov$ is either a name $\nu$ or a
+hash $h$. A name endpoint $\nu$ \emph{resolves} iff some segment of
+$\Cov$ carries name-tag $\nu$, and then denotes that segment's current
+hash; a hash endpoint $h$ resolves iff some segment of $\Cov$ has
+$\hash(s) = h$. A name endpoint therefore continues to resolve after an
+edit that changes the named slot's bytes, whereas a hash endpoint does
+not.
+\end{definition}
+
+Operations propagate name-tags as follows: \texttt{split} keeps the
+name on the top block and leaves the bottom anonymous; \texttt{merge}
+keeps the single surviving name (the earlier block's if both are
+named); \texttt{recut} and \texttt{label} preserve the name. A
+first-class \texttt{name} operation sets, renames, or clears a tag.
+
 \section{Connections}\label{sec:conn}
 
 \begin{definition}[Connection]\label{def:connection}
 Let $\Cov^A$ be a covering of $A$ and $\Cov^B$ a covering of $B$. A
 \emph{connection} from $\Cov^A$ to $\Cov^B$ is a relation
 \[
-  \kappa \;\subseteq\; \Cov^A \times \Cov^B.
+  \kappa \;\subseteq\; \Cov^A \times \Cov^B,
 \]
+each pair recorded by a pair of \emph{endpoints}
+(Definition~\ref{def:endpoint}): a name-tag when the segment is a slot
+(so the pair survives edits to that slot's content), otherwise a
+content hash.
 \end{definition}
 
 A pair $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
@@ -292,13 +338,95 @@ drift.
 
 \begin{definition}[Broken pair]\label{def:broken}
 A pair $(s, t) \in \kappa$ is \emph{broken} relative to current
-$\Cov^A$ and $\Cov^B$ when $\hash(s) \notin \hash(\Cov^A)$ or
-$\hash(t) \notin \hash(\Cov^B)$.
+$\Cov^A$ and $\Cov^B$ when its $A$-endpoint or its $B$-endpoint fails
+to resolve (Definition~\ref{def:endpoint}). For a \emph{hash} endpoint this means
+the hash is no longer present in its covering; for a \emph{name}
+endpoint it means no segment carries that name-tag any longer.
 \end{definition}
 
-A pair becomes broken precisely when its endpoint is rewritten
-(\texttt{recut}, \texttt{label}, \texttt{split}, \texttt{merge}) or
-removed.
+The two identity axes give two breakage regimes. A pair recorded by
+hash breaks as soon as its endpoint is rewritten (\texttt{recut},
+\texttt{label}, \texttt{split}, \texttt{merge}) or removed — i.e. on
+any content edit to the endpoint. A pair recorded by name-tag breaks
+\emph{only} when the named slot is deleted; an edit that changes the
+slot's bytes (followed by \texttt{recut}) leaves the name-tag, hence
+the pair, intact. Naming the segments one intends to map therefore
+shrinks ``broken'' from the routine outcome of any edit to the rare
+outcome of a genuine structural deletion.
+
+\subsection{Diff-remap}\label{sec:diffremap}
+
+Name-tags keep a connection \emph{alive} across an edit, but they do
+not by themselves say where the slot's boundaries now lie: an insertion
+above a slot shifts its line range even though its name and content are
+unchanged. \emph{Diff-remap} recovers the new boundaries
+deterministically using the fact that a covering reconstructs its
+pre-edit file exactly (\S\ref{sec:cov}).
+
+\begin{definition}[Line map]\label{def:linemap}
+For files $O$ and $N$ given as line sequences, a \emph{line map} is a
+monotone partial injection $\mu$ from line indices of $O$ to line
+indices of $N$ such that $\mu(i) = j$ only if line $i$ of $O$ equals
+line $j$ of $N$. \texttt{covmap} computes one by trimming the common
+prefix and suffix and running a longest-common-subsequence match on the
+residual middle.
+\end{definition}
+
+Let $\Cov$ restricted to a file $f$ be the line-aligned cut sequence
+$1 = c_0 < c_1 < \cdots < c_k = |f|_O + 1$. Diff-remap reconstructs
+$O$ from $\Cov$, computes the line map $\mu$ for $O \to N$, and sends
+each interior cut $c_j$ to $\mu(c_j)$. If every interior cut lies in the
+domain of $\mu$ (i.e. on a preserved line) the new cut sequence is
+determined; each slot is re-extracted from $N$ over its new range and
+re-hashed, keeping its name and label. A cut that falls on a changed or
+deleted line is \emph{unresolved}: the file is left untouched
+(all-or-nothing, preserving the partition invariant) and the affected
+slots are reported as residue for relocation (\S\ref{sec:fingerprint}).
+
+\begin{proposition}[Exactness of a successful remap]\label{prop:remap}
+If diff-remap resolves every cut of $f$, the rebuilt slots are a valid
+covering of $N$ on $f$: they partition $f$ in $N$, and their
+concatenation reproduces $N$ byte-for-byte.
+\end{proposition}
+
+The auto-heal rate is the fraction of cuts lying in unchanged regions,
+which approaches $1$ as the edit becomes more localized. Diff-remap is
+restricted to line-aligned slots; a covering with character-level cuts
+in $f$ falls back to manual \texttt{merge}/\texttt{split} for that file.
+
+\subsection{Fingerprinting}\label{sec:fingerprint}
+
+Diff-remap leaves a slot unresolved when its boundaries were rewritten
+or the slot was \emph{moved} (a diff sees a deletion at the old site and
+an unrelated insertion at the new one, not a move). The slot's content
+still exists somewhere in $N$, so the residual task is one of
+\emph{relocation by similarity} rather than position arithmetic.
+
+\begin{definition}[Similarity, proposal]\label{def:fingerprint}
+For the unresolved slot's recorded content $\tau$ and a candidate line
+window $w$ of $N$, define a score $\mathrm{sim}(\tau, w) \in [0,1]$:
+$1$ if $w = \tau$ verbatim; near-$1$ if they agree after normalization
+(lowercasing and whitespace collapse); otherwise the Jaccard overlap of
+their word-trigram shingle sets. A \emph{proposal} is the
+highest-scoring window (over widths near $\tau$'s line count), reported
+with its score when the score meets a threshold $\theta$.
+\end{definition}
+
+Fingerprinting is strictly \emph{propose-only}: it ranks candidates and
+prints them, but never edits a covering or a connection. A score is a
+likelihood, not a proof — repeated boilerplate yields false positives,
+a heavy rewrite yields false negatives — so adjudication is left to the
+user or agent, who confirms the top candidate (often cheaply, e.g. an
+agent re-reading those lines) before relinking. The threshold $\theta$
+trades recall against noise: lower surfaces more (and weaker) guesses,
+higher suppresses all but near-certain matches.
+
+Together the three layers form a fallback chain: a name-tag
+(\S\ref{sec:slots}) keeps a link \emph{alive}; diff-remap
+(\S\ref{sec:diffremap}) deterministically re-fits boundaries that
+survived in place; fingerprinting proposes a relocation for what
+remains. Each layer narrows the residue handed to the next, and only
+the last is probabilistic.
 
 \section{An interface for \texttt{covmap}}\label{sec:interface}
 
@@ -328,6 +456,7 @@ throughout the interface and can be mixed freely.
 \hspace{4.2cm}\=\kill
 \texttt{<hash>}            \> a segment, by full or short hex prefix\\
 \texttt{$C$:$h$}           \> a segment $h$ in covering $C$\\
+\texttt{$C$:@$\nu$}        \> the slot named $\nu$ in covering $C$\\
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
@@ -335,7 +464,9 @@ A bare \texttt{$h$} is short for \texttt{HEAD:$h$}. Where a covering
 is expected, the literal \texttt{HEAD} resolves to the default
 covering recorded in \texttt{.covmap/HEAD}. Hash prefixes follow
 \texttt{git}-style disambiguation: any unique prefix works,
-ambiguity is an error.
+ambiguity is an error. An \texttt{@$\nu$} address selects a slot by its
+name-tag; connection endpoints store \texttt{@$\nu$} for named slots so
+that links survive content edits.
 
 \subsection{Bootstrap and refinement}\label{sec:bootstrap}
 
@@ -369,17 +500,36 @@ bootstrap operation and two refinement operations.
       Refresh the segment's hash from current disk bytes. Keeps
       $(f, a, b, \lambda)$; rewrites the content from the file as it
       is now. Errors if the segment no longer fits the file (boundary
-      drift); use \texttt{merge}+\texttt{split} in that case.
+      drift); use \texttt{recut --remap} or \texttt{merge}+\texttt{split}
+      in that case.
+\item \texttt{covmap recut --remap [$C$[:$a$]]}\\
+      \emph{Diff-remap} (\S\ref{sec:diffremap}). Reconstruct each
+      covered file $O$ from the covering, diff it against the bytes $N$
+      on disk, and carry every line-aligned slot's boundaries through
+      the unchanged regions, re-extracting and re-hashing content while
+      preserving each slot's name and label. Per file it is
+      all-or-nothing: a file whose boundaries fall in changed regions is
+      left untouched and its slots reported as residue. Absorbs
+      boundary drift automatically for localized edits, so connections
+      by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
 \item \texttt{covmap label $C$:$h$ $\lambda$}\\
       Replace the label of one segment. Because labels are part of
       identity, this rewrites the entry in $C$; old hashes remain in
       the object store so any connection that referenced them keeps
-      resolving.
+      resolving. The segment's name-tag, if any, is preserved.
+\item \texttt{covmap name $C$:$h$ $\nu$} (or \texttt{@$\nu'$}; \texttt{-} to clear)\\
+      Set, rename, or clear the name-tag of one segment
+      (Definition~\ref{def:slot}). Name-tags are unique within $C$ and are
+      covering-local metadata, so this does not touch the object store
+      and shares nothing across coverings. Connections referencing the
+      slot by \texttt{@$\nu$} are unaffected unless the name string
+      itself changes.
 \end{itemize}
 
-These five operations are the only way to change a covering after
+These operations are the only way to change a covering after
 \texttt{cover}. Together they are complete: any covering reachable
-from the bootstrap by repeated splits / merges / recuts / relabels
+from the bootstrap by repeated splits / merges / recuts / relabels /
+re-tags
 is the most general covering one can ask for.
 
 \subsection{Inspection, connections, repair}

@@ -19,13 +19,19 @@ the same repository — even the same covering — enabling both cross-repo
 mapping and intra-project cross-references such as duplication audits or
 docs-to-code links within one tree.
 
-## req3 — Content-addressed segment identity
-Every segment shall be identified by the 64-bit truncated hash of its
-labelled content, so identical labelled content yields a single identity.
+## req3 — Two-level segment identity
+Every segment shall have a content identity: the 64-bit truncated hash
+of its labelled content, so identical labelled content yields a single
+shared object. A segment may additionally carry a stable, covering-local
+name-tag (a *slot*), unique within its covering, giving it an identity
+that is independent of its bytes. The name-tag is not part of the
+content hash, so naming, relabelling, or recutting a slot leaves the
+shared object store untouched.
 
-## req4 — Labels as part of identity
-A segment's label shall participate in its identity, letting per-segment
-status (unknown, ignored, reviewed, mapped) coexist with content sharing.
+## req4 — Labels as part of content identity
+A segment's label shall participate in its content hash, letting
+per-segment status (unknown, ignored, reviewed, mapped) coexist with
+content sharing. (Name-tags, by contrast, are not hashed — see req3.)
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
@@ -42,7 +48,10 @@ existing refinements.
 
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined
-solely by explicit split, merge, recut, and label operations.
+solely by explicit split, merge, recut, label, and name operations.
+Name-tags are assigned deliberately by the user or agent (never
+auto-generated), since their value is a stable, human-meaningful slot
+identity for the segments being mapped.
 
 ## req9 — Multiple coverings with automatic sharing
 A repository shall support several coverings at once, sharing identical
@@ -51,6 +60,9 @@ segments automatically by content address rather than by duplication.
 ## req10 — Many-to-many annotated connections
 Connections shall be many-to-many relations between coverings, with
 optional per-pair notes, supporting fan-out and fan-in between segments.
+Each endpoint shall reference its segment either by name-tag (preferred
+for mapped segments, so the link is resilient to content edits) or by
+content hash.
 
 ## req11 — Connection algebra
 Connections shall support inverse, composition, and union, so derived
@@ -60,23 +72,33 @@ relations can be computed from existing ones.
 covmap shall report covering metrics (cardinality, granularity, partition
 entropy) and connection coverage (source and target totality).
 
-## req13 — Drift detection and guided repair
+## req13 — Drift detection and layered repair
 covmap shall detect when edited files diverge from their recorded
-segments and distinguish file-level drift (repaired by recut) from
-boundary drift (repaired by merge then split).
+segments, and shall offer a layered repair path: recut for file-level
+drift (bytes changed, boundaries intact); diff-remap for boundary drift
+(lines added/removed), which re-fits surviving slots by diffing the
+reconstructed file against disk and carrying boundaries through
+unchanged regions; and, for a slot that moved or was rewritten beyond
+remapping, a propose-only fingerprint suggestion of its new location
+ranked by similarity. Fingerprinting shall never mutate state on its
+own. merge then split remains available as the manual fallback.
 
 ## req14 — Broken-pair detection and repair
-covmap shall identify connection pairs whose endpoints no longer exist in
-their coverings and offer to drop them.
+covmap shall identify connection pairs whose endpoints no longer
+resolve in their coverings and offer to drop them. An endpoint resolves
+by name-tag (broken only when the named slot is deleted) or by hash
+(broken when that content no longer appears), so a content edit to a
+named slot does not, by itself, break a pair.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition
 and that every connection endpoint resolves.
 
 ## req16 — Stable, git-style addressing
-Objects shall be addressable by hash, by covering-qualified hash, or by
-connection name, with HEAD resolving the default covering and unique hash
-prefixes accepted.
+Objects shall be addressable by hash, by covering-qualified hash, by
+covering-qualified slot name (`<C>:@<name>`), or by connection name,
+with HEAD resolving the default covering and unique hash prefixes
+accepted.
 
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed

@@ -101,9 +101,11 @@ each file from the covering and comparing it to disk. Has three
 sub-concepts (below): the first two distinguished by whether line
 boundaries still fit, the third lifting drift from a segment to a link.
 
-**Segment drift** *(also: file-level drift)* **[T][R][S]** — bytes inside
-a segment changed but its line boundaries still fit the file. Repaired by
-**recut**. Sub-concept of **drift**.
+**Segment drift** **[T][R][S]** — bytes inside a segment changed but its
+line boundaries still fit the file. Repaired by **recut**. Sub-concept of
+**drift**. (Earlier drafts called this *file-level drift*; that term is
+retired in favour of *segment drift*, which names what actually drifted
+and parallels **link drift**.)
 
 **Boundary drift** **[T][R][S]** — an edit added or removed lines so a
 segment's recorded range no longer fits the file (`b > |f|` on disk).
@@ -329,9 +331,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Naming choices applied in this revision (please confirm)
 
-- **Segment drift, not file-level drift.** *File-level drift* is kept as
-  an alias; *segment drift* names the thing that actually drifted (a
-  segment) and parallels **link drift**.
 - **Drift is the repairable precursor to broken; both now share a
   spectrum.** A link goes *in-sync → drifted → broken* (for name
   endpoints), or straight *in-sync → broken* (for hash endpoints, which
@@ -394,7 +393,7 @@ sources have drifted apart. These are notes for discussion, not defects.
   covering of one repo) is implemented and used (`reqmap`, self-map), but
   the theory frames connections as strictly between two repos `A` and
   `B`; it should state that `A = B` is allowed.
-- **Stale drift sentence** in theory §3.3 ("recut for file-level drift,
+- **Stale drift sentence** in theory §3.3 ("recut for segment drift,
   merge + split for boundary drift") predates the layered chain in
   §3.4–3.5 and `req13`, and reads as superseded.
 - **`N_C` contradiction.** Theory defines `ℓ(s) = b − a + 1` (so

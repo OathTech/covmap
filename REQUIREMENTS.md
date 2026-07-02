@@ -74,7 +74,7 @@ entropy) and connection coverage (source and target totality).
 
 ## req13 — Drift detection and layered repair
 covmap shall detect when edited files diverge from their recorded
-segments, and shall offer a layered repair path: recut for file-level
+segments, and shall offer a layered repair path: recut for segment
 drift (bytes changed, boundaries intact); diff-remap for boundary drift
 (lines added/removed), which re-fits surviving slots by diffing the
 reconstructed file against disk and carrying boundaries through

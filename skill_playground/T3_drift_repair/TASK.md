@@ -12,7 +12,7 @@
 - `spec/.covmap/` and `impl_rs/.covmap/` populated.
 - `spec/.covmap/connections/cache_links` has 3 links (Get, Put, Size).
 - `spec/cache.md` was edited inside the Put segment. `covmap status`
-  reports file-level drift, but no links are broken yet — the
+  reports segment drift, but no links are broken yet — the
   covering still holds the pre-edit Put segment.
 
 ## Expected agent behavior

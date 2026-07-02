@@ -343,7 +343,7 @@ edit.
 
 Tighten the Dequeue wording — *"…or None when empty."* becomes *"…or
 None when the queue is empty."* (stage `files/queue.reworded.md`). The
-edit changes bytes **without moving any line boundary** — file-level
+edit changes bytes **without moving any line boundary** — segment
 drift.
 
 ```sh

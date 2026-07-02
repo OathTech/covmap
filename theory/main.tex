@@ -318,11 +318,12 @@ blocks maximize entropy at fixed cardinality.
 A covering exists to be reused after the repository is edited. We
 measure how stable a covering is under edits.
 
-\begin{definition}[File-level drift]\label{def:drift-file}
+\begin{definition}[Segment drift]\label{def:drift-file}
 Let $\Cov$ be a covering of $A$ and let $A'$ be a repository obtained
-from $A$ by an edit. A file $f \in F(\Cov)$ is \emph{drifted} under
-this edit when at least one segment $s = (f, a, b, \lambda) \in \Cov$
-satisfies $\mathrm{content}_{A'}(s) \neq \mathrm{content}_A(s)$.
+from $A$ by an edit. A segment $s = (f, a, b, \lambda) \in \Cov$ is
+\emph{drifted} under this edit when
+$\mathrm{content}_{A'}(s) \neq \mathrm{content}_A(s)$; a file
+$f \in F(\Cov)$ is \emph{drifted} when it contains a drifted segment.
 \end{definition}
 
 \begin{definition}[Boundary drift]\label{def:drift-bound}
@@ -332,7 +333,7 @@ longer fits the file.
 \end{definition}
 
 The two flavours of drift correspond to two repair operations
-(\S\ref{sec:interface}): \texttt{recut} for file-level drift with
+(\S\ref{sec:interface}): \texttt{recut} for segment drift with
 intact boundaries, \texttt{merge} + \texttt{split} for boundary
 drift.
 

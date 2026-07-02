@@ -208,7 +208,7 @@ that first.
 
 The two kinds of drift you will see:
 
-- **File-level drift** (bytes inside a segment changed, boundaries
+- **Segment drift** (bytes inside a segment changed, boundaries
   intact). `covmap status` reports `drift: N file(s) edited`. Fix per
   affected segment with `covmap recut <C>:<h>` to update the hash. If
   the slot is **named** (`@name`), connections referencing it stay

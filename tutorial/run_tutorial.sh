@@ -201,7 +201,7 @@ assert "fsck passes after linking" bash -c "( cd '$WORK/spec' && '$COVMAP' fsck 
 hr "10. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
 #############################################################################
 # Tighten the Dequeue wording ("...or None when empty." -> "...or None
-# when the queue is empty."). Same number of lines -> file-level drift
+# when the queue is empty."). Same number of lines -> segment drift
 # with intact boundaries. The @dequeue-op link does NOT break.
 cp "$FILES/queue.reworded.md" "$WORK/spec/queue.md"
 echo "  edit (files/queue.md -> files/queue.reworded.md):"

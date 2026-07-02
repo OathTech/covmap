@@ -55,9 +55,16 @@ There are no runtime dependencies beyond `sha2`.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
+- A **name-tag** is an optional stable identity for a segment (a
+  *slot*), set with `covmap name` and shown as `@name`. A connection
+  that references a slot by `@name` survives edits to the slot's
+  content, because the link identity is the name rather than the hash.
+  Anonymous segments are referenced by content hash (which changes on
+  every edit).
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
-  live at `.covmap/connections/<name>` in the *source* repo.
+  live at `.covmap/connections/<name>` in the *source* repo. Each
+  endpoint is a slot name (`@name`) or a content hash.
 - Sharing is automatic: any two coverings producing a segment with
   the same content+label end up referencing the same object.
 
@@ -128,9 +135,11 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (re-hashes). |
+| `name <C>:<h\|@slot> <tag\|->` | Set, rename, or clear a slot's name-tag. |
 | `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
+| `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit slots onto an edited file. For a moved/rewritten slot it can't place, prints a propose-only fingerprint relocation guess. |
 | `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
 | `link <K> <h_A> <h_B> [<note>]` | Add a pair. |
 | `unlink <K> <h_A> <h_B>` | Remove a pair. |
@@ -146,6 +155,10 @@ Plumbing commands (line-oriented, stable for scripts):
 - `<hash>` — full or short hex prefix (≥2 chars). Resolved against
   the object store.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
+- `<C>:@<name>` — the slot named `<name>` in covering `<C>`.
+- `<C>:<file>:<line>[:<col>]` — the segment of `<file>` covering that
+  position (unique by the partition invariant); a stable, hash-free
+  handle. Every command taking a segment address accepts all three forms.
 - `HEAD` resolves to the covering named in `.covmap/HEAD`.
 
 ## Ignoring files

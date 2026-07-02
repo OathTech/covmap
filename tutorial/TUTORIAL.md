@@ -277,7 +277,7 @@ f6d8bf2f060c7830	Enqueue	            queue.md:5..9	    5	@enqueue-op
 a51b8db403cc3096	reviewed	        queue.md:14..16	    3	-
 ```
 
-The name-tag is *not* part of the content hash — naming, relabelling, or
+The name-tag is *not* part of the segment hash — naming, relabelling, or
 recutting a slot never touches the shared object store.
 
 ## 8. Connect and link by name  (req2, req10, req16)

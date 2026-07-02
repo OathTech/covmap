@@ -42,7 +42,7 @@ With a hash-based link, editing bytes inside a mapped segment changes
 its hash and breaks the pair (the agent must unlink the old hash and
 link the new one — see T3). A **name-tag** decouples link identity from
 content: the slot keeps its name across edits, so only a `recut` to
-refresh the content hash is needed, and the connection never breaks.
+refresh the segment hash is needed, and the connection never breaks.
 
 ## Success criteria (graded)
 

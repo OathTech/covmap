@@ -80,7 +80,7 @@ $a = b$ it is characters $a_c$ through $b_c$ of line $a$; otherwise it
 is the suffix of line $a$ from $a_c$, followed by lines $a+1, \dots,
 b-1$ in full, followed by the prefix of line $b$ through $b_c$. Its
 \emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash function
-$h$ and define the \emph{content hash} of $s$ as
+$h$ and define the \emph{segment hash} of $s$ as
 \[
   \hash(s) \;=\; \mathrm{trunc}_{16}\bigl(h\bigl(\lambda \;\Vert\; \texttt{NUL} \;\Vert\; \mathrm{content}_A(s)\bigr)\bigr),
 \]
@@ -212,7 +212,7 @@ object store (\S\ref{sec:sharing}) untouched.
 \end{definition}
 
 Identity is thus two-level: the \emph{object identity} of a segment is
-its content hash $\hash(s)$ (immutable, shared); the \emph{slot
+its segment hash $\hash(s)$ (immutable, shared); the \emph{slot
 identity} of a named segment is its name-tag $\nu$ (stable across
 content edits, local to one covering). A reference may name a segment
 by either axis.
@@ -244,7 +244,7 @@ Let $\Cov^A$ be a covering of $A$ and $\Cov^B$ a covering of $B$. A
 each pair recorded by a pair of \emph{endpoints}
 (Definition~\ref{def:endpoint}): a name-tag when the segment is a slot
 (so the pair survives edits to that slot's content), otherwise a
-content hash.
+segment hash.
 \end{definition}
 
 A pair $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked

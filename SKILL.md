@@ -34,17 +34,17 @@ binary path is `covmap/target/release/covmap`.
   segments you intend to map: a connection referencing a slot by
   `@name` survives edits to the slot's content, because identity is the
   name, not the hash. Anonymous segments (the default, e.g. `unknown`
-  blocks) are referenced by content hash, which changes on every edit.
+  blocks) are referenced by segment hash, which changes on every edit.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
   and references the target repo by absolute path. Each endpoint is
-  either a slot name (`@name`, resilient to content edits) or a content
+  either a slot name (`@name`, resilient to content edits) or a segment
   hash (legacy / anonymous).
 - **Sharing** is automatic: any two coverings (in any repo) that
   produce a segment with the same content+label end up referencing
   the same object. Name-tags are per-covering slot metadata and are not
-  part of the shared content hash.
+  part of the shared segment hash.
 - **There are no segmentation rules.** `covmap cover` walks the repo
   and adds a single whole-file segment labelled `unknown` for every
   readable UTF-8 file it has not yet covered. The user / agent then

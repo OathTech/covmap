@@ -54,7 +54,7 @@ pub struct CoveringEntry {
     /// Optional name-tag (slot identity). `None` = anonymous slot.
     /// Connections may reference a named slot by `@name`, which survives
     /// edits to the slot's content; an anonymous slot can only be
-    /// referenced by its content hash.
+    /// referenced by its segment hash.
     pub name: Option<String>,
 }
 
@@ -159,7 +159,7 @@ impl CoveringEntry {
 
     /// The endpoint a connection should store for this slot: the
     /// name-tag (`@name`) when the slot is named — so the link survives
-    /// content edits — otherwise the bare content hash (legacy).
+    /// content edits — otherwise the bare segment hash (legacy).
     pub fn endpoint(&self) -> String {
         match &self.name {
             Some(n) => format!("@{n}"),
@@ -170,7 +170,7 @@ impl CoveringEntry {
 
 /// A connection-pair endpoint, parsed from its stored string. `@name`
 /// references a named slot (resilient to content edits); a bare hex
-/// string references a content hash (legacy / anonymous slots).
+/// string references a segment hash (legacy / anonymous slots).
 pub enum Endpoint {
     Name(String),
     Hash(String),
@@ -192,7 +192,7 @@ pub fn endpoint_resolves(c: &Covering, ep: &str) -> bool {
     endpoint_to_hash(c, ep).is_some()
 }
 
-/// Resolve an endpoint string to the current content hash of the slot
+/// Resolve an endpoint string to the current segment hash of the slot
 /// it denotes, or `None` if it no longer resolves. A `@name` endpoint
 /// maps to whatever hash the named slot currently carries (so the link
 /// follows content edits); a hash endpoint maps to itself if present.
@@ -883,7 +883,7 @@ pub fn resolve_slot(c: &Covering, addr: &str) -> io::Result<usize> {
     }
     // A positional address `file:line[:col]` selects the (unique) segment
     // whose range contains that position — a stable handle that never
-    // depends on a content hash. It contains a `:`; a hash prefix never
+    // depends on a segment hash. It contains a `:`; a hash prefix never
     // does, so the presence of `:` disambiguates the two.
     if addr.contains(':') {
         return resolve_position(c, addr);

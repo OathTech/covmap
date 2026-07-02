@@ -187,7 +187,7 @@ deliberately, never auto-generated. The "tag" is just this name string
 (nothing to do with the hash); since every segment has a hash but only
 some have a name, *segment name* is an accurate plainer synonym.
 
-**Object store** **[T][R][S]** — the hash-addressed store at
+**Object store** **[T][R][S]** — the content-addressed store at
 `.covmap/objects/<hh>/<rest>`, mapping each **segment hash** to
 `label\0content`. Segments are shared across coverings automatically by
 that address.
@@ -329,11 +329,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Naming choices applied in this revision (please confirm)
 
-- **Segment hash — *content hash* retired.** The hash covers
-  `label ‖ NUL ‖ content`, not content alone, so *content hash* was
-  actively misleading. *Segment hash* is now the only name; T/R/S should
-  drop *content hash* (and the "content-addressed" store is reworded as
-  hash-addressed by the **segment hash**).
 - **Link, not pair.** Entry titled **Link**; the theory/code term *pair*
   is the alias. Matches `link`/`unlink` and reads well in the plural.
 - **Segment drift, not file-level drift.** *File-level drift* is kept as

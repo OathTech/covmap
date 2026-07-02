@@ -5,7 +5,7 @@
 # The edit changes bytes inside the Login slot WITHOUT moving any line
 # boundary. Because the connection references the slot by its name-tag
 # (@login-contract), the pair is NOT broken by the byte change — the
-# agent only needs to `recut` the slot to refresh its content hash.
+# agent only needs to `recut` the slot to refresh its segment hash.
 set -euo pipefail
 
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null

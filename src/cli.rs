@@ -1039,7 +1039,7 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     let src = Covering::read(&repo, &k.source_covering)?;
     // Resolve each endpoint to a slot. The stored endpoint is the slot's
     // name-tag (`@name`) when it is named — so the link survives content
-    // edits — otherwise its content hash (legacy / anonymous slots).
+    // edits — otherwise its segment hash (legacy / anonymous slots).
     let ia = covering::resolve_slot(&src, ha_in)?;
     let ha = src.entries[ia].endpoint();
 

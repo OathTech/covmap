@@ -59,12 +59,12 @@ There are no runtime dependencies beyond `sha2`.
   *slot*), set with `covmap name` and shown as `@name`. A connection
   that references a slot by `@name` survives edits to the slot's
   content, because the link identity is the name rather than the hash.
-  Anonymous segments are referenced by content hash (which changes on
+  Anonymous segments are referenced by segment hash (which changes on
   every edit).
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
-  endpoint is a slot name (`@name`) or a content hash.
+  endpoint is a slot name (`@name`) or a segment hash.
 - Sharing is automatic: any two coverings producing a segment with
   the same content+label end up referencing the same object.
 

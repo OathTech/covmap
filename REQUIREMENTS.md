@@ -25,11 +25,11 @@ of its labelled content, so identical labelled content yields a single
 shared object. A segment may additionally carry a stable, covering-local
 name-tag (a *slot*), unique within its covering, giving it an identity
 that is independent of its bytes. The name-tag is not part of the
-content hash, so naming, relabelling, or recutting a slot leaves the
+segment hash, so naming, relabelling, or recutting a slot leaves the
 shared object store untouched.
 
 ## req4 — Labels as part of content identity
-A segment's label shall participate in its content hash, letting
+A segment's label shall participate in its segment hash, letting
 per-segment status (unknown, ignored, reviewed, mapped) coexist with
 content sharing. (Name-tags, by contrast, are not hashed — see req3.)
 
@@ -62,7 +62,7 @@ Connections shall be many-to-many relations between coverings, with
 optional per-pair notes, supporting fan-out and fan-in between segments.
 Each endpoint shall reference its segment either by name-tag (preferred
 for mapped segments, so the link is resilient to content edits) or by
-content hash.
+segment hash.
 
 ## req11 — Connection algebra
 Connections shall support inverse, composition, and union, so derived

@@ -282,14 +282,14 @@ recutting a slot never touches the shared object store.
 
 ## 8. Connect and link by name  (req2, req10, req16)
 
-A **connection** records pairs between segments of two coverings. Create
-it, then add pairs. When you link a *named* slot, covmap stores the pair
+A **connection** records links between segments of two coverings. Create
+it, then add links. When you link a *named* slot, covmap stores the link
 by `@name` (resilient), not by hash.
 
 `connect` names the target repo by absolute path (here the sibling
 `impl_rs`). The impl side is a single whole-file segment, which we
 address positionally as `queue.rs:1`. Link each named spec slot to it:
-because the spec side is named, the pair is stored by `@name` and
+because the spec side is named, the link is stored by `@name` and
 survives later edits.
 
 ```sh
@@ -297,7 +297,7 @@ covmap connect main "$PWD/../impl_rs:main" queue_links
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
 covmap link queue_links @dequeue-op        queue.rs:1 "fn dequeue"
 covmap link queue_links @queuefull-meaning queue.rs:1 "QueueFull guard"
-covmap ls-pairs queue_links
+covmap ls-links queue_links
 ```
 
 ```
@@ -312,7 +312,7 @@ project you would refine the impl side too.)
 ## 9. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
 
 ```sh
-covmap show queue_links     # connection metadata + pairs
+covmap show queue_links     # connection metadata + links
 covmap grep capacity        # segments whose label or content matches
 covmap cover alt            # a second, whole-file covering
 covmap diff main alt        # added (-) / only-in-alt (+) / shared (=)
@@ -327,7 +327,7 @@ connection endpoint resolves. `status` now shows the connection:
 covering main: segments=7 lines=21 entropy=2.661
   drift: clean
 connections:
-  queue_links -> <workspace>/impl_rs/main : 3 pairs, 0 broken
+  queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken
 ```
 
 ---
@@ -353,16 +353,16 @@ covmap status
 
 ```
   drift: 1 file(s) edited, 0 file(s) missing/binary
-  queue_links -> …/main : 3 pairs, 0 broken
+  queue_links -> …/main : 3 links, 0 broken
 ```
 
-Note the connection is **already 0 broken**: the pair is by
+Note the connection is **already 0 broken**: the link is by
 `@dequeue-op`, and a byte change does not delete the slot. Refresh the
 recorded content with a single `recut`:
 
 ```sh
 covmap recut main:@dequeue-op          # address the slot by its name
-covmap status                          # drift: clean, still 3 pairs, 0 broken
+covmap status                          # drift: clean, still 3 links, 0 broken
 ```
 
 No unlink/relink needed — contrast this with a hash-based link, which
@@ -388,8 +388,8 @@ remap: 1 file(s) healed, 1 slot(s) refreshed, 0 unresolved
 It reconstructs the pre-edit file from the covering, diffs it against
 disk, and re-fits every line-aligned slot's boundaries through the
 unchanged regions — following the insertion automatically. Names (hence
-the `queue_links` pairs) are preserved, so `status` is clean again and
-the connection is still 3 pairs, 0 broken. No relinking.
+the `queue_links` links) are preserved, so `status` is clean again and
+the connection is still 3 links, 0 broken. No relinking.
 
 ## 12. Moved section → fingerprint proposal (propose-only)
 
@@ -426,21 +426,21 @@ across content edits → **diff-remap** deterministically re-fits
 boundaries that survived in place → **fingerprint** proposes a relocation
 for whatever remains.
 
-## 13. Drop a genuinely broken pair: `repair`  (req14)
+## 13. Drop a genuinely broken link: `repair`  (req14)
 
-A pair is *broken* only when its endpoint no longer resolves — for a
+A link is *broken* only when its endpoint no longer resolves — for a
 named slot, when that slot is **deleted**. Clear a slot's name to
 simulate that, then repair:
 
 ```sh
 covmap name main:@queuefull-meaning -            # clears the name
-covmap fsck --broken-pairs                       # queue_links  @queuefull-meaning  …
-covmap repair queue_links                        # drops the dead pair
+covmap fsck --broken-links                       # queue_links  @queuefull-meaning  …
+covmap repair queue_links                        # drops the dead link
 ```
 
 ```
 broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
-repair: 1 pair(s) dropped, 2 kept
+repair: 1 link(s) dropped, 2 kept
 ```
 
 ## 14. Render the HTML report  (req20)

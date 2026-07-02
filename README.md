@@ -111,12 +111,12 @@ covmap link spec_to_impl 8c39d43c <impl_hash> "fn body"
 covmap status
 # covering main: segments=2 lines=42 entropy=...
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
-#   spec_to_impl -> .../impl/main : 1 pairs, 0 broken
+#   spec_to_impl -> .../impl/main : 1 links, 0 broken
 
-# 6. Refresh the changed segment in place. The pair tied to its old
+# 6. Refresh the changed segment in place. The link tied to its old
 #    hash becomes broken; relink it to the new hash.
 covmap recut main:8c39d43c            # recompute hash from disk bytes
-covmap fsck --broken-pairs
+covmap fsck --broken-links
 covmap unlink spec_to_impl 8c39d43c <impl_hash>
 covmap link   spec_to_impl <new_hash> <impl_hash> "fn body"
 ```
@@ -129,7 +129,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
-| `status [<C>]` | Cardinality, entropy, drift, broken pairs. |
+| `status [<C>]` | Cardinality, entropy, drift, broken links. |
 | `ls [-l] [<C>]` | List segments in a covering. |
 | `show <addr>` | Pretty-print a segment, covering, or connection. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
@@ -141,14 +141,14 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit slots onto an edited file. For a moved/rewritten slot it can't place, prints a propose-only fingerprint relocation guess. |
 | `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
-| `link <K> <h_A> <h_B> [<note>]` | Add a pair. |
-| `unlink <K> <h_A> <h_B>` | Remove a pair. |
-| `repair <K>` | Drop pairs whose endpoints have left their coverings. |
+| `link <K> <h_A> <h_B> [<note>]` | Add a link. |
+| `unlink <K> <h_A> <h_B>` | Remove a link. |
+| `repair <K>` | Drop links whose endpoints have left their coverings. |
 | `html [-o <path>]` | Render a static HTML browser. |
 
 Plumbing commands (line-oriented, stable for scripts):
-`hash-segment`, `cat-segment`, `ls-segments`, `ls-pairs`, `rev-parse`,
-`fsck [--broken-pairs]`.
+`hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
+`fsck [--broken-links]`.
 
 ## Address forms
 
@@ -180,7 +180,7 @@ one per line. Supported syntax:
   ignore               # optional gitignore-lite patterns
   objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
   coverings/<name>     # covered files + one segment hash per line
-  connections/<name>   # connection metadata + pairs
+  connections/<name>   # connection metadata + links
 ```
 
 Every command checks `.covmap/version` and refuses to operate on a

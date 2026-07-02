@@ -241,13 +241,13 @@ Let $\Cov^A$ be a covering of $A$ and $\Cov^B$ a covering of $B$. A
 \[
   \kappa \;\subseteq\; \Cov^A \times \Cov^B,
 \]
-each pair recorded by a pair of \emph{endpoints}
-(Definition~\ref{def:endpoint}): a name-tag when the segment is a slot
-(so the pair survives edits to that slot's content), otherwise a
-segment hash.
+whose elements are called \emph{links}. Each link $(s, t)$ is recorded
+by two \emph{endpoints} (Definition~\ref{def:endpoint}): a name-tag when
+the segment is a slot (so the link survives edits to that slot's
+content), otherwise a segment hash.
 \end{definition}
 
-A pair $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
+A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
 to segment $t$ of $B$. Connections are stored separately from
 coverings and refer to their endpoints by hash.
 
@@ -336,21 +336,21 @@ The two flavours of drift correspond to two repair operations
 intact boundaries, \texttt{merge} + \texttt{split} for boundary
 drift.
 
-\begin{definition}[Broken pair]\label{def:broken}
-A pair $(s, t) \in \kappa$ is \emph{broken} relative to current
+\begin{definition}[Broken link]\label{def:broken}
+A link $(s, t) \in \kappa$ is \emph{broken} relative to current
 $\Cov^A$ and $\Cov^B$ when its $A$-endpoint or its $B$-endpoint fails
 to resolve (Definition~\ref{def:endpoint}). For a \emph{hash} endpoint this means
 the hash is no longer present in its covering; for a \emph{name}
 endpoint it means no segment carries that name-tag any longer.
 \end{definition}
 
-The two identity axes give two breakage regimes. A pair recorded by
+The two identity axes give two breakage regimes. A link recorded by
 hash breaks as soon as its endpoint is rewritten (\texttt{recut},
 \texttt{label}, \texttt{split}, \texttt{merge}) or removed — i.e. on
-any content edit to the endpoint. A pair recorded by name-tag breaks
+any content edit to the endpoint. A link recorded by name-tag breaks
 \emph{only} when the named slot is deleted; an edit that changes the
 slot's bytes (followed by \texttt{recut}) leaves the name-tag, hence
-the pair, intact. Naming the segments one intends to map therefore
+the link, intact. Naming the segments one intends to map therefore
 shrinks ``broken'' from the routine outcome of any edit to the rare
 outcome of a genuine structural deletion.
 
@@ -444,7 +444,7 @@ directory:
   ignore              optional gitignore-lite patterns
   objects/<hh>/<rest> segments, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
-  connections/<name>  one file per connection (metadata + pairs)
+  connections/<name>  one file per connection (metadata + links)
 \end{verbatim}
 
 \subsection{Addressing}
@@ -538,7 +538,7 @@ is the most general covering one can ask for.
 \item \texttt{covmap status [$C$]}\\
       One-line summary per covering: cardinality, line count,
       entropy. A drift line reports the number of files whose bytes
-      have changed since their segments were recorded. Broken pair
+      have changed since their segments were recorded. Broken link
       counts are reported per connection.
 \item \texttt{covmap show <addr>}\\
       Print the segment, covering, or connection at \texttt{<addr>}.
@@ -552,10 +552,10 @@ is the most general covering one can ask for.
       Create an empty connection between two coverings.
 \item \texttt{covmap link $K$ $h_A$ $h_B$ [$\nu$]}\\
       \texttt{covmap unlink $K$ $h_A$ $h_B$}\\
-      Add or remove a single pair, optionally annotated with note
+      Add or remove a single link, optionally annotated with note
       $\nu$.
 \item \texttt{covmap repair $K$}\\
-      Drop every pair of $K$ whose endpoint is no longer in its
+      Drop every link of $K$ whose endpoint is no longer in its
       covering.
 \item \texttt{covmap fsck}\\
       Verify that every covering is a partition of its covered set
@@ -570,9 +570,9 @@ Lower-level commands meant for scripts.
 \item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [<label>] [-w]}
 \item \texttt{covmap cat-segment <hash>}
 \item \texttt{covmap ls-segments $C$}
-\item \texttt{covmap ls-pairs $K$}
+\item \texttt{covmap ls-links $K$}
 \item \texttt{covmap rev-parse <addr>}
-\item \texttt{covmap fsck --broken-pairs}
+\item \texttt{covmap fsck --broken-links}
 \end{itemize}
 
 \subsection{Design discipline}

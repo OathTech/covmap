@@ -44,13 +44,13 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     }
 
     // Build segment indices for the source covering.
-    // For each segment hash in the source covering, list outgoing pairs.
+    // For each segment hash in the source covering, list outgoing links.
     let mut outgoing: BTreeMap<String, Vec<OutgoingLink>> = BTreeMap::new();
     let mut incoming: BTreeMap<(String, String), Vec<IncomingLink>> = BTreeMap::new();
     // key for incoming: (target_repo, target_hash)
     if let Some(src) = &src_cov {
         for cv in &conn_data {
-            for p in &cv.k.pairs {
+            for p in &cv.k.links {
                 // Endpoints may be `@name` slot references or bare
                 // hashes. Resolve each to the slot's *current* hash so
                 // the views (which key on hashes) stay correct after a
@@ -290,10 +290,10 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
     let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     for cv in conns {
         if let Some(tc) = &cv.tgt_cov {
-            let by_pair_target: BTreeSet<&str> = cv.k.pairs.iter().map(|p| p.b.as_str()).collect();
+            let by_link_target: BTreeSet<&str> = cv.k.links.iter().map(|p| p.b.as_str()).collect();
             let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
             for e in &tc.entries {
-                if by_pair_target.contains(e.hash.as_str()) {
+                if by_link_target.contains(e.hash.as_str()) {
                     *by_file.entry(e.file.clone()).or_insert(0) += 1;
                 }
             }
@@ -311,7 +311,7 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
         s.push_str(&format!(
             "<div class=\"file\" data-target-file=\"{}\">\
                <div class=\"name\">{}</div>\
-               <div class=\"counts\">{} · {} incoming pair(s)</div>\
+               <div class=\"counts\">{} · {} incoming link(s)</div>\
              </div>",
             esc(&key),
             esc(&file),
@@ -495,7 +495,7 @@ fn render_target_view(
             v.sort_by_key(|e| e.sort_key());
         }
 
-        // Only emit files that have at least one incoming pair.
+        // Only emit files that have at least one incoming link.
         let target_hashes_with_incoming: BTreeSet<&str> = incoming
             .keys()
             .filter(|(rp, _)| rp == &cv.k.target_repo)
@@ -578,7 +578,7 @@ fn render_target_view(
         }
     }
     if printed == 0 {
-        s.push_str("<div class=\"empty\">No target files have incoming pairs.</div>");
+        s.push_str("<div class=\"empty\">No target files have incoming links.</div>");
     }
     Ok(s)
 }

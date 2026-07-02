@@ -9,12 +9,12 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
   directories and take the initial cover of each.
 - **T2_link** — the initial cover is done; link spec headings to an
   implementation segment.
-- **T3_drift_repair** — a spec edit broke one connection pair; recover
+- **T3_drift_repair** — a spec edit broke one connection link; recover
   the covering and re-link it.
 - **T4_char_split** — isolate one inline clause with a character-level
   split (`split <C>:<h> <line>:<col>`), then link it.
 - **T5_name_stable** — a named, linked slot survives an in-place byte
-  edit: `recut` refreshes it with no broken pair and no relinking.
+  edit: `recut` refreshes it with no broken link and no relinking.
 - **T6_diff_remap** — an insertion moves section boundaries;
   `recut --remap` re-fits every slot automatically, links preserved.
 - **T7_fingerprint** — a section is moved elsewhere; `recut --remap`

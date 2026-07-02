@@ -43,7 +43,7 @@
 5. Link that clause segment to the single `impl_rs` segment:
    `covmap link buffer_links <clause_hash> <impl_hash> "power-of-two capacity"`.
 6. Run `covmap status` and `covmap fsck`; confirm the covering is
-   still a clean partition and the pair is not broken.
+   still a clean partition and the link is not broken.
 
 ## Notes on character positions
 

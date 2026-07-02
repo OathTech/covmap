@@ -132,7 +132,7 @@ on a repository whose version disagrees.
 
 **fsck** **[R][S]** — integrity verification: checks that every covering
 is a valid partition of its covered set and that every connection
-endpoint resolves. `--broken-pairs` lists just the broken links.
+endpoint resolves. `--broken-links` lists just the broken links.
 
 **Granularity** **[T][S]** — `g(C) = |C| / N_C ∈ (0, 1]`, where `N_C` is
 the total covered line-spans. Near 0 for a freshly-covered repository, 1
@@ -161,14 +161,14 @@ line indices (line `i` maps to `j` only if the lines are equal),
 computed by trimming the common prefix/suffix and running LCS on the
 residual middle. The position-carry-forward primitive behind **diff-remap**.
 
-**Link** *(also: pair)* **[T][R][S]** — a single `(source, target)`
-association inside a connection, optionally annotated with a note; added
-by `link`, removed by `unlink`. The theory and code call it a *pair*
-(`Pair`); this glossary and the CLI prefer *link*, which reads naturally
-in the plural — a connection is a set of links. Has one sub-concept
-(below).
+**Link** **[T][R][S]** — a single `(source, target)` association inside a
+connection, optionally annotated with a note; added by `link`, removed by
+`unlink`. A connection is a set of links (the theory: the elements of the
+relation `κ ⊆ C_A × C_B`). Earlier drafts and older code called this a
+*pair* (`struct Pair`, `ls-pairs`); that term is retired. Has one
+sub-concept (below).
 
-**Broken link** *(also: broken pair)* **[T][R][S]** — a link whose source
+**Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
 state, healable only by relinking or dropping (`covmap repair` drops
 broken links; `fsck` reports them). Contrast **link drift**, its
@@ -206,7 +206,7 @@ it (see observations).
 **Plumbing / Porcelain** **[T][R][S]** — a split borrowed from git. The
 underlying idea is that covmap has a small set of *core primitives* — the
 scriptable, line-oriented *plumbing* (`hash-segment`, `cat-segment`,
-`ls-segments`, `ls-pairs`, `rev-parse`, `fsck`) — from which every
+`ls-segments`, `ls-links`, `rev-parse`, `fsck`) — from which every
 convenience command, the user-facing *porcelain* (`cover`, `status`,
 `split`, `link`, …), can be composed as a shell pipeline.
 
@@ -329,8 +329,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Naming choices applied in this revision (please confirm)
 
-- **Link, not pair.** Entry titled **Link**; the theory/code term *pair*
-  is the alias. Matches `link`/`unlink` and reads well in the plural.
 - **Segment drift, not file-level drift.** *File-level drift* is kept as
   an alias; *segment drift* names the thing that actually drifted (a
   segment) and parallels **link drift**.

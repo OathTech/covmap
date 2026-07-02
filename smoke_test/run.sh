@@ -134,10 +134,10 @@ PY
 hr "status (should report drift: 1 file edited)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
-hr "fsck --broken-pairs (one broken: the Increment hash moved when we relabeled to 'mapped')"
-( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-pairs ) || true
+hr "fsck --broken-links (one broken: the Increment hash moved when we relabeled to 'mapped')"
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ) || true
 
-hr "repair widget_links (drops pairs whose endpoints disappeared from a covering)"
+hr "repair widget_links (drops links whose endpoints disappeared from a covering)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" repair widget_links )
 
 hr "final fsck"

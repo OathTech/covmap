@@ -177,10 +177,10 @@ IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
 ( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
 ( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "fn dequeue" )
 ( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" "QueueFull guard" )
-( cd "$WORK/spec" && run ls-pairs queue_links )
+( cd "$WORK/spec" && run ls-links queue_links )
 
-assert "connection has 3 pairs, all by @name" \
-  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-pairs queue_links | grep -c '^@' ) ) -eq 3 ]]"
+assert "connection has 3 links, all by @name" \
+  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-links queue_links | grep -c '^@' ) ) -eq 3 ]]"
 
 #############################################################################
 hr "9. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
@@ -214,8 +214,8 @@ DEQ=$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@dequeue-op"{p
 
 assert "after recut: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
-assert "queue_links still 3 pairs, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 pairs, 0 broken' )"
+assert "queue_links still 3 links, 0 broken" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "11. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
@@ -232,8 +232,8 @@ diff "$FILES/queue.reworded.md" "$FILES/queue.inserted.md" | sed 's/^/    /' || 
 
 assert "after remap: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
-assert "after remap: still 3 pairs, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 pairs, 0 broken' )"
+assert "after remap: still 3 links, 0 broken" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "12. T7-style drift: move a section, fingerprint proposes its new home"
@@ -256,12 +256,12 @@ assert "remap left the covering unmutated for the moved file (still drifted)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'file(s) edited' )"
 
 #############################################################################
-hr "13. repair: drop a genuinely broken pair  (REQ14)"
+hr "13. repair: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate repair on a deliberately broken link: clear a slot's name,
-# which deletes that slot identity, breaking its pair. Then repair drops it.
+# which deletes that slot identity, breaking its link. Then repair drops it.
 ( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-meaning"{print $1}' )" - )
-( cd "$WORK/spec" && run fsck --broken-pairs || true )
+( cd "$WORK/spec" && run fsck --broken-links || true )
 ( cd "$WORK/spec" && run repair queue_links )
 ( cd "$WORK/spec" && run status main )
 

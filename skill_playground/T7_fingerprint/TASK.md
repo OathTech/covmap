@@ -60,7 +60,7 @@ The grader runs `covmap recut --remap` itself and checks that:
   naming `@audit-retention`, pointing at the moved block, with a match
   percentage;
 - the covering ref was **not mutated** by the remap (propose-only);
-- the `@audit-retention` slot and its `policy_links` pair are still
+- the `@audit-retention` slot and its `policy_links` link are still
   present (nothing was dropped).
 
 ## Grading

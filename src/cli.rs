@@ -3,7 +3,7 @@
 //! See covmap/theory/main.tex §5 for the model. Output is line-oriented
 //! and pipe-friendly.
 
-use crate::connection::{Connection, Pair};
+use crate::connection::{Connection, Link};
 use crate::covering::{self, Covering, CoveringEntry};
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
@@ -58,7 +58,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "hash-segment" => cmd_hash_segment(&rest),
         "cat-segment" => cmd_cat_segment(&rest),
         "ls-segments" => cmd_ls_segments(&rest),
-        "ls-pairs" => cmd_ls_pairs(&rest),
+        "ls-links" => cmd_ls_links(&rest),
         "rev-parse" => cmd_rev_parse(&rest),
         "fsck" => cmd_fsck(&rest),
         "help" | "-h" | "--help" => {
@@ -79,7 +79,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         "init" => "covmap init                                  create .covmap/ in the cwd",
         "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
-        "status" => "covmap status [<covering>]                   cardinality, entropy, drift, broken pairs",
+        "status" => "covmap status [<covering>]                   cardinality, entropy, drift, broken links",
         "show" => "covmap show <addr>                           segment | covering | connection at <addr>",
         "ls" => "covmap ls [-l] [<covering>]                  list segments",
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
@@ -89,17 +89,17 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@slot> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's slots onto the edited file",
-        "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a pair to connection K",
-        "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a pair",
+        "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a link to connection K",
+        "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
-        "repair" => "covmap repair <K>                            drop pairs whose endpoints are no longer in their coverings",
+        "repair" => "covmap repair <K>                            drop links whose endpoints are no longer in their coverings",
         "html" => "covmap html [-o <path>]                      render a static HTML browser",
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
-        "ls-pairs" => "covmap ls-pairs <connection>",
+        "ls-links" => "covmap ls-links <connection>",
         "rev-parse" => "covmap rev-parse <addr>",
-        "fsck" => "covmap fsck [--broken-pairs]",
+        "fsck" => "covmap fsck [--broken-links]",
         _ => return None,
     })
 }
@@ -114,7 +114,7 @@ Run `covmap --version` to print the version.
 PORCELAIN
   init                                create .covmap/ in the cwd
   cover [<covering>]                  add one whole-file `unknown` segment per missing file
-  status [<covering>]                 cardinality, entropy, drift, broken pairs
+  status [<covering>]                 cardinality, entropy, drift, broken links
   show <addr>                         segment | covering | connection at <addr>
   ls [-l] [<covering>]                list segments
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
@@ -125,19 +125,19 @@ PORCELAIN
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@slot>                 refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved slots, print fingerprint relocation proposals (propose-only)
-  link <K> <h_A> <h_B> [<note>]       add a pair to connection K
-  unlink <K> <h_A> <h_B>              remove a pair
+  link <K> <h_A> <h_B> [<note>]       add a link to connection K
+  unlink <K> <h_A> <h_B>              remove a link
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
-  repair <K>                          drop pairs whose endpoints are no longer in their coverings
+  repair <K>                          drop links whose endpoints are no longer in their coverings
   html [-o <path>]                    render a static HTML browser
 
 PLUMBING
   hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]
   cat-segment <hash>
   ls-segments <covering>
-  ls-pairs <connection>
+  ls-links <connection>
   rev-parse <addr>
-  fsck [--broken-pairs]
+  fsck [--broken-links]
 ",
         env!("CARGO_PKG_VERSION")
     );
@@ -202,7 +202,7 @@ fn short(h: &str) -> &str {
     &h[..n]
 }
 
-/// Display a pair endpoint: `@name` endpoints are shown verbatim, hash
+/// Display a link endpoint: `@name` endpoints are shown verbatim, hash
 /// endpoints are truncated to the short form.
 fn short_endpoint(ep: &str) -> &str {
     if ep.starts_with('@') {
@@ -391,7 +391,7 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
             };
             let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
             let mut broken = 0usize;
-            for p in &k.pairs {
+            for p in &k.links {
                 let a_ok = covering::endpoint_resolves(&src, &p.a);
                 let b_ok = tgt.as_ref().map_or(false, |t| covering::endpoint_resolves(t, &p.b));
                 if !a_ok || !b_ok {
@@ -399,11 +399,11 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
                 }
             }
             println!(
-                "  {} -> {}/{} : {} pairs, {} broken",
+                "  {} -> {}/{} : {} links, {} broken",
                 cn,
                 k.target_repo,
                 k.target_covering,
-                k.pairs.len(),
+                k.links.len(),
                 broken
             );
         }
@@ -468,8 +468,8 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         println!("  source covering: {}", k.source_covering);
         println!("  target repo:     {}", k.target_repo);
         println!("  target covering: {}", k.target_covering);
-        println!("  pairs:           {}", k.pairs.len());
-        for p in &k.pairs {
+        println!("  links:           {}", k.links.len());
+        for p in &k.links {
             if p.note.is_empty() {
                 println!("    {} {}", short_endpoint(&p.a), short_endpoint(&p.b));
             } else {
@@ -1050,11 +1050,11 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     let ib = covering::resolve_slot(&tgt, hb_in)?;
     let hb = tgt.entries[ib].endpoint();
 
-    if k.pairs.iter().any(|p| p.a == ha && p.b == hb) {
-        eprintln!("(pair already present)");
+    if k.links.iter().any(|p| p.a == ha && p.b == hb) {
+        eprintln!("(link already present)");
         return Ok(0);
     }
-    k.pairs.push(Pair {
+    k.links.push(Link {
         a: ha.clone(),
         b: hb.clone(),
         note,
@@ -1076,13 +1076,13 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     let mut k = Connection::read(&repo, kname)?;
     // Accept either a slot address (hash prefix / `@name`, resolved
     // against the covering to the slot's stored endpoint) or a literal
-    // pair-endpoint prefix (covers pairs whose slot has since vanished).
+    // link-endpoint prefix (covers links whose slot has since vanished).
     let ha = resolve_endpoint_arg(&repo, &k, ha_in, true)?;
     let hb = resolve_endpoint_arg(&repo, &k, hb_in, false)?;
-    let before = k.pairs.len();
-    k.pairs.retain(|p| !(p.a == ha && p.b == hb));
-    if k.pairs.len() == before {
-        eprintln!("(no such pair)");
+    let before = k.links.len();
+    k.links.retain(|p| !(p.a == ha && p.b == hb));
+    if k.links.len() == before {
+        eprintln!("(no such link)");
         return Ok(1);
     }
     k.write(&repo)?;
@@ -1091,11 +1091,11 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
 }
 
 /// Resolve an `unlink` endpoint argument to the exact string stored in
-/// a pair. Tries, in order: (1) `@name` literal already present in a
-/// pair; (2) resolving the arg against the relevant covering to a slot
-/// endpoint; (3) prefix-matching the raw pair endpoints (legacy hashes,
+/// a link. Tries, in order: (1) `@name` literal already present in a
+/// link; (2) resolving the arg against the relevant covering to a slot
+/// endpoint; (3) prefix-matching the raw link endpoints (legacy hashes,
 /// or slots that have since disappeared). `source_side` picks the A or
-/// B column of each pair.
+/// B column of each link.
 fn resolve_endpoint_arg(
     repo: &Repo,
     k: &Connection,
@@ -1104,7 +1104,7 @@ fn resolve_endpoint_arg(
 ) -> io::Result<String> {
     // (1) exact @name endpoint already present?
     if arg.starts_with('@')
-        && k.pairs.iter().any(|p| {
+        && k.links.iter().any(|p| {
             let ep = if source_side { &p.a } else { &p.b };
             ep == arg
         })
@@ -1125,13 +1125,13 @@ fn resolve_endpoint_arg(
             return Ok(c.entries[idx].endpoint());
         }
     }
-    // (3) fall back to raw prefix match against pair endpoints.
-    resolve_pair_hash(k, arg, source_side)
+    // (3) fall back to raw prefix match against link endpoints.
+    resolve_link_hash(k, arg, source_side)
 }
 
-fn resolve_pair_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Result<String> {
+fn resolve_link_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Result<String> {
     let mut matches: Vec<&str> = k
-        .pairs
+        .links
         .iter()
         .map(|p| {
             if source_side {
@@ -1148,14 +1148,14 @@ fn resolve_pair_hash(k: &Connection, prefix: &str, source_side: bool) -> io::Res
         0 => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "no pair endpoint matches '{prefix}' in connection '{}'",
+                "no link endpoint matches '{prefix}' in connection '{}'",
                 k.name
             ),
         )),
         1 => Ok(matches.remove(0).to_string()),
         n => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("ambiguous: {n} pair endpoints match '{prefix}'"),
+            format!("ambiguous: {n} link endpoints match '{prefix}'"),
         )),
     }
 }
@@ -1203,7 +1203,7 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
         source_covering: src_cov,
         target_repo: tgt_repo.root.to_string_lossy().to_string(),
         target_covering: cov_b,
-        pairs: Vec::new(),
+        links: Vec::new(),
     };
     if repo.connections_dir().join(&kname).exists() {
         return Err(io::Error::new(
@@ -1233,9 +1233,9 @@ fn cmd_repair(args: &[String]) -> io::Result<u8> {
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
 
-    let mut kept: Vec<Pair> = Vec::new();
+    let mut kept: Vec<Link> = Vec::new();
     let mut dropped = 0usize;
-    for p in &k.pairs {
+    for p in &k.links {
         let a_ok = covering::endpoint_resolves(&src, &p.a);
         let b_ok = covering::endpoint_resolves(&tgt, &p.b);
         if a_ok && b_ok {
@@ -1259,12 +1259,12 @@ fn cmd_repair(args: &[String]) -> io::Result<u8> {
             );
         }
     }
-    k.pairs = kept;
+    k.links = kept;
     k.write(&repo)?;
     println!(
-        "repair: {} pair(s) dropped, {} kept",
+        "repair: {} link(s) dropped, {} kept",
         dropped,
-        k.pairs.len()
+        k.links.len()
     );
     Ok(0)
 }
@@ -1376,13 +1376,13 @@ fn cmd_ls_segments(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-fn cmd_ls_pairs(args: &[String]) -> io::Result<u8> {
+fn cmd_ls_links(args: &[String]) -> io::Result<u8> {
     let n = args
         .first()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ls-pairs <connection>"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ls-links <connection>"))?;
     let repo = current_repo()?;
     let k = Connection::read(&repo, n)?;
-    for p in &k.pairs {
+    for p in &k.links {
         if p.note.is_empty() {
             println!("{}\t{}", p.a, p.b);
         } else {
@@ -1412,7 +1412,7 @@ fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {
 fn cmd_fsck(args: &[String]) -> io::Result<u8> {
     let mut broken_only = false;
     for a in args {
-        if a == "--broken-pairs" {
+        if a == "--broken-links" {
             broken_only = true;
         }
     }
@@ -1469,7 +1469,7 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
             root: PathBuf::from(&k.target_repo),
         };
         let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-        for p in &k.pairs {
+        for p in &k.links {
             let a_ok = covering::endpoint_resolves(&src, &p.a);
             let b_ok = covering::endpoint_resolves(&tgt, &p.b);
             if !a_ok || !b_ok {

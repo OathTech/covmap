@@ -38,9 +38,9 @@
    This reconstructs the pre-edit file from the covering, diffs it
    against the file on disk, and re-fits every slot's boundaries through
    the unchanged regions — automatically following the upstream
-   insertion. Names (hence the `api_links` pairs) are preserved.
+   insertion. Names (hence the `api_links` links) are preserved.
 3. Run `covmap status` and `covmap fsck`: the covering is a clean
-   partition again, and `api_links` still has 2 pairs, 0 broken.
+   partition again, and `api_links` still has 2 links, 0 broken.
 
 ## Why this matters
 
@@ -52,8 +52,8 @@ regions of the file (the common, localized case).
 
 ## Success criteria (graded)
 
-- `covmap status` shows `drift: clean` and `api_links … 2 pairs, 0 broken`.
-- `covmap fsck` passes with no broken pairs.
+- `covmap status` shows `drift: clean` and `api_links … 2 links, 0 broken`.
+- `covmap fsck` passes with no broken links.
 - The `@read-ep` slot's content is exactly the Read section after the
   shift (it followed the insertion rather than staying at the old lines).
 - Reconstructing the file from the covering reproduces `api.md`

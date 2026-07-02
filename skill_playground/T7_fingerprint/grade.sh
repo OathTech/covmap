@@ -43,8 +43,8 @@ check "covering was NOT mutated (propose-only)" bash -c "[[ \"\$0\" == \"\$1\" ]
 check "@audit-retention slot still present" bash -c "
   cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@audit-retention'
 "
-check "policy_links still has its pair"     bash -c "
-  [[ \$( ( cd spec && \"$COVMAP_BIN\" ls-pairs policy_links | wc -l ) ) -eq 1 ]]
+check "policy_links still has its link"     bash -c "
+  [[ \$( ( cd spec && \"$COVMAP_BIN\" ls-links policy_links | wc -l ) ) -eq 1 ]]
 "
 
 echo

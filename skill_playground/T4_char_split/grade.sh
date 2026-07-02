@@ -60,7 +60,7 @@ check "clause segment is linked to impl" bash -c "
     [[ \"\$c\" == \"$CLAUSE\" ]] && clause_h=\$h
   done < <(\"$COVMAP_BIN\" ls-segments main)
   [[ -n \"\$clause_h\" ]] || exit 1
-  \"$COVMAP_BIN\" ls-pairs buffer_links | awk -F'\t' '{print \$1\"\t\"\$2}' \
+  \"$COVMAP_BIN\" ls-links buffer_links | awk -F'\t' '{print \$1\"\t\"\$2}' \
     | grep -qF \"\$clause_h\"\$'\t'\"\$IMPL_H\"
 "
 

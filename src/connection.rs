@@ -17,7 +17,7 @@ use std::fs;
 use std::io;
 
 #[derive(Clone, Debug)]
-pub struct Pair {
+pub struct Link {
     pub a: String,
     pub b: String,
     pub note: String,
@@ -29,7 +29,7 @@ pub struct Connection {
     pub source_covering: String,
     pub target_repo: String,
     pub target_covering: String,
-    pub pairs: Vec<Pair>,
+    pub links: Vec<Link>,
 }
 
 impl Connection {
@@ -39,7 +39,7 @@ impl Connection {
         buf.push_str(&format!("# source_covering={}\n", self.source_covering));
         buf.push_str(&format!("# target_repo={}\n", self.target_repo));
         buf.push_str(&format!("# target_covering={}\n", self.target_covering));
-        for p in &self.pairs {
+        for p in &self.links {
             if p.note.is_empty() {
                 buf.push_str(&format!("{}\t{}\n", p.a, p.b));
             } else {
@@ -60,7 +60,7 @@ impl Connection {
         let mut source_covering = String::new();
         let mut target_repo = String::new();
         let mut target_covering = String::new();
-        let mut pairs = Vec::new();
+        let mut links = Vec::new();
         for line in raw.lines() {
             if let Some(v) = line.strip_prefix("# source_covering=") {
                 source_covering = v.to_string();
@@ -78,7 +78,7 @@ impl Connection {
                         format!("malformed connection line: {line}"),
                     ));
                 }
-                pairs.push(Pair {
+                links.push(Link {
                     a: parts[0].to_string(),
                     b: parts[1].to_string(),
                     note: parts.get(2).copied().unwrap_or("").to_string(),
@@ -90,7 +90,7 @@ impl Connection {
             source_covering,
             target_repo,
             target_covering,
-            pairs,
+            links,
         })
     }
 

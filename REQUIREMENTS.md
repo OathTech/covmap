@@ -59,7 +59,7 @@ segments automatically by content address rather than by duplication.
 
 ## req10 — Many-to-many annotated connections
 Connections shall be many-to-many relations between coverings, with
-optional per-pair notes, supporting fan-out and fan-in between segments.
+optional per-link notes, supporting fan-out and fan-in between segments.
 Each endpoint shall reference its segment either by name-tag (preferred
 for mapped segments, so the link is resilient to content edits) or by
 segment hash.
@@ -83,12 +83,12 @@ remapping, a propose-only fingerprint suggestion of its new location
 ranked by similarity. Fingerprinting shall never mutate state on its
 own. merge then split remains available as the manual fallback.
 
-## req14 — Broken-pair detection and repair
-covmap shall identify connection pairs whose endpoints no longer
+## req14 — Broken-link detection and repair
+covmap shall identify connection links whose endpoints no longer
 resolve in their coverings and offer to drop them. An endpoint resolves
 by name-tag (broken only when the named slot is deleted) or by hash
 (broken when that content no longer appears), so a content edit to a
-named slot does not, by itself, break a pair.
+named slot does not, by itself, break a link.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition

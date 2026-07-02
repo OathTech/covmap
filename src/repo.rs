@@ -8,7 +8,7 @@
 //!     ignore              # optional gitignore-lite patterns
 //!     objects/<hh>/<rest> # segment object: "<label>\0<content>"
 //!     coverings/<name>    # covered files + segment list
-//!     connections/<name>  # connection metadata + pairs
+//!     connections/<name>  # connection metadata + links
 //! ```
 
 use std::fs;

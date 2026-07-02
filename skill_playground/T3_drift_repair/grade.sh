@@ -17,9 +17,9 @@ check() {
 
 echo "== T3 drift repair =="
 check "cache_links exists"           test -f spec/.covmap/connections/cache_links
-check "exactly 3 pairs"              bash -c "[[ \$( ( cd spec && \"$COVMAP_BIN\" ls-pairs cache_links | wc -l ) ) -eq 3 ]]"
-check "no broken pairs from fsck"    bash -c "[[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-pairs ) )\" ]]"
-check "status shows 0 broken"        bash -c "( cd spec && \"$COVMAP_BIN\" status ) | grep -qE 'cache_links .*: 3 pairs, 0 broken'"
+check "exactly 3 links"              bash -c "[[ \$( ( cd spec && \"$COVMAP_BIN\" ls-links cache_links | wc -l ) ) -eq 3 ]]"
+check "no broken links from fsck"    bash -c "[[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-links ) )\" ]]"
+check "status shows 0 broken"        bash -c "( cd spec && \"$COVMAP_BIN\" status ) | grep -qE 'cache_links .*: 3 links, 0 broken'"
 
 echo
 echo "$pass passed, $fail failed"

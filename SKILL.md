@@ -89,7 +89,7 @@ are unique.
 | ------- | ------- | ------------ |
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
-| `covmap status [<C>]` | Per-covering summary + drift + broken-pair count. | **yes** |
+| `covmap status [<C>]` | Per-covering summary + drift + broken-link count. | **yes** |
 | `covmap ls [-l] [<C>]` | List segments of covering `C`. | yes |
 | `covmap show <addr>` | Pretty-print a segment, covering, or connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
@@ -101,9 +101,9 @@ are unique.
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A name-tagged slot keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned slot's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten slot it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
 | `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
-| `covmap link <K> <A> <B> [<note>]` | Add a pair. `<A>`/`<B>` are slot addresses (`@name` or hash prefix); a named slot is stored by `@name` so the link survives content edits. | no |
-| `covmap unlink <K> <A> <B>` | Remove a pair (endpoints by `@name` or hash). | no |
-| `covmap repair <K>` | Drop pairs whose endpoints have disappeared from their coverings. | yes |
+| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are slot addresses (`@name` or hash prefix); a named slot is stored by `@name` so the link survives content edits. | no |
+| `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
+| `covmap repair <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
 | `covmap html [-o <path>]` | Render a static HTML browser. For humans, not you. | no |
 
@@ -112,11 +112,11 @@ are unique.
 | Command | Purpose |
 | ------- | ------- |
 | `covmap ls-segments <C>` | One hash per line. |
-| `covmap ls-pairs <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line. |
+| `covmap ls-links <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
 | `covmap hash-segment <file> <a> <b> [<lbl>] [-w]` | Hash a candidate segment without registering it (or with `-w`). |
-| `covmap fsck --broken-pairs` | Print one broken pair per line: `<conn>\t<hash_A>\t<hash_B>`. |
+| `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<hash_A>\t<hash_B>`. |
 
 ### Address forms
 
@@ -223,20 +223,20 @@ The two kinds of drift you will see:
 
 Steps:
 
-1. Run `covmap status`. Note the drift line and any broken pairs.
-2. Run `covmap fsck --broken-pairs` to list pairs whose endpoints
+1. Run `covmap status`. Note the drift line and any broken links.
+2. Run `covmap fsck --broken-links` to list links whose endpoints
    disappeared from their covering.
 3. For each affected segment: choose `recut` (boundaries fine) or
    `merge` + `split` (boundaries shifted). Read the new bytes with
    `covmap show <C>:<new_hash>` to confirm the implementation still
    matches.
-4. Only for **anonymous** (hash-linked) slots: `unlink` the old pair,
+4. Only for **anonymous** (hash-linked) slots: `unlink` the old link,
    `link` the new one. Named (`@name`) slots need no relinking.
-5. Run `covmap repair <K>` to drop any genuinely-abandoned pairs.
+5. Run `covmap repair <K>` to drop any genuinely-abandoned links.
 6. Confirm with `covmap status` (broken count = 0, drift = clean).
 
 **Prefer naming the segments you map.** Before linking, `covmap name
-<C>:<h> <tag>` the segment, then `link` it — the pair is stored by
+<C>:<h> <tag>` the segment, then `link` it — the link is stored by
 `@tag` and survives later content edits, so drift repair collapses to a
 single `recut`. This is the difference between task T3 (hash link, must
 relink) and T5 (named link, recut only).
@@ -314,7 +314,7 @@ explicitly re-links.
 covering main: segments=7 lines=29 entropy=2.802
   drift: 1 file(s) edited, 0 file(s) missing/binary
 connections:
-  widget_links -> /tmp/impl/main : 2 pairs, 1 broken
+  widget_links -> /tmp/impl/main : 2 links, 1 broken
 ```
 
 - `drift: clean` — every covered file's bytes still match the
@@ -322,7 +322,7 @@ connections:
 - `drift: N file(s) edited` — N files have been modified since their
   segments were recorded. Use `recut` (or merge+split if boundaries
   moved) to refresh.
-- `<conn> -> <repo>/<C> : N pairs, M broken` — repair if `M > 0`.
+- `<conn> -> <repo>/<C> : N links, M broken` — repair if `M > 0`.
 
 ## Efficiency rules
 
@@ -373,4 +373,4 @@ fsck: ok
 ```
 
 After any spec edit, run `covmap status`; for each affected segment
-choose `recut` or merge+split, then re-link broken pairs.
+choose `recut` or merge+split, then re-link broken links.

@@ -168,7 +168,7 @@ impl CoveringEntry {
     }
 }
 
-/// A connection-pair endpoint, parsed from its stored string. `@name`
+/// A connection-link endpoint, parsed from its stored string. `@name`
 /// references a named slot (resilient to content edits); a bare hex
 /// string references a segment hash (legacy / anonymous slots).
 pub enum Endpoint {

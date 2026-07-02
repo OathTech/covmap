@@ -28,8 +28,8 @@ check "fsck passes (spec)"       bash -c "cd spec && \"$COVMAP_BIN\" fsck"
 # The named slots survived: still present and still linked, 0 broken.
 check "Read slot still @read-ep"     bash -c "cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@read-ep'"
 check "Delete slot still @delete-ep" bash -c "cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@delete-ep'"
-check "api_links 2 pairs, 0 broken"  bash -c "cd spec && \"$COVMAP_BIN\" status | grep -qE 'api_links .*: 2 pairs, 0 broken'"
-check "no broken pairs from fsck"    bash -c "[[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-pairs ) )\" ]]"
+check "api_links 2 links, 0 broken"  bash -c "cd spec && \"$COVMAP_BIN\" status | grep -qE 'api_links .*: 2 links, 0 broken'"
+check "no broken links from fsck"    bash -c "[[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-links ) )\" ]]"
 
 # The remap must have re-fit boundaries: the @read-ep slot's content is
 # now exactly the Read section (heading + body), proving boundaries

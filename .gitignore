@@ -16,6 +16,10 @@ smoke_test/_out/
 # Skill playground per-run scratch
 skill_playground/_runs/
 
+# Tutorial scratch workspace
+tutorial/_work/
+tutorial/_play/
+
 # Editor/OS detritus
 .DS_Store
 *.swp

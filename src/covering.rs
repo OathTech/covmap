@@ -363,6 +363,12 @@ impl Covering {
 pub struct Stats {
     pub cardinality: usize,
     pub total_lines: usize,
+    /// Partition entropy (theory/main.tex §Complexity). Computed and kept
+    /// as a defined covering measure, but intentionally not surfaced in
+    /// any command output — it is not actionable on its own. Available
+    /// for future use (e.g. an evenness heuristic); `allow(dead_code)`
+    /// until a consumer lands.
+    #[allow(dead_code)]
     pub entropy_bits: f64,
 }
 

@@ -311,7 +311,7 @@ explicitly re-links.
 `covmap status` lines you may see, and what they mean:
 
 ```
-covering main: segments=7 lines=29 entropy=2.802
+covering main: segments=7 lines=29
   drift: 1 file(s) edited, 0 file(s) missing/binary
 connections:
   widget_links -> /tmp/impl/main : 2 links, 1 broken
@@ -356,9 +356,9 @@ connections:
 ```
 $ covmap init
 $ covmap cover
-Covering 'main': 3 segments, 120 lines, entropy 1.485 bits (3 added)
+Covering 'main': 3 segments, 120 lines (3 added)
 $ covmap status
-covering main: segments=3 lines=120 entropy=1.485
+covering main: segments=3 lines=120
   drift: clean
 $ covmap ls -l
 e76e5429f980abcd  unknown  README.md:1..30   30

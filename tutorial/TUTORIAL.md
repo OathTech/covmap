@@ -134,7 +134,7 @@ It is additive and idempotent. `build/artifact.txt` is absent from the
 covering because `build/` is ignored.
 
 ```
-Covering 'main': 2 segments, 20 lines, entropy 0.722 bits (2 added)
+Covering 'main': 2 segments, 20 lines (2 added)
 ```
 
 ## 2. Inspect the covering  (req12, req20)
@@ -145,15 +145,15 @@ covmap ls -l
 ```
 
 ```
-covering main: segments=2 lines=20 entropy=0.722
+covering main: segments=2 lines=20
   drift: clean
 327ef5a116484a87	unknown	errors.md:1..4	4	-
 9ce81ba012a36b2a	unknown	queue.md:1..16	16	-
 ```
 
 `ls -l` columns are: hash, label, location (`file:a..b`), line count, and
-name (`-` when anonymous). `status` reports cardinality, line count,
-partition entropy, and drift.
+name (`-` when anonymous). `status` reports cardinality, line count, and
+drift.
 
 ## 3. Refine into one segment per section  (req5, req8)
 
@@ -324,7 +324,7 @@ covmap status
 connection endpoint resolves. `status` now shows the connection:
 
 ```
-covering main: segments=7 lines=21 entropy=2.661
+covering main: segments=7 lines=21
   drift: clean
 connections:
   queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken
@@ -463,7 +463,7 @@ highlighted.
 | Feature | Step | Requirement |
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
-| status, ls, entropy | 2, 9 | req12, req20 |
+| status, ls (metrics) | 2, 9 | req12, req20 |
 | split (line + character) | 3, 5 | req5, req8 |
 | merge / recut / label | 4, 6, 10 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |

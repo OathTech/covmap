@@ -85,7 +85,7 @@ cd spec/
 covmap init
 covmap cover                          # one whole-file `unknown` segment per file
 covmap status
-# covering main: segments=1 lines=42 entropy=0.000
+# covering main: segments=1 lines=42
 #   drift: clean
 
 # 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+).
@@ -108,7 +108,7 @@ covmap link spec_to_impl 8c39d43c <impl_hash> "fn body"
 
 # 5. Edit spec.md. Status now reports drift.
 covmap status
-# covering main: segments=2 lines=42 entropy=...
+# covering main: segments=2 lines=42
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
 #   spec_to_impl -> .../impl/main : 1 links, 0 broken
 
@@ -128,7 +128,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
-| `status [<C>]` | Cardinality, entropy, drift, broken links. |
+| `status [<C>]` | Cardinality, lines, drift, broken links. |
 | `ls [-l] [<C>]` | List segments in a covering. |
 | `show <addr>` | Pretty-print a segment, covering, or connection. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |

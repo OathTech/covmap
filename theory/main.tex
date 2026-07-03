@@ -318,7 +318,10 @@ Let $p_\Cov(s) = \ell(s)/N_\Cov$. The \emph{entropy} of $\Cov$ is
 
 Entropy ranges from $0$ (a single segment covering one one-line file)
 to $\log_2 N_\Cov$ (one segment per line). Coverings with equal-length
-segments maximize entropy at fixed cardinality.
+segments maximize entropy at fixed cardinality. It is a defined measure
+of a covering, but \texttt{covmap} does not surface it in any command
+output (it is not actionable on its own); \texttt{status} reports
+cardinality and line count.
 
 \subsection{Edit stability and drift}
 
@@ -544,10 +547,10 @@ is the most general covering one can ask for.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
-      One-line summary per covering: cardinality, line count,
-      entropy. A drift line reports the number of files whose bytes
-      have changed since their segments were recorded. Broken link
-      counts are reported per connection.
+      One-line summary per covering: cardinality and line count. A drift
+      line reports the number of files whose bytes have changed since
+      their segments were recorded. Broken link counts are reported per
+      connection.
 \item \texttt{covmap show <addr>}\\
       Print the segment, covering, or connection at \texttt{<addr>}.
 \item \texttt{covmap ls [-l] $C$}\\

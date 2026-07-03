@@ -95,10 +95,9 @@ pub fn render(repo: &Repo) -> io::Result<String> {
         Some(c) => {
             let st = covering::stats(c);
             format!(
-                "{} segments · {} lines · entropy {:.2} bits · {} connection(s)",
+                "{} segments · {} lines · {} connection(s)",
                 st.cardinality,
                 st.total_lines,
-                st.entropy_bits,
                 conn_data.len()
             )
         }

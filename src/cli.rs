@@ -79,7 +79,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         "init" => "covmap init                                  create .covmap/ in the cwd",
         "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
-        "status" => "covmap status [<covering>]                   cardinality, entropy, drift, broken links",
+        "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
         "show" => "covmap show <addr>                           segment | covering | connection at <addr>",
         "ls" => "covmap ls [-l] [<covering>]                  list segments",
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
@@ -114,7 +114,7 @@ Run `covmap --version` to print the version.
 PORCELAIN
   init                                create .covmap/ in the cwd
   cover [<covering>]                  add one whole-file `unknown` segment per missing file
-  status [<covering>]                 cardinality, entropy, drift, broken links
+  status [<covering>]                 cardinality, lines, drift, broken links
   show <addr>                         segment | covering | connection at <addr>
   ls [-l] [<covering>]                list segments
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
@@ -303,11 +303,10 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
     cov.write(&repo)?;
     let st = covering::stats(&cov);
     println!(
-        "Covering '{}': {} segments, {} lines, entropy {:.3} bits ({} added{})",
+        "Covering '{}': {} segments, {} lines ({} added{})",
         cov.name,
         st.cardinality,
         st.total_lines,
-        st.entropy_bits,
         added,
         if skipped_binary > 0 {
             format!(", {skipped_binary} binary file(s) skipped")
@@ -347,8 +346,8 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
         };
         let st = covering::stats(&c);
         println!(
-            "covering {}: segments={} lines={} entropy={:.3}",
-            c.name, st.cardinality, st.total_lines, st.entropy_bits
+            "covering {}: segments={} lines={}",
+            c.name, st.cardinality, st.total_lines
         );
         // Per-file drift: are the bytes on disk still consistent with
         // the recorded segments?
@@ -489,8 +488,8 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         let c = Covering::read(&repo, addr)?;
         let st = covering::stats(&c);
         println!(
-            "covering {}: {} segments, {} lines, entropy {:.3}",
-            c.name, st.cardinality, st.total_lines, st.entropy_bits
+            "covering {}: {} segments, {} lines",
+            c.name, st.cardinality, st.total_lines
         );
         for e in &c.entries {
             let name = e

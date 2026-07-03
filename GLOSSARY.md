@@ -195,10 +195,12 @@ See **covering invariants**.
 
 **Partition entropy** **[T][S]** — `H(C) = −Σ p·log₂ p` over each
 segment's share of the covering's total lines; 0 for a single segment,
-`log₂ N_C` for one-segment-per-line, maximized by equal-sized segments.
-Computed by `stats()` and printed by `status` as a one-number gauge of
-how evenly a covering is cut. Purely diagnostic today — nothing consumes
-it (see observations).
+`log₂ N_C` for one-segment-per-line, maximized by equal-sized segments. A
+one-number gauge of how evenly a covering is cut, and the only measure
+distinct from cardinality and granularity. Defined in the theory and
+still computed by `stats()`, but **not surfaced in any command output** —
+it is not actionable on its own, so it was dropped from `status` (kept in
+code, `allow(dead_code)`, for a possible future evenness heuristic).
 
 **Plumbing / Porcelain** **[T][R][S]** — covmap has a small set of *core
 primitives*: scriptable, line-oriented commands (`hash-segment`,
@@ -338,12 +340,6 @@ sources have drifted apart. These are notes for discussion, not defects.
   / Boundary / Link drift under **Drift**; Recut, Diff-remap,
   Fingerprinting, Repair residue, Similarity score, Propose-only under
   **Repair**) instead of scattering them alphabetically.
-
-### Concepts whose keep-or-cut is worth a decision
-
-- **Partition entropy.** Computed and printed, but nothing consumes it
-  and it is hard to act on. Is a single evenness number worth a line in
-  `status`, or do cardinality + granularity already say enough?
 
 ### Still-unreconciled vocabulary across T / R / S
 

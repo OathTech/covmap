@@ -76,8 +76,11 @@ concrete workflow needs it (e.g. composing a docs→code map with a
 code→test map to derive docs→test).
 
 ## req12 — Quantitative measures
-covmap shall report covering metrics (cardinality, granularity, partition
-entropy) and connection coverage (source and target totality).
+covmap shall report covering metrics (cardinality, line count,
+granularity) and connection coverage (source and target totality).
+Partition entropy is a defined covering measure (`theory/main.tex`) but
+is computed only, not surfaced in command output — it is not actionable
+on its own.
 
 ## req13 — Drift detection and layered repair
 covmap shall detect when edited files diverge from their recorded

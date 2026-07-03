@@ -13,8 +13,8 @@ are immediately followed by their sub-concepts, book-index style, rather
 than scattering them across the alphabet. Sub-concepts sit at the same
 level as every other entry; the convention is simply that they come right
 after their parent. A closing section, *Terminology observations*,
-records naming choices made in this revision, concepts whose value is
-worth revisiting, and places where the three sources have drifted apart.
+records places where the three sources still use different words and
+model gaps worth reconciling.
 
 ---
 
@@ -323,16 +323,9 @@ granularity needs no splitting.
 
 ## Terminology observations
 
-Iterating on the glossary surfaced naming choices worth confirming,
-concepts whose value is worth revisiting, and places where the three
-sources have drifted apart. These are notes for discussion, not defects.
-
-### Naming choices applied in this revision (please confirm)
-
-- **Drift and Repair group their sub-concepts** book-index style (Segment
-  / Boundary / Link drift under **Drift**; Recut, Diff-remap,
-  Fingerprinting, Repair residue, Similarity score, Propose-only under
-  **Repair**) instead of scattering them alphabetically.
+Iterating on the glossary surfaced places where the three sources still
+use different words for the same thing, and model gaps worth reconciling.
+These are notes for discussion, not defects.
 
 ### Still-unreconciled vocabulary across T / R / S
 

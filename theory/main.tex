@@ -294,9 +294,13 @@ A covering can be characterized by several quantitative measures.
 Let $\ell(s) = b - a + 1$ be the \emph{length} of a segment, measured
 in lines spanned (a character-level segment within one line has
 $\ell = 1$), and let $N_\Cov = \sum_{s \in \Cov} \ell(s)$ be the total
-number of covered lines. The complexity measures below are defined in
-terms of this line-span length; refining a covering with
-character-level cuts increases cardinality without changing $N_\Cov$.
+span of the covering. For a line-aligned covering this is exactly the
+number of covered lines; in general it is the \emph{sum of segment
+line-spans}, so a line hosting several character-level segments is
+counted once per segment. The complexity measures below are defined in
+terms of this line-span length; a character-level cut therefore
+increases both cardinality and $N_\Cov$ (it adds a segment of span
+$\ell \ge 1$).
 
 \subsection{Cardinality and granularity}
 
@@ -308,8 +312,12 @@ The \emph{cardinality} of $\Cov$ is $|\Cov|$, and its
 \]
 \end{definition}
 
-The initial cover (one segment per covered file) has $g$ close to
-$0$; the one-line-per-segment covering has $g = 1$.
+The range holds because every $\ell(s) \ge 1$, so
+$N_\Cov = \sum_s \ell(s) \ge |\Cov|$; the bound $g = 1$ is reached exactly
+when every segment has $\ell(s) = 1$. The initial cover (one segment per
+covered file) has $g$ close to $0$; the one-line-per-segment covering has
+$g = 1$. Character-level cuts push $g$ back below $1$, since they add
+segments while each still contributes $\ell \ge 1$ to $N_\Cov$.
 
 \subsection{Partition entropy}
 

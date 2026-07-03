@@ -12,9 +12,7 @@ alphabetical, except that a few umbrella concepts (**Drift**, **Repair**)
 are immediately followed by their sub-concepts, book-index style, rather
 than scattering them across the alphabet. Sub-concepts sit at the same
 level as every other entry; the convention is simply that they come right
-after their parent. A closing section, *Terminology observations*,
-records places where the three sources still use different words and
-model gaps worth reconciling.
+after their parent.
 
 ---
 
@@ -315,18 +313,3 @@ either axis.
 segment that **cover** creates for a file before any refinement. Also
 useful on its own: a file one is content to track at whole-file
 granularity needs no splitting.
-
----
-
-## Terminology observations
-
-Iterating on the glossary surfaced a few model gaps worth reconciling
-between the theory and the code. These are notes for discussion, not
-defects.
-
-### Model gaps (theory vs. code)
-
-- **`N_C` contradiction.** Theory defines `ℓ(s) = b − a + 1` (so
-  char-level cuts *grow* `N_C`, matching `stats()`) but the next sentence
-  says char-level cuts leave `N_C` unchanged. Reconcile the two, and
-  restate granularity's `(0, 1]` range accordingly.

@@ -320,14 +320,9 @@ granularity needs no splitting.
 
 ## Terminology observations
 
-Iterating on the glossary surfaced places where the three sources still
-use different words for the same thing, and model gaps worth reconciling.
-These are notes for discussion, not defects.
-
-### Still-unreconciled vocabulary across T / R / S
-
-- **auto-heal rate (T) vs. healed / refreshed counts (S output).** Same
-  quantity, described as a ratio in theory and as counts in CLI output.
+Iterating on the glossary surfaced a few model gaps worth reconciling
+between the theory and the code. These are notes for discussion, not
+defects.
 
 ### Model gaps (theory vs. code)
 

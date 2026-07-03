@@ -410,9 +410,13 @@ concatenation reproduces $N$ byte-for-byte.
 \end{proposition}
 
 The auto-heal rate is the fraction of cuts lying in unchanged regions,
-which approaches $1$ as the edit becomes more localized. Diff-remap is
-restricted to line-aligned segments; a covering with character-level cuts
-in $f$ falls back to manual \texttt{merge}/\texttt{split} for that file.
+which approaches $1$ as the edit becomes more localized. This rate is an
+analytical characterization of diff-remap's behavior; \texttt{covmap}
+does not print it, reporting instead the operational outcome of a run
+(files healed and segments refreshed, with any unresolved segments
+counted). Diff-remap is restricted to line-aligned segments; a covering
+with character-level cuts in $f$ falls back to manual
+\texttt{merge}/\texttt{split} for that file.
 
 \subsection{Fingerprinting}\label{sec:fingerprint}
 

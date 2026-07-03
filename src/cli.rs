@@ -392,7 +392,9 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
             let mut broken = 0usize;
             for p in &k.links {
                 let a_ok = covering::endpoint_resolves(&src, &p.a);
-                let b_ok = tgt.as_ref().map_or(false, |t| covering::endpoint_resolves(t, &p.b));
+                let b_ok = tgt
+                    .as_ref()
+                    .is_some_and(|t| covering::endpoint_resolves(t, &p.b));
                 if !a_ok || !b_ok {
                     broken += 1;
                 }
@@ -422,10 +424,7 @@ fn file_matches_segments(
     sorted.sort_by_key(|e| e.sort_key());
     // The next start position the partition must supply, beginning at
     // the first character of the file.
-    let mut expected = covering::Pos {
-        line: 1,
-        col: None,
-    };
+    let mut expected = covering::Pos { line: 1, col: None };
     for e in &sorted {
         if !covering::same_start(expected, e.start_pos()) {
             return Ok(false);
@@ -444,7 +443,10 @@ fn file_matches_segments(
         expected = covering::successor_of_end(e.end_pos());
     }
     // The covering must reach exactly one past the end of the file.
-    Ok(covering::same_start(expected, covering::file_end(lines.len())))
+    Ok(covering::same_start(
+        expected,
+        covering::file_end(lines.len()),
+    ))
 }
 
 fn object_exists(repo: &Repo, hash: &str) -> bool {
@@ -714,7 +716,9 @@ fn cmd_name(args: &[String]) -> io::Result<u8> {
             println!("renamed @{o} -> @{n}  (re-point connections that used '@{o}')")
         }
         (Some(o), Some(_)) => println!("@{o} (unchanged)"),
-        (Some(o), None) => println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)"),
+        (Some(o), None) => {
+            println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)")
+        }
         (None, None) => println!("{h} (already anonymous)"),
     }
     Ok(0)
@@ -948,7 +952,9 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                         .name
                         .as_deref()
                         .map(|n| format!("@{n}"))
-                        .unwrap_or_else(|| format!("{} ({})", covering::short_hash(&it.hash), it.loc()));
+                        .unwrap_or_else(|| {
+                            format!("{} ({})", covering::short_hash(&it.hash), it.loc())
+                        });
                     // Read the segment's recorded content and rank candidate
                     // locations in the new file. Propose-only.
                     let target = match segment::read_object(&repo.objects_dir(), &it.hash) {
@@ -959,8 +965,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                         }
                     };
                     let cands = crate::fingerprint::locate(&target, &n_lines, 3);
-                    let shown: Vec<_> =
-                        cands.iter().filter(|c| c.score >= threshold).collect();
+                    let shown: Vec<_> = cands.iter().filter(|c| c.score >= threshold).collect();
                     if shown.is_empty() {
                         eprintln!("  {who}: no candidate ≥ {:.2}", threshold);
                     } else {
@@ -1260,11 +1265,7 @@ fn cmd_prune(args: &[String]) -> io::Result<u8> {
     }
     k.links = kept;
     k.write(&repo)?;
-    println!(
-        "prune: {} link(s) dropped, {} kept",
-        dropped,
-        k.links.len()
-    );
+    println!("prune: {} link(s) dropped, {} kept", dropped, k.links.len());
     Ok(0)
 }
 
@@ -1429,10 +1430,7 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
             // The partition must begin at the first character of the
             // file and proceed with each segment abutting the previous
             // one (no gap, no overlap), down to the character.
-            let mut expected = covering::Pos {
-                line: 1,
-                col: None,
-            };
+            let mut expected = covering::Pos { line: 1, col: None };
             for e in &entries {
                 if !covering::same_start(expected, e.start_pos()) {
                     if !broken_only {

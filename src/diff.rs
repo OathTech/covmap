@@ -86,7 +86,7 @@ mod tests {
     fn lines(s: &str) -> Vec<&str> {
         // Mirror read_text_lines: keep trailing '\n' on each line.
         let mut v: Vec<&str> = s.split_inclusive('\n').collect();
-        if v.last().map_or(false, |l| l.is_empty()) {
+        if v.last().is_some_and(|l| l.is_empty()) {
             v.pop();
         }
         v

@@ -203,7 +203,11 @@ pub fn endpoint_to_hash(c: &Covering, ep: &str) -> Option<String> {
             .iter()
             .find(|e| e.name.as_deref() == Some(n.as_str()))
             .map(|e| e.hash.clone()),
-        Endpoint::Hash(h) => c.entries.iter().find(|e| e.hash == h).map(|e| e.hash.clone()),
+        Endpoint::Hash(h) => c
+            .entries
+            .iter()
+            .find(|e| e.hash == h)
+            .map(|e| e.hash.clone()),
     }
 }
 
@@ -319,7 +323,10 @@ impl Covering {
             let (b, b_col) = parse_pos_field(parts[3])?;
             // Optional sixth field: the segment name. Absent in refs
             // written by older covmap (and for anonymous segments).
-            let name = parts.get(5).map(|s| s.to_string()).filter(|s| !s.is_empty());
+            let name = parts
+                .get(5)
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
             entries.push(CoveringEntry {
                 hash: parts[0].to_string(),
                 file: parts[1].to_string(),
@@ -481,19 +488,17 @@ pub fn recut(repo: &Repo, c: &mut Covering, old_hash: &str) -> io::Result<String
     let abs = repo.root.join(&entry.file);
     let raw = fs::read_to_string(&abs)?;
     let lines: Vec<String> = raw.split_inclusive('\n').map(|s| s.to_string()).collect();
-    let content =
-        segment::extract_content(&lines, entry.a, entry.a_col, entry.b, entry.b_col).ok_or_else(
-            || {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "segment {} no longer fits the file ({} lines on disk) — use merge/split",
-                        entry.loc(),
-                        lines.len()
-                    ),
-                )
-            },
-        )?;
+    let content = segment::extract_content(&lines, entry.a, entry.a_col, entry.b, entry.b_col)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "segment {} no longer fits the file ({} lines on disk) — use merge/split",
+                    entry.loc(),
+                    lines.len()
+                ),
+            )
+        })?;
     let seg = Segment {
         file: entry.file.clone(),
         a: entry.a,
@@ -572,7 +577,11 @@ pub fn split(
     if skip > line_chars {
         return Err(oob());
     }
-    let offset: usize = clines[..li].iter().map(|l| segment::char_len(l)).sum::<usize>() + skip;
+    let offset: usize = clines[..li]
+        .iter()
+        .map(|l| segment::char_len(l))
+        .sum::<usize>()
+        + skip;
     let total = segment::char_len(&content);
     if offset == 0 || offset >= total {
         // Empty top or empty bottom — nothing to split.
@@ -667,11 +676,7 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
     if e1.file != e2.file || !positions_adjacent(e1.end_pos(), e2.start_pos()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!(
-                "segments are not adjacent: {} and {}",
-                e1.loc(),
-                e2.loc()
-            ),
+            format!("segments are not adjacent: {} and {}", e1.loc(), e2.loc()),
         ));
     }
     let (_l1, c1) = segment::read_object(&repo.objects_dir(), &e1.hash)?;
@@ -922,7 +927,7 @@ fn resolve_position(c: &Covering, addr: &str) -> io::Result<usize> {
     // Split off line[:col] from the right; the remainder is the file
     // (which may itself contain ':', so we split from the end).
     let parts: Vec<&str> = addr.rsplitn(3, ':').collect(); // reversed
-    // parts[0] is the rightmost field.
+                                                           // parts[0] is the rightmost field.
     let (file, line, col): (String, usize, usize) = if parts.len() >= 3
         && parts[0].chars().all(|ch| ch.is_ascii_digit())
         && parts[1].chars().all(|ch| ch.is_ascii_digit())
@@ -956,9 +961,10 @@ fn resolve_position(c: &Covering, addr: &str) -> io::Result<usize> {
         line,
         col: Some(col),
     };
-    let hit = c.entries.iter().position(|e| {
-        e.file == file && pos_in_segment(query, e)
-    });
+    let hit = c
+        .entries
+        .iter()
+        .position(|e| e.file == file && pos_in_segment(query, e));
     hit.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -975,10 +981,9 @@ fn resolve_position(c: &Covering, addr: &str) -> io::Result<usize> {
 /// the first character of the line; a `None` end column is the end of
 /// the line (so any column on the end line qualifies).
 fn pos_in_segment(p: Pos, e: &CoveringEntry) -> bool {
-    let after_start = p.line > e.a
-        || (p.line == e.a && p.col.unwrap_or(1) >= e.a_col.unwrap_or(1));
-    let before_end = p.line < e.b
-        || (p.line == e.b && e.b_col.map_or(true, |bc| p.col.unwrap_or(1) <= bc));
+    let after_start = p.line > e.a || (p.line == e.a && p.col.unwrap_or(1) >= e.a_col.unwrap_or(1));
+    let before_end =
+        p.line < e.b || (p.line == e.b && e.b_col.map_or(true, |bc| p.col.unwrap_or(1) <= bc));
     after_start && before_end
 }
 
@@ -1006,7 +1011,10 @@ pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Res
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("segment name '{n}' is already used in covering '{}'", c.name),
+                format!(
+                    "segment name '{n}' is already used in covering '{}'",
+                    c.name
+                ),
             ));
         }
     }
@@ -1360,7 +1368,7 @@ mod tests {
         // file:line:col picks the right char-level fragment on line 3.
         assert_eq!(resolve_segment(&c, "errors.md:3:5").unwrap(), 4); // cols 1..16
         assert_eq!(resolve_segment(&c, "errors.md:3:20").unwrap(), 5); // cols 17..
-        // out-of-range / unknown file errors out.
+                                                                       // out-of-range / unknown file errors out.
         assert!(resolve_segment(&c, "queue.md:99").is_err());
         assert!(resolve_segment(&c, "nope.md:1").is_err());
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1395,18 +1403,33 @@ mod tests {
         ));
         // Column end abuts next column same line.
         assert!(positions_adjacent(
-            Pos { line: 2, col: Some(5) },
-            Pos { line: 2, col: Some(6) }
+            Pos {
+                line: 2,
+                col: Some(5)
+            },
+            Pos {
+                line: 2,
+                col: Some(6)
+            }
         ));
         // col None and col Some(1) denote the same start point.
         assert!(positions_adjacent(
             Pos { line: 2, col: None },
-            Pos { line: 3, col: Some(1) }
+            Pos {
+                line: 3,
+                col: Some(1)
+            }
         ));
         // A gap is not adjacency.
         assert!(!positions_adjacent(
-            Pos { line: 2, col: Some(5) },
-            Pos { line: 2, col: Some(7) }
+            Pos {
+                line: 2,
+                col: Some(5)
+            },
+            Pos {
+                line: 2,
+                col: Some(7)
+            }
         ));
     }
 }

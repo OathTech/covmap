@@ -331,7 +331,10 @@ mod tests {
     fn extract_handles_no_trailing_newline() {
         let lines = ls(&["abc\n", "xyz"]); // last line has no '\n'
         assert_eq!(extract_content(&lines, 2, None, 2, None).unwrap(), "xyz");
-        assert_eq!(extract_content(&lines, 2, Some(1), 2, Some(3)).unwrap(), "xyz");
+        assert_eq!(
+            extract_content(&lines, 2, Some(1), 2, Some(3)).unwrap(),
+            "xyz"
+        );
     }
 
     #[test]

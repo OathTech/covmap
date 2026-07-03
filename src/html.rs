@@ -64,15 +64,18 @@ pub fn render(repo: &Repo) -> io::Result<String> {
                 let b_in = b_hash.is_some();
                 let a_key = a_hash.unwrap_or_else(|| p.a.clone());
                 let b_key = b_hash.unwrap_or_else(|| p.b.clone());
-                outgoing.entry(a_key.clone()).or_default().push(OutgoingLink {
-                    conn_name: cv.k.name.clone(),
-                    target_repo: cv.k.target_repo.clone(),
-                    target_covering: cv.k.target_covering.clone(),
-                    target_hash: b_key.clone(),
-                    note: p.note.clone(),
-                    src_resolved: a_in,
-                    tgt_resolved: b_in,
-                });
+                outgoing
+                    .entry(a_key.clone())
+                    .or_default()
+                    .push(OutgoingLink {
+                        conn_name: cv.k.name.clone(),
+                        target_repo: cv.k.target_repo.clone(),
+                        target_covering: cv.k.target_covering.clone(),
+                        target_hash: b_key.clone(),
+                        note: p.note.clone(),
+                        src_resolved: a_in,
+                        tgt_resolved: b_in,
+                    });
                 incoming
                     .entry((cv.k.target_repo.clone(), b_key.clone()))
                     .or_default()

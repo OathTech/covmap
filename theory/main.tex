@@ -374,6 +374,22 @@ the link, intact. Naming the segments one intends to map therefore
 shrinks ``broken'' from the routine outcome of any edit to the rare
 outcome of a genuine structural deletion.
 
+\begin{definition}[Link drift]\label{def:link-drift}
+A link is \emph{drifted} when it still resolves
+(Definition~\ref{def:endpoint}) but an endpoint denotes a segment that has
+drifted (Definition~\ref{def:segment-drift}): its content changed, yet the
+segment still exists. Re-synchronizing the segment (\texttt{recut} or
+diff-remap) carries the drifted link forward untouched.
+\end{definition}
+
+A named link therefore passes through a repairable middle state:
+$\textsc{in-sync} \to \textsc{drifted} \to \textsc{broken}$, drifting when
+its segment's bytes change and breaking only if that segment is later
+deleted. A hash-recorded link has no such middle state — its identity
+\emph{is} the content, so a content edit takes it straight
+$\textsc{in-sync} \to \textsc{broken}$. Drift is thus the repairable
+precursor of breakage, available precisely to links carried by name.
+
 \subsection{Diff-remap}\label{sec:diffremap}
 
 Names keep a connection \emph{alive} across an edit, but they do not by

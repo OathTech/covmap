@@ -326,12 +326,6 @@ defects.
 
 ### Model gaps (theory vs. code)
 
-- **Link drift is glossary-introduced, not yet in T/R/S.** The sources
-  define drift only for *segments* and breakage only for *links*; the
-  in-sync → drifted → broken spectrum, and "link drift" as the middle
-  state, is this glossary's synthesis of `def:broken` +
-  `endpoint_resolves` + the name/hash distinction. Worth promoting into
-  the theory (and `req14`) if we agree the framing holds.
 - **`N_C` contradiction.** Theory defines `ℓ(s) = b − a + 1` (so
   char-level cuts *grow* `N_C`, matching `stats()`) but the next sentence
   says char-level cuts leave `N_C` unchanged. Reconcile the two, and

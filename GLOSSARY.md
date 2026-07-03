@@ -329,13 +329,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Naming choices applied in this revision (please confirm)
 
-- **Drift is the repairable precursor to broken; both now share a
-  spectrum.** A link goes *in-sync → drifted → broken* (for name
-  endpoints), or straight *in-sync → broken* (for hash endpoints, which
-  have no drift state). Framing *drift* as "repairable" and *broken* as
-  "terminal" unifies the two words instead of leaving them as unrelated
-  failure modes. New sub-concept **link drift** sits under **Drift**;
-  **broken link** now points to it as its precursor.
 - **Drift and Repair group their sub-concepts** book-index style (Segment
   / Boundary / Link drift under **Drift**; Recut, Diff-remap,
   Fingerprinting, Repair residue, Similarity score, Propose-only under

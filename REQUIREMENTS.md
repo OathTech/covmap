@@ -106,8 +106,10 @@ and that every connection endpoint resolves.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
-covering-qualified segment name (`<C>:@<name>`), or by connection name,
-with HEAD resolving the default covering and unique hash prefixes
+covering-qualified segment name (`<C>:@<name>`), by covering-qualified
+position (`<C>:<file>:<line>[:<col>]`, resolving to the unique segment
+containing that position — a stable, hash-free handle), or by connection
+name, with HEAD resolving the default covering and unique hash prefixes
 accepted.
 
 ## req17 — Plain-text, versioned state on disk

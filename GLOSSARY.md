@@ -346,9 +346,6 @@ These are notes for discussion, not defects.
   (recut → diff-remap → fingerprint) and the `covmap repair K` command
   that drops *broken links*. Different operations, one word — worth
   disambiguating in the docs.
-- **Positional address `<file>:<line>[:<col>]`** is a first-class address
-  in the code (`resolve_position`) but absent from the theory's
-  Addressing table and `req16`.
 - **Self-connection** (a covering linked to another, or the same,
   covering of one repo) is implemented and used (`reqmap`, self-map), but
   the theory frames connections as strictly between two repos `A` and

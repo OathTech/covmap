@@ -592,8 +592,11 @@ Lower-level commands meant for scripts.
       additive only. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —
       \texttt{covmap} never silently re-segments existing files.
-\item The plumbing/porcelain split is hard: every porcelain command
-      is implementable as a shell pipeline of plumbing commands.
+\item covmap is built from a small set of composable primitives:
+      convenience commands are intended to be expressible as shell
+      pipelines over the lower-level, line-oriented commands. This is
+      \texttt{git}'s plumbing (the primitives) / porcelain (the
+      convenience commands) split.
 \item Hashes are the lingua franca. Every command accepts them on
       input and prints them on output, so commands compose without
       glue code.

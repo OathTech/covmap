@@ -200,12 +200,16 @@ Computed by `stats()` and printed by `status` as a one-number gauge of
 how evenly a covering is cut. Purely diagnostic today — nothing consumes
 it (see observations).
 
-**Plumbing / Porcelain** **[T][R][S]** — a split borrowed from git. The
-underlying idea is that covmap has a small set of *core primitives* — the
-scriptable, line-oriented *plumbing* (`hash-segment`, `cat-segment`,
-`ls-segments`, `ls-links`, `rev-parse`, `fsck`) — from which every
-convenience command, the user-facing *porcelain* (`cover`, `status`,
-`split`, `link`, …), can be composed as a shell pipeline.
+**Plumbing / Porcelain** **[T][R][S]** — covmap has a small set of *core
+primitives*: scriptable, line-oriented commands (`hash-segment`,
+`cat-segment`, `ls-segments`, `ls-links`, `rev-parse`, `fsck`) that speak
+hashes on input and output. Every user-facing convenience command
+(`cover`, `status`, `split`, `link`, …) is *intended* to be expressible
+as a shell pipeline over them — the composability being the point, with
+hashes as the glue. This is git's name for the same split: the primitives
+are *plumbing*, the convenience commands *porcelain*. (An aspiration, not
+a fully-enforced invariant: covmap's porcelain is compiled Rust, and the
+plumbing set is thin.)
 
 **Position** **[T][S]** — a `(line, optional column)` point in a file. An
 absent column (`⊥` / `None`) means the first character of the line for a
@@ -340,10 +344,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 - **Partition entropy.** Computed and printed, but nothing consumes it
   and it is hard to act on. Is a single evenness number worth a line in
   `status`, or do cardinality + granularity already say enough?
-- **Plumbing / porcelain.** The valuable claim is "everything composes
-  from a few primitives." If that is the point, we could say exactly that
-  and drop the git metaphor — or keep it, since git users recognize it
-  instantly.
 
 ### Still-unreconciled vocabulary across T / R / S
 

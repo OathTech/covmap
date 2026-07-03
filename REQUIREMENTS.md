@@ -116,9 +116,12 @@ format version so mismatched repositories are rejected.
 covmap shall honor gitignore-lite patterns in `.covmap/ignore` so users
 keep build output, vendored code, and generated files out of coverings.
 
-## req19 — Composable plumbing
-Every porcelain command shall be expressible as a pipeline of lower-level
-plumbing commands emitting machine-readable, line-oriented output.
+## req19 — Composable primitives (plumbing / porcelain)
+covmap shall expose a small set of lower-level *plumbing* commands
+emitting machine-readable, line-oriented output, from which every
+higher-level *porcelain* command is intended to be expressible as a
+pipeline. (This is git's plumbing/porcelain split: primitives plus the
+convenience commands built over them.)
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and

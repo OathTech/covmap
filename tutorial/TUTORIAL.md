@@ -3,7 +3,7 @@
 A guided, hands-on tour of every main covmap feature, end to end. It
 maps a small Markdown **spec** to a Rust **implementation**, then edits
 the spec three different ways to exercise covmap's drift repair — the
-name-tags, diff-remap, and fingerprinting layers.
+names, diff-remap, and fingerprinting layers.
 
 Everything here is executed by the companion script
 [`run_tutorial.sh`](run_tutorial.sh), which is the source of truth: this
@@ -152,7 +152,7 @@ covering main: segments=2 lines=20 entropy=0.722
 ```
 
 `ls -l` columns are: hash, label, location (`file:a..b`), line count, and
-name-tag (`-` when anonymous). `status` reports cardinality, line count,
+name (`-` when anonymous). `status` reports cardinality, line count,
 partition entropy, and drift.
 
 ## 3. Refine into one segment per section  (req5, req8)
@@ -252,11 +252,11 @@ Use labels for coarse status: `unknown`, `reviewed`, `mapped`, `ignored`.
 covmap label main:queue.md:14 reviewed     # the Size segment covers line 14
 ```
 
-## 7. Name the slots you intend to map  (req3, req8)
+## 7. Name the segments you intend to map  (req3, req8)
 
-A **name-tag** gives a segment a stable, covering-local identity (a
-*slot*), independent of its bytes. This is the key to drift-resistant
-links: a connection that references `@name` survives edits to the slot's
+A **name** gives a segment a stable, covering-local identity (a
+*segment*), independent of its bytes. This is the key to drift-resistant
+links: a connection that references `@name` survives edits to the segment's
 content. Name the segments you are about to map.
 
 ```sh
@@ -277,18 +277,18 @@ f6d8bf2f060c7830	Enqueue	            queue.md:5..9	    5	@enqueue-op
 a51b8db403cc3096	reviewed	        queue.md:14..16	    3	-
 ```
 
-The name-tag is *not* part of the segment hash — naming, relabelling, or
-recutting a slot never touches the shared object store.
+The name is *not* part of the segment hash — naming, relabelling, or
+recutting a segment never touches the shared object store.
 
 ## 8. Connect and link by name  (req2, req10, req16)
 
 A **connection** records links between segments of two coverings. Create
-it, then add links. When you link a *named* slot, covmap stores the link
+it, then add links. When you link a *named* segment, covmap stores the link
 by `@name` (resilient), not by hash.
 
 `connect` names the target repo by absolute path (here the sibling
 `impl_rs`). The impl side is a single whole-file segment, which we
-address positionally as `queue.rs:1`. Link each named spec slot to it:
+address positionally as `queue.rs:1`. Link each named spec segment to it:
 because the spec side is named, the link is stored by `@name` and
 survives later edits.
 
@@ -357,11 +357,11 @@ covmap status
 ```
 
 Note the connection is **already 0 broken**: the link is by
-`@dequeue-op`, and a byte change does not delete the slot. Refresh the
+`@dequeue-op`, and a byte change does not delete the segment. Refresh the
 recorded content with a single `recut`:
 
 ```sh
-covmap recut main:@dequeue-op          # address the slot by its name
+covmap recut main:@dequeue-op          # address the segment by its name
 covmap status                          # drift: clean, still 3 links, 0 broken
 ```
 
@@ -381,12 +381,12 @@ covmap recut --remap
 ```
 
 ```
-queue.md: remapped 4 slot(s) (1 refreshed, 3 unchanged)
-remap: 1 file(s) healed, 1 slot(s) refreshed, 0 unresolved
+queue.md: remapped 4 segment(s) (1 refreshed, 3 unchanged)
+remap: 1 file(s) healed, 1 segment(s) refreshed, 0 unresolved
 ```
 
 It reconstructs the pre-edit file from the covering, diffs it against
-disk, and re-fits every line-aligned slot's boundaries through the
+disk, and re-fits every line-aligned segment's boundaries through the
 unchanged regions — following the insertion automatically. Names (hence
 the `queue_links` links) are preserved, so `status` is clean again and
 the connection is still 3 links, 0 broken. No relinking.
@@ -405,23 +405,23 @@ covmap recut --remap
 ```
 
 ```
-queue.md: 1 slot boundary(ies) fall in changed regions — left untouched.
+queue.md: 1 segment boundary(ies) fall in changed regions — left untouched.
 Fingerprint proposals (confirm manually; nothing was changed):
   @enqueue-op: queue.md:14..18  (98% match)  — covmap unlink/link to relocate
-remap: 0 file(s) healed, 0 slot(s) refreshed, 1 unresolved
+remap: 0 file(s) healed, 0 segment(s) refreshed, 1 unresolved
 ```
 
 (The proposed window `14..18` includes the blank line before the moved
-heading — a fuzzy guess, hence 98% rather than 100%. The other slots
+heading — a fuzzy guess, hence 98% rather than 100%. The other segments
 re-fit cleanly, so only the moved one is unresolved.)
 
 Fingerprinting is **propose-only**: a similarity score is a likelihood,
 not a proof, so covmap never relinks on a fuzzy match by itself. You
-confirm the candidate (read those lines), then re-cut the slot at its new
+confirm the candidate (read those lines), then re-cut the segment at its new
 home and re-link. Tune which guesses appear with `--threshold <f>`
 (default 0.4). This is playground task T7.
 
-The three repair layers form a chain: **name-tag** keeps a link *alive*
+The three repair layers form a chain: **name** keeps a link *alive*
 across content edits → **diff-remap** deterministically re-fits
 boundaries that survived in place → **fingerprint** proposes a relocation
 for whatever remains.
@@ -429,7 +429,7 @@ for whatever remains.
 ## 13. Drop a genuinely broken link: `repair`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
-named slot, when that slot is **deleted**. Clear a slot's name to
+named segment, when that segment is **deleted**. Clear a segment's name to
 simulate that, then repair:
 
 ```sh
@@ -466,7 +466,7 @@ highlighted.
 | status, ls, entropy | 2, 9 | req12, req20 |
 | split (line + character) | 3, 5 | req5, req8 |
 | merge / recut / label | 4, 6, 10 | req8, req4, req13 |
-| name-tags (slots) | 7 | req3, req8 |
+| names (segments) | 7 | req3, req8 |
 | connect / link / addressing | 8 | req2, req10, req16 |
 | show / grep / diff / fsck | 9 | req15, req19, req20 |
 | drift: recut (named link survives) | 10 | req13, req14 |

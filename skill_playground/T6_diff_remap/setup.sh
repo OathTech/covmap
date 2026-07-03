@@ -6,7 +6,7 @@
 # sections down by several lines, so their recorded ranges no longer fit
 # (plain `recut` would refuse). The fix is `recut --remap`, which diffs
 # the reconstructed old file against the new one and re-fits every
-# downstream slot's boundaries automatically, preserving names so the
+# downstream segment's boundaries automatically, preserving names so the
 # @read / @delete links carry forward untouched.
 set -euo pipefail
 
@@ -21,7 +21,7 @@ H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'api.md:5' | cut -f1 )
 H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'api.md:9' | cut -f1 )
 ( cd spec && "$COVMAP_BIN" split "main:$H" 13 "Read" "Delete" ) >/dev/null
 
-# Name the Read and Delete slots and link them to the implementation.
+# Name the Read and Delete segments and link them to the implementation.
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Read'   | head -1 )" read-ep   ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Delete' | head -1 )" delete-ep ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )

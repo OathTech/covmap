@@ -1,10 +1,10 @@
-//! Fingerprinting: propose where a lost slot's content went.
+//! Fingerprinting: propose where a lost segment's content went.
 //!
-//! Diff-remap (`covmap recut --remap`) resolves a slot only when its
-//! boundaries fall on lines preserved by the edit. When a slot was moved
+//! Diff-remap (`covmap recut --remap`) resolves a segment only when its
+//! boundaries fall on lines preserved by the edit. When a segment was moved
 //! or its anchor lines rewritten, the remap reports it as *unresolved*.
-//! Fingerprinting is the fallback for exactly those slots: given the
-//! slot's recorded content and the new file, it ranks candidate
+//! Fingerprinting is the fallback for exactly those segments: given the
+//! segment's recorded content and the new file, it ranks candidate
 //! locations by similarity so a human (or agent) can confirm one.
 //!
 //! It is **propose-only**: it never mutates a covering or a connection.
@@ -50,7 +50,7 @@ pub fn normalize(s: &str) -> String {
 
 /// Word-trigram shingle set of `s` (after normalization). With fewer
 /// than three tokens, falls back to the individual tokens so short
-/// slots still produce a usable set.
+/// segments still produce a usable set.
 fn shingles(s: &str) -> HashSet<String> {
     // normalize() single-spaces the text, so splitting on ' ' yields the
     // exact token list.

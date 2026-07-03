@@ -148,7 +148,7 @@ echo "  clause begins at line 3, column $ECOL"
 ( cd "$WORK/spec" && run split main:@qf-line "3:$ECOL" QueueFull-code QueueFull-meaning )
 ( cd "$WORK/spec" && run ls -l )
 
-assert "a character-level slot exists on errors.md line 3" \
+assert "a character-level segment exists on errors.md line 3" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' ls -l main | grep -qE 'errors\.md:3:[0-9]+' )"
 
 #############################################################################
@@ -158,9 +158,9 @@ hr "6. label a segment  (REQ4)"
 ( cd "$WORK/spec" && run label main:queue.md:14 reviewed )
 
 #############################################################################
-hr "7. name the slots we intend to map  (REQ3, REQ8)"
+hr "7. name the segments we intend to map  (REQ3, REQ8)"
 #############################################################################
-# Name-tags give a slot a stable identity, so links survive edits. We
+# Names give a segment a stable identity, so links survive edits. We
 # name the two queue.md operations (at lines 5 and 10) and the errors.md
 # meaning clause (line 3, after the mid-line cut, so column 17+).
 ( cd "$WORK/spec" && run name main:queue.md:5     enqueue-op )
@@ -221,7 +221,7 @@ assert "queue_links still 3 links, 0 broken" \
 hr "11. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
 #############################################################################
 # Add two lines to the preamble; everything below shifts down. recut
-# --remap re-fits every line-aligned slot automatically.
+# --remap re-fits every line-aligned segment automatically.
 cp "$FILES/queue.inserted.md" "$WORK/spec/queue.md"
 echo "  edit (files/queue.reworded.md -> files/queue.inserted.md):"
 diff "$FILES/queue.reworded.md" "$FILES/queue.inserted.md" | sed 's/^/    /' || true
@@ -238,8 +238,8 @@ assert "after remap: still 3 links, 0 broken" \
 #############################################################################
 hr "12. T7-style drift: move a section, fingerprint proposes its new home"
 #############################################################################
-# Move the Enqueue section (the @enqueue-op slot) to the END of the file.
-# Now the slot that was 2nd in the covering would have to map *after*
+# Move the Enqueue section (the @enqueue-op segment) to the END of the file.
+# Now the segment that was 2nd in the covering would have to map *after*
 # Dequeue and Size — which breaks the monotonic line map, so diff-remap
 # cannot place it and instead prints a propose-only relocation guess.
 # Nothing is mutated by the remap.
@@ -250,7 +250,7 @@ nl -ba "$WORK/spec/queue.md" | sed 's/^/    /'
 echo "  (recut --remap leaves the file untouched and PROPOSES a location:)"
 ( cd "$WORK/spec" && "$COVMAP" recut --remap || true )
 
-assert "the moved @enqueue-op slot is proposed, not silently re-fit" \
+assert "the moved @enqueue-op segment is proposed, not silently re-fit" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' recut --remap 2>&1 | grep -q '@enqueue-op' )"
 assert "remap left the covering unmutated for the moved file (still drifted)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'file(s) edited' )"
@@ -258,8 +258,8 @@ assert "remap left the covering unmutated for the moved file (still drifted)" \
 #############################################################################
 hr "13. repair: drop a genuinely broken link  (REQ14)"
 #############################################################################
-# Demonstrate repair on a deliberately broken link: clear a slot's name,
-# which deletes that slot identity, breaking its link. Then repair drops it.
+# Demonstrate repair on a deliberately broken link: clear a segment's name,
+# which deletes that segment identity, breaking its link. Then repair drops it.
 ( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-meaning"{print $1}' )" - )
 ( cd "$WORK/spec" && run fsck --broken-links || true )
 ( cd "$WORK/spec" && run repair queue_links )

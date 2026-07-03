@@ -85,10 +85,10 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
-        "name" => "covmap name <C>:<h|@slot> <tag|->          set, rename, or clear (-) a slot's name-tag",
+        "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
         "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
-        "recut" => "covmap recut <C>:<h|@slot> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's slots onto the edited file",
+        "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
         "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a link to connection K",
         "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
@@ -120,11 +120,11 @@ PORCELAIN
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
-  name <C>:<h|@slot> <tag|->          set, rename, or clear (-) a slot's name-tag
+  name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
   split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
-  recut <C>:<h|@slot>                 refresh a segment's hash from current disk bytes
-  recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved slots, print fingerprint relocation proposals (propose-only)
+  recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
+  recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
   link <K> <h_A> <h_B> [<note>]       add a link to connection K
   unlink <K> <h_A> <h_B>              remove a link
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
@@ -512,7 +512,7 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     let full = match covering {
         Some(cname) => {
             let c = resolve_covering(&repo, &cname)?;
-            covering::resolve_slot_hash(&c, &prefix)?
+            covering::resolve_segment_hash(&c, &prefix)?
         }
         None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
     };
@@ -552,7 +552,7 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     let c = resolve_covering(&repo, &n)?;
     for e in &c.entries {
         if long {
-            // Columns: hash, label, loc, lines, name. The name-tag is
+            // Columns: hash, label, loc, lines, name. The name is
             // appended last so the historical column order (hash, label,
             // loc, lines) is unchanged for existing scripts.
             let name = e
@@ -676,7 +676,7 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
     let new_label = args[1].clone();
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_slot_hash(&c, &prefix)?;
+    let old = covering::resolve_segment_hash(&c, &prefix)?;
     let new_hash = covering::relabel(&repo, &mut c, &old, &new_label)?;
     c.write(&repo)?;
     println!(
@@ -688,14 +688,14 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
 
 // ---- name -----------------------------------------------------------------
 
-/// `name <C>:<h|@slot> <tag|->` — set, rename, or clear a slot's
-/// name-tag. The address may itself be a hash prefix or an existing
-/// `@name`. A `<tag>` of `-` clears the name (slot becomes anonymous).
+/// `name <C>:<h|@name> <name|->` — set, rename, or clear a segment's
+/// name. The address may itself be a hash prefix or an existing
+/// `@name`. A `<name>` of `-` clears it (segment becomes anonymous).
 fn cmd_name(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "name <covering>:<hash|@slot> <tag|->",
+            "name <covering>:<hash|@name> <name|->",
         ));
     }
     let (covname, addr) = parse_addr(&args[0]);
@@ -703,7 +703,7 @@ fn cmd_name(args: &[String]) -> io::Result<u8> {
     let tag = args[1].as_str();
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let idx = covering::resolve_slot(&c, &addr)?;
+    let idx = covering::resolve_segment(&c, &addr)?;
     let old = c.entries[idx].name.clone();
     let new_name = if tag == "-" { None } else { Some(tag) };
     covering::set_name(&mut c, idx, new_name)?;
@@ -743,7 +743,7 @@ fn cmd_split(args: &[String]) -> io::Result<u8> {
         .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_slot_hash(&c, &prefix)?;
+    let old = covering::resolve_segment_hash(&c, &prefix)?;
     let (top, bot) = covering::split(
         &repo, &mut c, &old, cut_line, cut_col, &label_top, &label_bot,
     )?;
@@ -796,14 +796,14 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
         return cmd_recut_remap(addr.as_deref(), threshold);
     }
     let addr = addr.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<hash|@slot>")
+        io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<hash|@name>")
     })?;
     let (covname, prefix) = parse_addr(&addr);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    // Accept either a hash prefix or an `@name` slot address.
-    let idx = covering::resolve_slot(&c, &prefix)?;
+    // Accept either a hash prefix or an `@name` segment address.
+    let idx = covering::resolve_segment(&c, &prefix)?;
     let old = c.entries[idx].hash.clone();
     let new_hash = covering::recut(&repo, &mut c, &old)?;
     c.write(&repo)?;
@@ -817,20 +817,20 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
 
 /// `recut --remap [<C>[:<addr>]]` — diff-remap. Reconstruct each covered
 /// file from the covering, diff against the bytes on disk, and re-fit
-/// every slot's boundaries through the unchanged regions, refreshing
+/// every segment's boundaries through the unchanged regions, refreshing
 /// content and preserving names so connections carry forward. Per-file
 /// all-or-nothing: a file whose boundaries fall in changed regions is
-/// left untouched and its slots reported as residue. With an address
-/// `<C>:<addr>` only that slot's file is remapped; otherwise every
+/// left untouched and its segments reported as residue. With an address
+/// `<C>:<addr>` only that segment's file is remapped; otherwise every
 /// drifted file in the covering is.
 fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
     let repo = current_repo()?;
     let (covname, only_file) = match addr {
         Some(a) => {
-            let (cn, slot) = parse_addr(a);
+            let (cn, seg) = parse_addr(a);
             let covname = cn.unwrap_or_else(|| "HEAD".to_string());
             let c = resolve_covering(&repo, &covname)?;
-            let idx = covering::resolve_slot(&c, &slot)?;
+            let idx = covering::resolve_segment(&c, &seg)?;
             (covname, Some(c.entries[idx].file.clone()))
         }
         None => ("HEAD".to_string(), None),
@@ -916,7 +916,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                 if fr.refreshed > 0 {
                     healed_files += 1;
                     println!(
-                        "{file}: remapped {} slot(s) ({} refreshed, {} unchanged)",
+                        "{file}: remapped {} segment(s) ({} refreshed, {} unchanged)",
                         fr.entries.len(),
                         fr.refreshed,
                         fr.unchanged
@@ -929,8 +929,8 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
             }
             Err(covering::RemapError::CharLevel(locs)) => {
                 eprintln!(
-                    "{file}: has character-level slot(s) ({}) — diff-remap handles \
-                     line-aligned slots only; left untouched",
+                    "{file}: has character-level segment(s) ({}) — diff-remap handles \
+                     line-aligned segments only; left untouched",
                     locs.join(", ")
                 );
                 residue += locs.len();
@@ -938,7 +938,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
             }
             Err(covering::RemapError::Unresolved(items)) => {
                 eprintln!(
-                    "{file}: {} slot boundary(ies) fall in changed regions — left \
+                    "{file}: {} segment boundary(ies) fall in changed regions — left \
                      untouched. Fingerprint proposals (confirm manually; nothing \
                      was changed):",
                     items.len()
@@ -950,7 +950,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                         .as_deref()
                         .map(|n| format!("@{n}"))
                         .unwrap_or_else(|| format!("{} ({})", covering::short_hash(&it.hash), it.loc()));
-                    // Read the slot's recorded content and rank candidate
+                    // Read the segment's recorded content and rank candidate
                     // locations in the new file. Propose-only.
                     let target = match segment::read_object(&repo.objects_dir(), &it.hash) {
                         Ok((_, c)) => c,
@@ -984,7 +984,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
     c.entries = new_entries;
     c.write(&repo)?;
     println!(
-        "remap: {healed_files} file(s) healed, {total_refreshed} slot(s) refreshed, \
+        "remap: {healed_files} file(s) healed, {total_refreshed} segment(s) refreshed, \
          {residue} unresolved"
     );
     Ok(if residue > 0 { 1 } else { 0 })
@@ -1015,8 +1015,8 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
         .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &cn1)?;
-    let h1 = covering::resolve_slot_hash(&c, &p1)?;
-    let h2 = covering::resolve_slot_hash(&c, &p2)?;
+    let h1 = covering::resolve_segment_hash(&c, &p1)?;
+    let h2 = covering::resolve_segment_hash(&c, &p2)?;
     let h = covering::merge(&repo, &mut c, &h1, &h2, &label)?;
     c.write(&repo)?;
     println!("merged {} + {} -> {}", h1, h2, h);
@@ -1037,17 +1037,17 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
     let src = Covering::read(&repo, &k.source_covering)?;
-    // Resolve each endpoint to a slot. The stored endpoint is the slot's
-    // name-tag (`@name`) when it is named — so the link survives content
-    // edits — otherwise its segment hash (legacy / anonymous slots).
-    let ia = covering::resolve_slot(&src, ha_in)?;
+    // Resolve each endpoint to a segment. The stored endpoint is the segment's
+    // name (`@name`) when it is named — so the link survives content
+    // edits — otherwise its segment hash (legacy / anonymous segments).
+    let ia = covering::resolve_segment(&src, ha_in)?;
     let ha = src.entries[ia].endpoint();
 
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-    let ib = covering::resolve_slot(&tgt, hb_in)?;
+    let ib = covering::resolve_segment(&tgt, hb_in)?;
     let hb = tgt.entries[ib].endpoint();
 
     if k.links.iter().any(|p| p.a == ha && p.b == hb) {
@@ -1074,9 +1074,9 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
-    // Accept either a slot address (hash prefix / `@name`, resolved
-    // against the covering to the slot's stored endpoint) or a literal
-    // link-endpoint prefix (covers links whose slot has since vanished).
+    // Accept either a segment address (hash prefix / `@name`, resolved
+    // against the covering to the segment's stored endpoint) or a literal
+    // link-endpoint prefix (covers links whose segment has since vanished).
     let ha = resolve_endpoint_arg(&repo, &k, ha_in, true)?;
     let hb = resolve_endpoint_arg(&repo, &k, hb_in, false)?;
     let before = k.links.len();
@@ -1092,9 +1092,9 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
 
 /// Resolve an `unlink` endpoint argument to the exact string stored in
 /// a link. Tries, in order: (1) `@name` literal already present in a
-/// link; (2) resolving the arg against the relevant covering to a slot
+/// link; (2) resolving the arg against the relevant covering to a segment
 /// endpoint; (3) prefix-matching the raw link endpoints (legacy hashes,
-/// or slots that have since disappeared). `source_side` picks the A or
+/// or segments that have since disappeared). `source_side` picks the A or
 /// B column of each link.
 fn resolve_endpoint_arg(
     repo: &Repo,
@@ -1121,7 +1121,7 @@ fn resolve_endpoint_arg(
         Covering::read(&tgt_repo, &k.target_covering)
     };
     if let Ok(c) = cov {
-        if let Ok(idx) = covering::resolve_slot(&c, arg) {
+        if let Ok(idx) = covering::resolve_segment(&c, arg) {
             return Ok(c.entries[idx].endpoint());
         }
     }
@@ -1401,7 +1401,7 @@ fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {
     let full = match covering {
         Some(cn) => {
             let c = resolve_covering(&repo, &cn)?;
-            covering::resolve_slot_hash(&c, &prefix)?
+            covering::resolve_segment_hash(&c, &prefix)?
         }
         None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
     };

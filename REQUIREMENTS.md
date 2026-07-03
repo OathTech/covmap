@@ -20,18 +20,18 @@ mapping and intra-project cross-references such as duplication audits or
 docs-to-code links within one tree.
 
 ## req3 — Two-level segment identity
-Every segment shall have a content identity: the 64-bit truncated hash
+Every segment shall have a hash identity: the 64-bit truncated hash
 of its labelled content, so identical labelled content yields a single
 shared object. A segment may additionally carry a stable, covering-local
-name-tag (a *slot*), unique within its covering, giving it an identity
-that is independent of its bytes. The name-tag is not part of the
-segment hash, so naming, relabelling, or recutting a slot leaves the
-shared object store untouched.
+*name*, unique within its covering, giving it a name identity that is
+independent of its bytes. The name is not part of the segment hash, so
+naming, relabelling, or recutting a segment leaves the shared object
+store untouched.
 
 ## req4 — Labels as part of content identity
 A segment's label shall participate in its segment hash, letting
 per-segment status (unknown, ignored, reviewed, mapped) coexist with
-content sharing. (Name-tags, by contrast, are not hashed — see req3.)
+content sharing. (Names, by contrast, are not hashed — see req3.)
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
@@ -49,8 +49,8 @@ never disturbing existing refinements.
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined
 solely by explicit split, merge, recut, label, and name operations.
-Name-tags are assigned deliberately by the user or agent (never
-auto-generated), since their value is a stable, human-meaningful slot
+Names are assigned deliberately by the user or agent (never
+auto-generated), since their value is a stable, human-meaningful
 identity for the segments being mapped.
 
 ## req9 — Multiple coverings with automatic sharing
@@ -60,7 +60,7 @@ segments automatically by content address rather than by duplication.
 ## req10 — Many-to-many annotated connections
 Connections shall be many-to-many relations between coverings, with
 optional per-link notes, supporting fan-out and fan-in between segments.
-Each endpoint shall reference its segment either by name-tag (preferred
+Each endpoint shall reference its segment either by name (preferred
 for mapped segments, so the link is resilient to content edits) or by
 segment hash.
 
@@ -76,9 +76,9 @@ entropy) and connection coverage (source and target totality).
 covmap shall detect when edited files diverge from their recorded
 segments, and shall offer a layered repair path: recut for segment
 drift (bytes changed, boundaries intact); diff-remap for boundary drift
-(lines added/removed), which re-fits surviving slots by diffing the
+(lines added/removed), which re-fits surviving segments by diffing the
 reconstructed file against disk and carrying boundaries through
-unchanged regions; and, for a slot that moved or was rewritten beyond
+unchanged regions; and, for a segment that moved or was rewritten beyond
 remapping, a propose-only fingerprint suggestion of its new location
 ranked by similarity. Fingerprinting shall never mutate state on its
 own. merge then split remains available as the manual fallback.
@@ -86,9 +86,9 @@ own. merge then split remains available as the manual fallback.
 ## req14 — Broken-link detection and repair
 covmap shall identify connection links whose endpoints no longer
 resolve in their coverings and offer to drop them. An endpoint resolves
-by name-tag (broken only when the named slot is deleted) or by hash
+by name (broken only when the named segment is deleted) or by hash
 (broken when that content no longer appears), so a content edit to a
-named slot does not, by itself, break a link.
+named segment does not, by itself, break a link.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition
@@ -96,7 +96,7 @@ and that every connection endpoint resolves.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
-covering-qualified slot name (`<C>:@<name>`), or by connection name,
+covering-qualified segment name (`<C>:@<name>`), or by connection name,
 with HEAD resolving the default covering and unique hash prefixes
 accepted.
 

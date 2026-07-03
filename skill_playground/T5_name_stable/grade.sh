@@ -21,12 +21,12 @@ check() {
 
 echo "== T5 name-stable links =="
 
-# The Login slot must still carry its name-tag.
-check "Login slot is named @login-contract" bash -c "
+# The Login segment must still carry its name.
+check "Login segment is named @login-contract" bash -c "
   cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@login-contract'
 "
 
-# The connection has exactly one link, and it references the slot by
+# The connection has exactly one link, and it references the segment by
 # NAME (@login-contract) -- not by a bare hash.
 check "auth_links has exactly 1 link"  bash -c "
   [[ \$( ( cd spec && \"$COVMAP_BIN\" ls-links auth_links | wc -l ) ) -eq 1 ]]
@@ -37,7 +37,7 @@ check "the link references @login-contract" bash -c "
 
 # After the in-place edit + recut, the covering must be clean and the
 # link must NOT be broken -- the whole point of name-stable links.
-check "drift is clean (slot was recut)" bash -c "
+check "drift is clean (segment was recut)" bash -c "
   cd spec && \"$COVMAP_BIN\" status | grep -q 'drift: clean'
 "
 check "auth_links has 0 broken links"   bash -c "

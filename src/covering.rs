@@ -13,10 +13,10 @@
 //! the format backward compatible: refs written by older covmap (line
 //! numbers only) parse unchanged and denote whole-line boundaries.
 //!
-//! The optional sixth field `<name>` is a *name-tag*: a stable, semantic
-//! slot identity that connections can reference instead of the content
-//! hash, so a link survives an edit that changes the slot's bytes. A
-//! line without a sixth field is an anonymous slot (the common case for
+//! The optional sixth field `<name>` is a *name*: a stable, semantic
+//! segment identity that connections can reference instead of the content
+//! hash, so a link survives an edit that changes the segment's bytes. A
+//! line without a sixth field is an anonymous segment (the common case for
 //! `unknown` segments). Older refs that never wrote the field parse
 //! unchanged, so this is a backward-compatible extension (no format
 //! version bump).
@@ -51,14 +51,14 @@ pub struct CoveringEntry {
     pub b: usize,
     pub b_col: Option<usize>,
     pub label: String,
-    /// Optional name-tag (slot identity). `None` = anonymous slot.
-    /// Connections may reference a named slot by `@name`, which survives
-    /// edits to the slot's content; an anonymous slot can only be
+    /// Optional name (segment identity). `None` = anonymous segment.
+    /// Connections may reference a named segment by `@name`, which survives
+    /// edits to the segment's content; an anonymous segment can only be
     /// referenced by its segment hash.
     pub name: Option<String>,
 }
 
-/// Validate a proposed name-tag. Names must be non-empty and avoid the
+/// Validate a proposed name. Names must be non-empty and avoid the
 /// characters covmap uses as separators / sigils so they round-trip
 /// through refs and address parsing unambiguously.
 pub fn valid_name(name: &str) -> bool {
@@ -157,8 +157,8 @@ impl CoveringEntry {
         matches!(self.a_col, None | Some(1)) && self.b_col.is_none()
     }
 
-    /// The endpoint a connection should store for this slot: the
-    /// name-tag (`@name`) when the slot is named — so the link survives
+    /// The endpoint a connection should store for this segment: the
+    /// name (`@name`) when the segment is named — so the link survives
     /// content edits — otherwise the bare segment hash (legacy).
     pub fn endpoint(&self) -> String {
         match &self.name {
@@ -169,8 +169,8 @@ impl CoveringEntry {
 }
 
 /// A connection-link endpoint, parsed from its stored string. `@name`
-/// references a named slot (resilient to content edits); a bare hex
-/// string references a segment hash (legacy / anonymous slots).
+/// references a named segment (resilient to content edits); a bare hex
+/// string references a segment hash (legacy / anonymous segments).
 pub enum Endpoint {
     Name(String),
     Hash(String),
@@ -184,17 +184,17 @@ pub fn parse_endpoint(s: &str) -> Endpoint {
 }
 
 /// Does endpoint `ep` still resolve against covering `c`? A name
-/// endpoint resolves iff a slot with that name still exists (it is
-/// broken only when the slot is *deleted*, not when its bytes change).
-/// A hash endpoint resolves iff some slot still carries that hash
+/// endpoint resolves iff a segment with that name still exists (it is
+/// broken only when the segment is *deleted*, not when its bytes change).
+/// A hash endpoint resolves iff some segment still carries that hash
 /// (legacy behaviour: byte changes break it).
 pub fn endpoint_resolves(c: &Covering, ep: &str) -> bool {
     endpoint_to_hash(c, ep).is_some()
 }
 
-/// Resolve an endpoint string to the current segment hash of the slot
+/// Resolve an endpoint string to the current segment hash of the segment
 /// it denotes, or `None` if it no longer resolves. A `@name` endpoint
-/// maps to whatever hash the named slot currently carries (so the link
+/// maps to whatever hash the named segment currently carries (so the link
 /// follows content edits); a hash endpoint maps to itself if present.
 pub fn endpoint_to_hash(c: &Covering, ep: &str) -> Option<String> {
     match parse_endpoint(ep) {
@@ -270,7 +270,7 @@ impl Covering {
         }
         for e in &self.entries {
             // The sixth (name) field is written only when present, so a
-            // covering with no named slots is byte-identical to one
+            // covering with no named segments is byte-identical to one
             // written by an older covmap.
             match &e.name {
                 Some(n) => buf.push_str(&format!(
@@ -317,8 +317,8 @@ impl Covering {
             }
             let (a, a_col) = parse_pos_field(parts[2])?;
             let (b, b_col) = parse_pos_field(parts[3])?;
-            // Optional sixth field: the slot name-tag. Absent in refs
-            // written by older covmap (and for anonymous slots).
+            // Optional sixth field: the segment name. Absent in refs
+            // written by older covmap (and for anonymous segments).
             let name = parts.get(5).map(|s| s.to_string()).filter(|s| !s.is_empty());
             entries.push(CoveringEntry {
                 hash: parts[0].to_string(),
@@ -450,8 +450,8 @@ pub fn relabel(
     segment::write_object(&repo.objects_dir(), &new_seg)?;
     c.entries[idx].hash = new_hash.clone();
     c.entries[idx].label = new_label.to_string();
-    // The name-tag is slot identity, independent of label/content, so it
-    // is preserved — any connection referencing the slot by name is
+    // The name is segment identity, independent of label/content, so it
+    // is preserved — any connection referencing the segment by name is
     // unaffected by a relabel.
     Ok(new_hash)
 }
@@ -605,8 +605,8 @@ pub fn split(
     };
     let top_hash = segment::write_object(&repo.objects_dir(), &top)?;
     let bot_hash = segment::write_object(&repo.objects_dir(), &bot)?;
-    // Name propagation: the top keeps the original slot's name; the
-    // bottom is a fresh anonymous slot. (A connection to the named slot
+    // Name propagation: the top keeps the original segment's name; the
+    // bottom is a fresh anonymous segment. (A connection to the named segment
     // therefore follows the top half.)
     c.entries[idx] = CoveringEntry {
         hash: top_hash.clone(),
@@ -681,7 +681,7 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
     let h = segment::write_object(&repo.objects_dir(), &merged)?;
     let keep = lo.min(hi);
     let drop = lo.max(hi);
-    // Name propagation: the merged slot inherits the surviving name. If
+    // Name propagation: the merged segment inherits the surviving name. If
     // only one side is named, that name carries over (its connection
     // follows the merge). If both are named, the left (earlier) side's
     // name wins and the right's is dropped — warn so the user can re-tag
@@ -689,7 +689,7 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
     let merged_name = match (&e1.name, &e2.name) {
         (Some(n1), Some(n2)) => {
             eprintln!(
-                "(merge: both slots are named; keeping '@{n1}', dropping '@{n2}' — \
+                "(merge: both segments are named; keeping '@{n1}', dropping '@{n2}' — \
                  any connection to '@{n2}' is now broken)"
             );
             Some(n1.clone())
@@ -712,46 +712,46 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
     Ok(h)
 }
 
-/// Outcome of remapping one file's slots through a diff against the
+/// Outcome of remapping one file's segments through a diff against the
 /// current bytes on disk.
 pub struct FileRemap {
     /// Replacement entries for the file, in order, each paired with the
     /// content to persist to the object store.
     pub entries: Vec<(CoveringEntry, String)>,
-    /// Slots whose recorded content changed (their hash was refreshed).
+    /// Segments whose recorded content changed (their hash was refreshed).
     pub refreshed: usize,
-    /// Slots that mapped to identical content (no hash change).
+    /// Segments that mapped to identical content (no hash change).
     pub unchanged: usize,
 }
 
 /// Why a file could not be remapped.
 pub enum RemapError {
-    /// The file's recorded slots already reconstruct the bytes on disk:
+    /// The file's recorded segments already reconstruct the bytes on disk:
     /// there is nothing to remap.
     NotDrifted,
-    /// Diff-remap only handles line-aligned slots; these mid-line slots
+    /// Diff-remap only handles line-aligned segments; these mid-line segments
     /// block it (listed by `loc`).
     CharLevel(Vec<String>),
-    /// These slot boundaries fell in changed regions, so their new
+    /// These segment boundaries fell in changed regions, so their new
     /// positions are unknown. The file is left untouched (all-or-nothing)
-    /// and these slots are the residue to relocate (e.g. by fingerprint
-    /// proposal). The whole list of the file's slots is returned for
+    /// and these segments are the residue to relocate (e.g. by fingerprint
+    /// proposal). The whole list of the file's segments is returned for
     /// reporting context.
     Unresolved(Vec<CoveringEntry>),
 }
 
-/// Remap one file's slots from the old covering onto the new bytes `n`.
+/// Remap one file's segments from the old covering onto the new bytes `n`.
 ///
 /// `old` are the file's current covering entries (any order); `n` is the
 /// file's lines on disk (each retaining its trailing newline). Returns
 /// replacement entries that re-fit the partition to `n`, carrying every
-/// slot's name and label forward, or a `RemapError` describing why it
+/// segment's name and label forward, or a `RemapError` describing why it
 /// could not (in which case the caller must leave the file untouched).
 ///
 /// Strategy: a line-aligned covering is a sequence of cut lines; each
-/// slot's start line is mapped through `diff::line_map`. If every
+/// segment's start line is mapped through `diff::line_map`. If every
 /// interior boundary lands on a preserved line, the new cut sequence is
-/// determined and each slot is re-extracted from `n` (refreshing its
+/// determined and each segment is re-extracted from `n` (refreshing its
 /// content, like `recut`, while its boundaries follow surrounding
 /// inserts/deletes).
 pub fn remap_file(
@@ -759,13 +759,13 @@ pub fn remap_file(
     o_lines: &[String],
     n_lines: &[String],
 ) -> Result<FileRemap, RemapError> {
-    // Order slots by position.
-    let mut slots: Vec<&CoveringEntry> = old.iter().collect();
-    slots.sort_by_key(|e| start_key(e.start_pos()));
+    // Order segments by position.
+    let mut segments: Vec<&CoveringEntry> = old.iter().collect();
+    segments.sort_by_key(|e| start_key(e.start_pos()));
 
-    // If the recorded slots already reconstruct disk, there is nothing
+    // If the recorded segments already reconstruct disk, there is nothing
     // to remap. Check this first so an undrifted file is silently
-    // skipped regardless of its slot shape (no spurious char-level
+    // skipped regardless of its segment shape (no spurious char-level
     // warning for files the user never touched).
     let reconstructed: String = o_lines.concat();
     let on_disk: String = n_lines.concat();
@@ -773,9 +773,9 @@ pub fn remap_file(
         return Err(RemapError::NotDrifted);
     }
 
-    // Restriction: only line-aligned slots can be remapped through a
+    // Restriction: only line-aligned segments can be remapped through a
     // line diff. Bail (listing the offenders) if any is mid-line.
-    let char_level: Vec<String> = slots
+    let char_level: Vec<String> = segments
         .iter()
         .filter(|e| !e.is_line_aligned())
         .map(|e| e.loc())
@@ -788,11 +788,11 @@ pub fn remap_file(
     let n_refs: Vec<&str> = n_lines.iter().map(|s| s.as_str()).collect();
     let map = crate::diff::line_map(&o_refs, &n_refs);
 
-    // Map each slot's start line (1-indexed) to a new start line.
-    // The first slot always starts at new line 1.
-    let mut new_starts: Vec<usize> = Vec::with_capacity(slots.len());
+    // Map each segment's start line (1-indexed) to a new start line.
+    // The first segment always starts at new line 1.
+    let mut new_starts: Vec<usize> = Vec::with_capacity(segments.len());
     let mut unresolved: Vec<CoveringEntry> = Vec::new();
-    for (i, e) in slots.iter().enumerate() {
+    for (i, e) in segments.iter().enumerate() {
         if i == 0 {
             new_starts.push(1);
             continue;
@@ -809,10 +809,10 @@ pub fn remap_file(
 
     // New cut sequence: starts + (file end). Must be strictly increasing
     // and within the new file; LCS monotonicity guarantees this, but we
-    // validate defensively. On a defensive failure, report every slot as
+    // validate defensively. On a defensive failure, report every segment as
     // unresolved (the file is left untouched).
     let n_total = n_lines.len();
-    let bail = || RemapError::Unresolved(slots.iter().map(|e| (*e).clone()).collect());
+    let bail = || RemapError::Unresolved(segments.iter().map(|e| (*e).clone()).collect());
     for w in new_starts.windows(2) {
         if w[1] <= w[0] {
             return Err(bail());
@@ -822,12 +822,12 @@ pub fn remap_file(
         return Err(bail());
     }
 
-    // Build replacement entries: slot i spans new lines
+    // Build replacement entries: segment i spans new lines
     // [new_starts[i] .. (new_starts[i+1]-1 or n_total)].
-    let mut entries = Vec::with_capacity(slots.len());
+    let mut entries = Vec::with_capacity(segments.len());
     let mut refreshed = 0usize;
     let mut unchanged = 0usize;
-    for (i, e) in slots.iter().enumerate() {
+    for (i, e) in segments.iter().enumerate() {
         let a = new_starts[i];
         let b = if i + 1 < new_starts.len() {
             new_starts[i + 1] - 1
@@ -865,10 +865,10 @@ pub fn remap_file(
     })
 }
 
-/// Resolve an in-covering address to the index of a slot. The address
-/// is either `@name` (exact slot name) or a content-hash prefix
+/// Resolve an in-covering address to the index of a segment. The address
+/// is either `@name` (exact segment name) or a content-hash prefix
 /// (≥2 hex chars, git-style unique-prefix match).
-pub fn resolve_slot(c: &Covering, addr: &str) -> io::Result<usize> {
+pub fn resolve_segment(c: &Covering, addr: &str) -> io::Result<usize> {
     if let Some(name) = addr.strip_prefix('@') {
         return c
             .entries
@@ -877,7 +877,7 @@ pub fn resolve_slot(c: &Covering, addr: &str) -> io::Result<usize> {
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("no slot named '@{name}' in covering '{}'", c.name),
+                    format!("no segment named '@{name}' in covering '{}'", c.name),
                 )
             });
     }
@@ -900,11 +900,11 @@ pub fn resolve_slot(c: &Covering, addr: &str) -> io::Result<usize> {
         })
 }
 
-/// Like `resolve_slot`, but returns the matched segment's current hash.
+/// Like `resolve_segment`, but returns the matched segment's current hash.
 /// A drop-in for `resolve_in_covering` that additionally accepts `@name`
 /// and `file:line[:col]` addresses.
-pub fn resolve_slot_hash(c: &Covering, addr: &str) -> io::Result<String> {
-    Ok(c.entries[resolve_slot(c, addr)?].hash.clone())
+pub fn resolve_segment_hash(c: &Covering, addr: &str) -> io::Result<String> {
+    Ok(c.entries[resolve_segment(c, addr)?].hash.clone())
 }
 
 /// Resolve a positional address `file:line[:col]` to the index of the
@@ -976,10 +976,10 @@ fn pos_in_segment(p: Pos, e: &CoveringEntry) -> bool {
     after_start && before_end
 }
 
-/// Set, change, or clear a slot's name-tag. `new_name = None` clears it
-/// (the slot becomes anonymous). Names are unique within the covering.
+/// Set, change, or clear a segment's name. `new_name = None` clears it
+/// (the segment becomes anonymous). Names are unique within the covering.
 /// Renaming is a first-class operation: it does not touch content or
-/// hash, so a connection that references the slot by `@name` must be
+/// hash, so a connection that references the segment by `@name` must be
 /// re-pointed with `link`/`unlink` only if the name string itself
 /// changes — which is exactly what this records.
 pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Result<()> {
@@ -988,7 +988,7 @@ pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Res
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "invalid slot name '{n}': must be non-empty and contain no \
+                    "invalid segment name '{n}': must be non-empty and contain no \
                      space, tab, ':' and not start with '@' or '#'"
                 ),
             ));
@@ -1000,7 +1000,7 @@ pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Res
         {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                format!("slot name '{n}' is already used in covering '{}'", c.name),
+                format!("segment name '{n}' is already used in covering '{}'", c.name),
             ));
         }
     }
@@ -1146,13 +1146,13 @@ mod tests {
     }
 
     #[test]
-    fn remap_skips_undrifted_file_even_with_char_level_slots() {
+    fn remap_skips_undrifted_file_even_with_char_level_segments() {
         // Regression: an undrifted file must be reported NotDrifted and
         // never trigger the char-level restriction. (A whole-covering
         // `recut --remap` would otherwise emit a spurious warning for an
         // untouched file that happens to have character-level cuts.)
         let lines = slines("alpha beta\ngamma\n");
-        // Two slots on line 1, split mid-line at column 6 — char-level.
+        // Two segments on line 1, split mid-line at column 6 — char-level.
         let mut e1 = entry("f.txt", 1, 1, None);
         e1.b_col = Some(5); // "alpha"
         let mut e2 = entry("f.txt", 1, 2, None);
@@ -1176,8 +1176,8 @@ mod tests {
     }
 
     #[test]
-    fn remap_refits_line_aligned_slots_and_keeps_names() {
-        // Insert two lines into the first slot; the second slot must
+    fn remap_refits_line_aligned_segments_and_keeps_names() {
+        // Insert two lines into the first segment; the second segment must
         // shift down and keep its name.
         let o = slines("a\nb\nc\nd\n");
         let n = slines("a\nb\nX\nY\nc\nd\n");
@@ -1199,8 +1199,8 @@ mod tests {
     }
 
     #[test]
-    fn remap_reports_moved_slot_as_unresolved() {
-        // Move the 2nd slot's content above the 1st: its start line can't
+    fn remap_reports_moved_segment_as_unresolved() {
+        // Move the 2nd segment's content above the 1st: its start line can't
         // map monotonically, so it is unresolved (fingerprint territory).
         let o = slines("aaa\nbbb\nccc\nddd\n");
         let n = slines("ccc\nddd\naaa\nbbb\n");
@@ -1257,7 +1257,7 @@ mod tests {
             entries: vec![named],
         };
         c.write(&repo).unwrap();
-        // The named slot writes a 6th tab field.
+        // The named segment writes a 6th tab field.
         let raw = std::fs::read_to_string(repo.coverings_dir().join("main")).unwrap();
         assert!(raw.lines().any(|l| l.ends_with("\treq-1")));
         let back = Covering::read(&repo, "main").unwrap();
@@ -1282,13 +1282,13 @@ mod tests {
             name: "main".into(),
             entries: vec![named, anon],
         };
-        // Named slot's endpoint is @name; anonymous slot's is its hash.
+        // Named segment's endpoint is @name; anonymous segment's is its hash.
         assert_eq!(c.entries[0].endpoint(), "@greeting");
         assert_eq!(c.entries[1].endpoint(), anon_hash);
         // Both resolve now.
         assert!(endpoint_resolves(&c, "@greeting"));
         assert!(endpoint_resolves(&c, &anon_hash));
-        // A name endpoint resolves even if the slot's hash changes.
+        // A name endpoint resolves even if the segment's hash changes.
         let mut c2 = c.clone();
         c2.entries[0].hash = "deadbeefdeadbeef".into();
         assert!(endpoint_resolves(&c2, "@greeting"));
@@ -1321,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_slot_accepts_positional_address() {
+    fn resolve_segment_accepts_positional_address() {
         let repo = tmp_repo();
         // queue.md split into 1..4, 5..9, 10..13, 14..16; errors mid-line.
         let mk = |a, ac, b, bc, file: &str| CoveringEntry {
@@ -1347,21 +1347,21 @@ mod tests {
             ],
         };
         // file:line picks the containing segment.
-        assert_eq!(resolve_slot(&c, "queue.md:1").unwrap(), 0);
-        assert_eq!(resolve_slot(&c, "queue.md:7").unwrap(), 1); // inside 5..9
-        assert_eq!(resolve_slot(&c, "queue.md:10").unwrap(), 2);
-        assert_eq!(resolve_slot(&c, "queue.md:16").unwrap(), 3);
+        assert_eq!(resolve_segment(&c, "queue.md:1").unwrap(), 0);
+        assert_eq!(resolve_segment(&c, "queue.md:7").unwrap(), 1); // inside 5..9
+        assert_eq!(resolve_segment(&c, "queue.md:10").unwrap(), 2);
+        assert_eq!(resolve_segment(&c, "queue.md:16").unwrap(), 3);
         // file:line:col picks the right char-level fragment on line 3.
-        assert_eq!(resolve_slot(&c, "errors.md:3:5").unwrap(), 4); // cols 1..16
-        assert_eq!(resolve_slot(&c, "errors.md:3:20").unwrap(), 5); // cols 17..
+        assert_eq!(resolve_segment(&c, "errors.md:3:5").unwrap(), 4); // cols 1..16
+        assert_eq!(resolve_segment(&c, "errors.md:3:20").unwrap(), 5); // cols 17..
         // out-of-range / unknown file errors out.
-        assert!(resolve_slot(&c, "queue.md:99").is_err());
-        assert!(resolve_slot(&c, "nope.md:1").is_err());
+        assert!(resolve_segment(&c, "queue.md:99").is_err());
+        assert!(resolve_segment(&c, "nope.md:1").is_err());
         std::fs::remove_dir_all(&repo.root).ok();
     }
 
     #[test]
-    fn resolve_slot_accepts_name_and_hash() {
+    fn resolve_segment_accepts_name_and_hash() {
         let repo = tmp_repo();
         let mut named = whole(&repo, "f.txt", "a\n", 1);
         named.name = Some("intro".into());
@@ -1372,11 +1372,11 @@ mod tests {
             entries: vec![named, anon],
         };
         // By @name.
-        assert_eq!(resolve_slot(&c, "@intro").unwrap(), 0);
+        assert_eq!(resolve_segment(&c, "@intro").unwrap(), 0);
         // By hash prefix (≥2 chars) — what plain `recut` relied on before.
-        assert_eq!(resolve_slot(&c, &anon_hash[..6]).unwrap(), 1);
+        assert_eq!(resolve_segment(&c, &anon_hash[..6]).unwrap(), 1);
         // Misses error out.
-        assert!(resolve_slot(&c, "@nope").is_err());
+        assert!(resolve_segment(&c, "@nope").is_err());
         std::fs::remove_dir_all(&repo.root).ok();
     }
 

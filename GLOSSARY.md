@@ -37,9 +37,9 @@ when the successor of the first's end position equals the second's
 start. At line granularity this reduces to `b₁ + 1 = a₂`. Only adjacent
 segments can be merged.
 
-**Anonymous segment** **[T][S]** — a segment with no name-tag (segment
-name). Referable only by its segment hash, so any content edit
-invalidates references to it. Contrast **slot** (named segment).
+**Anonymous segment** **[T][S]** — a segment with no **segment name**.
+Referable only by its segment hash, so any content edit invalidates
+references to it. Contrast **named segment**.
 
 **Cardinality** **[T][S]** — `|C|`, the number of segments in a covering.
 A complexity measure reported by `status`.
@@ -67,8 +67,7 @@ sub-concept (below).
 **Initial cover** **[T][R][S]** — the particular covering produced by the
 first `cover` on a repository: one whole-file `unknown` segment per file,
 before any **split**/**merge** refinement. Its **granularity** is near 0.
-Sub-concept of **cover**. (Earlier drafts and older theory/requirements
-text called this the *bootstrap*; that word is retired.)
+Sub-concept of **cover**.
 
 **Coverage (source / target)** **[T][S]** — the fraction of a covering's
 segments that appear in at least one link of a connection. A connection
@@ -103,9 +102,7 @@ boundaries still fit, the third lifting drift from a segment to a link.
 
 **Segment drift** **[T][R][S]** — bytes inside a segment changed but its
 line boundaries still fit the file. Repaired by **recut**. Sub-concept of
-**drift**. (Earlier drafts called this *file-level drift*; that term is
-retired in favour of *segment drift*, which names what actually drifted
-and parallels **link drift**.)
+**drift**.
 
 **Boundary drift** **[T][R][S]** — an edit added or removed lines so a
 segment's recorded range no longer fits the file (`b > |f|` on disk).
@@ -166,9 +163,7 @@ residual middle. The position-carry-forward primitive behind **diff-remap**.
 **Link** **[T][R][S]** — a single `(source, target)` association inside a
 connection, optionally annotated with a note; added by `link`, removed by
 `unlink`. A connection is a set of links (the theory: the elements of the
-relation `κ ⊆ C_A × C_B`). Earlier drafts and older code called this a
-*pair* (`struct Pair`, `ls-pairs`); that term is retired. Has one
-sub-concept (below).
+relation `κ ⊆ C_A × C_B`).
 
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
@@ -179,15 +174,14 @@ is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
 whose identity *is* the content, breaks on any content edit, having no
 drift state to pass through first. Sub-concept of **link**.
 
-**Name-tag** *(also: segment name, slot name)* **[T][R][S]** — an
-optional, stable, human-meaningful string attached to a segment (e.g.
-`intro`, `req-1`), unique within its covering. It is *not* the segment
-hash and *not* part of it, so naming, relabelling, or recutting leaves
-the object store untouched — which is exactly what lets a connection
-reference a segment by name and survive edits to its bytes. Assigned
-deliberately, never auto-generated. The "tag" is just this name string
-(nothing to do with the hash); since every segment has a hash but only
-some have a name, *segment name* is an accurate plainer synonym.
+**Segment name** **[T][R][S]** — an optional, stable, human-meaningful
+string attached to a segment (e.g. `intro`, `req-1`), unique within its
+covering, addressed as `@name`. It is *not* the segment hash and *not*
+part of it, so naming, relabelling, or recutting leaves the object store
+untouched — which is exactly what lets a connection reference a segment
+by name and survive edits to its bytes. Assigned deliberately, never
+auto-generated. A segment that carries one is a **named segment**; one
+without is **anonymous**.
 
 **Object store** **[T][R][S]** — the content-addressed store at
 `.covmap/objects/<hh>/<rest>`, mapping each **segment hash** to
@@ -222,7 +216,7 @@ start, and the last character (through the trailing newline) for an end;
 
 1. **Drift repair** — bringing a covering's segments back in line with
    edited files, as a *layered fallback chain*, each layer narrowing what
-   it hands the next: a **name-tag** keeps a link alive → **recut** /
+   it hands the next: a **segment name** keeps a link alive → **recut** /
    **diff-remap** deterministically re-fit boundaries that survived in
    place → **fingerprinting** *proposes* a relocation for what remains.
 2. **Connection repair** — the `covmap repair K` command, which drops the
@@ -247,7 +241,7 @@ diff-remap could not resolve, it ranks candidate windows in the new file
 by **similarity score** and prints them (a *fingerprint proposal*). It
 never mutates state — see **propose-only**. Sub-concept of **repair**.
 
-**Repair residue** *(also: unresolved slot)* **[T][S]** — the segments
+**Repair residue** *(also: unresolved segment)* **[T][S]** — the segments
 diff-remap cannot re-fit (boundaries fell in changed regions, or the
 segment moved). Reported per file and handed to fingerprinting. The code
 calls these *unresolved*; the theory calls them *residue*. Sub-concept of
@@ -292,14 +286,11 @@ right name for it (covmap no longer calls this a *content hash*).
 two coverings share a segment exactly when its **segment hash** coincides
 in both. No duplication in the object store.
 
-**Slot (named segment)** **[T][S]** — a segment that carries a
-**name-tag**. The theory introduces *slot* to contrast two identities: a
-segment's *object identity* (its hash — immutable, shared) and, when
-named, its *slot identity* (its name — stable across edits,
-covering-local). Operationally a slot is nothing more than a segment
-with a name set, so *named segment* says the same thing in plainer
-words. See **two-level identity** (and the observation on whether *slot*
-earns a separate term).
+**Named segment** **[T][S]** — a segment that carries a **segment name**;
+a segment without one is **anonymous**. Being named gives it a second,
+edit-stable identity (its name) alongside its hash — see **two-level
+identity** — so a connection can reference it by `@name` and survive
+content edits.
 
 **Split / Merge** **[T][S]** — the two manual refinement operations.
 `split` cuts one segment at a position into a top and a bottom; `merge`
@@ -311,10 +302,10 @@ immediately after a segment's end: the next line's start when the end
 ran through a newline, otherwise the next column. Where an adjacent
 segment must begin.
 
-**Two-level identity** **[T][R]** — a segment has both an *object
-identity* (its hash — immutable, shared) and, when named, a *slot
-identity* (its name — stable across edits, covering-local). A reference
-may use either axis.
+**Two-level identity** **[T][R]** — a segment has both a *hash identity*
+(its segment hash — immutable, shared) and, when named, a *name identity*
+(its name — stable across edits, covering-local). A reference may use
+either axis.
 
 **Whole-file segment** **[T][S]** — the single `(f, 1, |f|, unknown)`
 segment that **cover** creates for a file before any refinement. Also
@@ -345,13 +336,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Concepts whose keep-or-cut is worth a decision
 
-- **Slot / name-tag jargon.** A slot is just a *named segment*, and a
-  name-tag is just a *segment name*; the hash is a separate thing every
-  segment already has. We could drop *slot* and *name-tag* entirely in
-  favour of *named segment* and *segment name*, keeping the two-axis
-  contrast only where it matters (perhaps as *hash identity* vs. *name
-  identity*). One fewer noun to learn; the theory's *object identity /
-  slot identity* pairing is the main thing that would need rewording.
 - **Connection algebra.** Defined in T and `req11`, not implemented, no
   workflow needs it yet. Elegant and plausibly useful later (composing
   maps). Keep as a documented future direction, or drop from the

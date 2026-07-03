@@ -4,7 +4,7 @@
 #
 # Moving a segment is the case diff-remap cannot resolve on its own: the
 # segment's boundary lines were deleted from their old position, so they
-# fall in a changed region. `recut --remap` reports the slot as
+# fall in a changed region. `recut --remap` reports the segment as
 # unresolved and prints a *fingerprint proposal* pointing at the segment's
 # new location. The agent confirms the proposal and relinks. Nothing is
 # moved automatically -- fingerprinting is propose-only.
@@ -21,7 +21,7 @@ H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'policy.md:5' | cut -f1 )
 H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'policy.md:9' | cut -f1 )
 ( cd spec && "$COVMAP_BIN" split "main:$H" 13 "User" "Backups" ) >/dev/null
 
-# Name the Audit logs slot and link it to the implementation.
+# Name the Audit logs segment and link it to the implementation.
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Audit logs' | head -1 )" audit-retention ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
 ( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" policy_links ) >/dev/null

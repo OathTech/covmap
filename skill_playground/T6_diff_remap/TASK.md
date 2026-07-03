@@ -4,7 +4,7 @@
 
 > covmap is set up in `spec/` and `impl_rs/`. `spec/api.md` is split
 > into preamble / Create / Read / Delete; the Read and Delete sections
-> are named slots (`@read-ep`, `@delete-ep`) linked to the
+> are named segments (`@read-ep`, `@delete-ep`) linked to the
 > implementation through `api_links`.
 >
 > I expanded the Create section by a couple of lines, which pushed Read
@@ -36,7 +36,7 @@
    ```
 
    This reconstructs the pre-edit file from the covering, diffs it
-   against the file on disk, and re-fits every slot's boundaries through
+   against the file on disk, and re-fits every segment's boundaries through
    the unchanged regions — automatically following the upstream
    insertion. Names (hence the `api_links` links) are preserved.
 3. Run `covmap status` and `covmap fsck`: the covering is a clean
@@ -47,14 +47,14 @@
 Before diff-remap, a boundary-moving edit meant manually `merge`-ing the
 disturbed sections and re-`split`-ting at the new line numbers, then
 re-linking. `recut --remap` does the boundary arithmetic for you: it is
-deterministic for any edit that leaves the slot boundaries in unchanged
+deterministic for any edit that leaves the segment boundaries in unchanged
 regions of the file (the common, localized case).
 
 ## Success criteria (graded)
 
 - `covmap status` shows `drift: clean` and `api_links … 2 links, 0 broken`.
 - `covmap fsck` passes with no broken links.
-- The `@read-ep` slot's content is exactly the Read section after the
+- The `@read-ep` segment's content is exactly the Read section after the
   shift (it followed the insertion rather than staying at the old lines).
 - Reconstructing the file from the covering reproduces `api.md`
   byte-for-byte.

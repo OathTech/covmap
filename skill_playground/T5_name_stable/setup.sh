@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Cover, refine spec/auth.md at its headings, NAME the Login slot,
+# Cover, refine spec/auth.md at its headings, NAME the Login segment,
 # link it to the implementation, then edit Login's prose in place.
 #
-# The edit changes bytes inside the Login slot WITHOUT moving any line
-# boundary. Because the connection references the slot by its name-tag
+# The edit changes bytes inside the Login segment WITHOUT moving any line
+# boundary. Because the connection references the segment by its name
 # (@login-contract), the link is NOT broken by the byte change — the
-# agent only needs to `recut` the slot to refresh its segment hash.
+# agent only needs to `recut` the segment to refresh its segment hash.
 set -euo pipefail
 
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
@@ -19,7 +19,7 @@ H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'auth.md:5' | cut -f1 )
 H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'auth.md:10' | cut -f1 )
 ( cd spec && "$COVMAP_BIN" split "main:$H" 15 "Logout" "Expiry" ) >/dev/null
 
-# Name the Login slot and link it to the single impl segment.
+# Name the Login segment and link it to the single impl segment.
 LOGIN=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Login" | head -1 )
 ( cd spec && "$COVMAP_BIN" name "main:$LOGIN" login-contract ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
@@ -27,7 +27,7 @@ IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
 ( cd spec && "$COVMAP_BIN" link auth_links @login-contract "$IMPL_H" "fn login" ) >/dev/null
 
 # Drift: tighten the Login contract wording. Same number of lines, so
-# the Login slot's boundaries are intact -- only its bytes change.
+# the Login segment's boundaries are intact -- only its bytes change.
 python3 - <<'PY'
 from pathlib import Path
 p = Path("spec/auth.md")
@@ -39,5 +39,5 @@ t = t.replace(
 p.write_text(t)
 PY
 
-echo "Setup done. The Login slot (@login-contract) is linked via auth_links"
+echo "Setup done. The Login segment (@login-contract) is linked via auth_links"
 echo "and its prose has been edited in place; refresh it with recut."

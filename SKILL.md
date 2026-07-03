@@ -29,21 +29,21 @@ binary path is `covmap/target/release/covmap`.
   segments. It is a ref under `.covmap/coverings/<name>` listing one
   segment per line, prefixed by `# covered=<file>` lines. The default
   covering is named `main` and is pointed at by `.covmap/HEAD`.
-- A **name-tag** is an optional stable identity for a segment (a
-  *slot*), set with `covmap name`. It is shown as `@name`. Naming is for
-  segments you intend to map: a connection referencing a slot by
-  `@name` survives edits to the slot's content, because identity is the
+- A **name** is an optional stable identity for a segment (a
+  *segment*), set with `covmap name`. It is shown as `@name`. Naming is for
+  segments you intend to map: a connection referencing a segment by
+  `@name` survives edits to the segment's content, because identity is the
   name, not the hash. Anonymous segments (the default, e.g. `unknown`
   segments) are referenced by segment hash, which changes on every edit.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
   and references the target repo by absolute path. Each endpoint is
-  either a slot name (`@name`, resilient to content edits) or a segment
+  either a segment name (`@name`, resilient to content edits) or a segment
   hash (legacy / anonymous).
 - **Sharing** is automatic: any two coverings (in any repo) that
   produce a segment with the same content+label end up referencing
-  the same object. Name-tags are per-covering slot metadata and are not
+  the same object. Names are per-covering segment metadata and are not
   part of the shared segment hash.
 - **There are no segmentation rules.** `covmap cover` walks the repo
   and adds a single whole-file segment labelled `unknown` for every
@@ -95,13 +95,13 @@ are unique.
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (re-hashes). | no |
-| `covmap name <C>:<h\|@slot> <tag\|->` | Set, rename, or clear (`-`) a slot's name-tag. Name the segments you intend to map. | no |
-| `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name-tag; the bottom is anonymous. | yes |
-| `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged slot inherits the single surviving name (left wins if both named). | yes |
-| `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A name-tagged slot keeps its name, so connections by `@name` stay intact. | yes |
-| `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned slot's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten slot it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
+| `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. Name the segments you intend to map. | no |
+| `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name; the bottom is anonymous. | yes |
+| `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
+| `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
+| `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
 | `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
-| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are slot addresses (`@name` or hash prefix); a named slot is stored by `@name` so the link survives content edits. | no |
+| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
 | `covmap repair <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
@@ -123,7 +123,7 @@ are unique.
 - `<hash>` — full 16-char hex or short prefix (≥2 chars), resolved
   against the object store.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
-- `<C>:@<name>` — the slot named `<name>` in covering `<C>`.
+- `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` that **covers**
   that position (unique by the partition invariant). The friendliest,
   least brittle handle: it depends only on where the text is, not on a
@@ -211,14 +211,14 @@ The two kinds of drift you will see:
 - **Segment drift** (bytes inside a segment changed, boundaries
   intact). `covmap status` reports `drift: N file(s) edited`. Fix per
   affected segment with `covmap recut <C>:<h>` to update the hash. If
-  the slot is **named** (`@name`), connections referencing it stay
-  intact across the recut — no relinking needed. If the slot is
+  the segment is **named** (`@name`), connections referencing it stay
+  intact across the recut — no relinking needed. If the segment is
   anonymous (linked by hash), `unlink`/`link` to point connections at
   the new hash.
 - **Boundary drift** (lines added/removed inside a segment). `recut`
   will refuse if the segment no longer fits the file. Either use
   `covmap recut --remap` (whole-file diff-remap, which re-fits the
-  surviving slots automatically — see workflow E), or `merge` the
+  surviving segments automatically — see workflow E), or `merge` the
   affected adjacent segments and re-`split` at the new line numbers.
 
 Steps:
@@ -230,47 +230,47 @@ Steps:
    `merge` + `split` (boundaries shifted). Read the new bytes with
    `covmap show <C>:<new_hash>` to confirm the implementation still
    matches.
-4. Only for **anonymous** (hash-linked) slots: `unlink` the old link,
-   `link` the new one. Named (`@name`) slots need no relinking.
+4. Only for **anonymous** (hash-linked) segments: `unlink` the old link,
+   `link` the new one. Named (`@name`) segments need no relinking.
 5. Run `covmap repair <K>` to drop any genuinely-abandoned links.
 6. Confirm with `covmap status` (broken count = 0, drift = clean).
 
 **Prefer naming the segments you map.** Before linking, `covmap name
-<C>:<h> <tag>` the segment, then `link` it — the link is stored by
-`@tag` and survives later content edits, so drift repair collapses to a
+<C>:<h> <name>` the segment, then `link` it — the link is stored by
+`@name` and survives later content edits, so drift repair collapses to a
 single `recut`. This is the difference between task T3 (hash link, must
 relink) and T5 (named link, recut only).
 
 ### E. Absorb boundary drift with diff-remap
 
-When an edit **adds or removes lines** so that slot boundaries move
-(boundary drift), don't `recut` each slot by hand (it would capture the
+When an edit **adds or removes lines** so that segment boundaries move
+(boundary drift), don't `recut` each segment by hand (it would capture the
 wrong lines) and don't `merge`+`split` the whole region. Run:
 
 ```
 covmap recut --remap            # whole covering (HEAD), or
-covmap recut --remap <C>:<addr> # just the file containing that slot
+covmap recut --remap <C>:<addr> # just the file containing that segment
 ```
 
 It reconstructs each file from the covering, diffs it against disk, and
-re-fits every line-aligned slot's boundaries through the unchanged
+re-fits every line-aligned segment's boundaries through the unchanged
 regions — following the insertion/deletion automatically. Names (hence
 `@name` connections) are preserved, so nothing needs relinking. It is
 per-file all-or-nothing: a file whose boundaries land in changed regions
-is left untouched and its slots are listed as **unresolved** residue.
+is left untouched and its segments are listed as **unresolved** residue.
 After a successful remap, `status` is clean and `fsck` passes. This is
 task T6.
 
-Caveats: diff-remap handles **line-aligned** slots; a *drifted* file
+Caveats: diff-remap handles **line-aligned** segments; a *drifted* file
 that contains character-level cuts is left untouched (use manual
 `merge`/`split` for it). Undrifted files are skipped silently, whatever
-their slot shape — so it is safe to run `recut --remap` over a whole
-covering even when some files have character-level slots: only the files
+their segment shape — so it is safe to run `recut --remap` over a whole
+covering even when some files have character-level segments: only the files
 you actually edited are considered. And it re-fits boundaries that
-survived — a slot whose own anchor lines were rewritten is reported
+survived — a segment whose own anchor lines were rewritten is reported
 unresolved rather than guessed.
 
-**Moved or rewritten slots — fingerprint proposals.** When a slot can't
+**Moved or rewritten segments — fingerprint proposals.** When a segment can't
 be placed by diff-remap (typically because the segment was *moved*),
 `recut --remap` prints a **propose-only** relocation guess for it: the
 most similar line range in the new file, with a match score, e.g.
@@ -281,11 +281,11 @@ most similar line range in the new file, with a match score, e.g.
 
 This changes nothing on its own — a score is a likelihood, not a proof.
 **Confirm** the candidate (read those lines; an agent can verify
-semantically in one step), then re-cut the slot at its new home (e.g.
+semantically in one step), then re-cut the segment at its new home (e.g.
 `merge`+`split`, then `name` it) so the covering is a clean partition
 again. Use `--threshold <f>` (default 0.4) to widen or tighten which
 guesses are shown. This is task T7. The three repair layers form a
-chain: **name-tag** keeps the link alive → **diff-remap** re-fits
+chain: **name** keeps the link alive → **diff-remap** re-fits
 surviving boundaries → **fingerprint** proposes a relocation for the
 rest.
 

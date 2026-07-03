@@ -51,8 +51,8 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     if let Some(src) = &src_cov {
         for cv in &conn_data {
             for p in &cv.k.links {
-                // Endpoints may be `@name` slot references or bare
-                // hashes. Resolve each to the slot's *current* hash so
+                // Endpoints may be `@name` segment references or bare
+                // hashes. Resolve each to the segment's *current* hash so
                 // the views (which key on hashes) stay correct after a
                 // content edit; `None` means the endpoint is broken.
                 let a_hash = covering::endpoint_to_hash(src, &p.a);

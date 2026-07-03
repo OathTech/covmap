@@ -342,10 +342,15 @@ $\Cov$ in $f$ has $b > |f|_{A'}$, i.e., the recorded line range no
 longer fits the file.
 \end{definition}
 
-The two flavours of drift correspond to two repair operations
-(\S\ref{sec:interface}): \texttt{recut} for segment drift with
-intact boundaries, \texttt{merge} + \texttt{split} for boundary
-drift.
+Each flavour of drift has a repair, developed in
+\S\ref{sec:diffremap}--\S\ref{sec:fingerprint}: \texttt{recut} refreshes a
+segment whose line boundaries are still intact (segment drift), while
+boundary drift is absorbed automatically by \emph{diff-remap}
+(\S\ref{sec:diffremap}) wherever the surrounding lines survived, with
+manual \texttt{merge} + \texttt{split} as the fallback. A segment that
+moved or was rewritten beyond remapping is relocated by a
+\emph{fingerprint} proposal (\S\ref{sec:fingerprint}). Together these
+form a layered fallback chain (\S\ref{sec:fingerprint}).
 
 \begin{definition}[Broken link]\label{def:broken}
 A link $(s, t) \in \kappa$ is \emph{broken} relative to current

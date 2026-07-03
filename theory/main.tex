@@ -26,9 +26,9 @@
 \maketitle
 
 \begin{abstract}
-\texttt{covmap} links two repositories $A$ and $B$ by partitioning each
-into content-addressed \emph{segments} and relating those segments
-across repositories. This note gives precise, minimal definitions of
+\texttt{covmap} links two repositories $A$ and $B$ (possibly the same
+one) by partitioning each into content-addressed \emph{segments} and
+relating those segments across repositories. This note gives precise, minimal definitions of
 repositories, segments, coverings, sharing of segments across
 coverings, and connections, then describes the command interface that
 realizes them. The implementation deliberately ships no segmentation
@@ -248,7 +248,11 @@ otherwise a segment hash.
 
 A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
 to segment $t$ of $B$. Connections are stored separately from
-coverings and refer to their endpoints by hash.
+coverings and refer to their endpoints by hash. Note that nothing
+requires $A$ and $B$ to be distinct: they may be the same repository, and
+$\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
+also relate a repository to itself (e.g. a docs-to-code map, or a
+duplication audit within one tree).
 
 \begin{definition}[Coverage]\label{def:coverage}
 The \emph{source coverage} of $\kappa$ is

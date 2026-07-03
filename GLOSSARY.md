@@ -340,13 +340,6 @@ These are notes for discussion, not defects.
   state, is this glossary's synthesis of `def:broken` +
   `endpoint_resolves` + the name/hash distinction. Worth promoting into
   the theory (and `req14`) if we agree the framing holds.
-- **Self-connection** (a covering linked to another, or the same,
-  covering of one repo) is implemented and used (`reqmap`, self-map), but
-  the theory frames connections as strictly between two repos `A` and
-  `B`; it should state that `A = B` is allowed.
-- **Stale drift sentence** in theory §3.3 ("recut for segment drift,
-  merge + split for boundary drift") predates the layered chain in
-  §3.4–3.5 and `req13`, and reads as superseded.
 - **`N_C` contradiction.** Theory defines `ℓ(s) = b − a + 1` (so
   char-level cuts *grow* `N_C`, matching `stats()`) but the next sentence
   says char-level cuts leave `N_C` unchanged. Reconcile the two, and

@@ -543,7 +543,7 @@ from the initial cover by repeated splits / merges / recuts / relabels /
 re-tags
 is the most general covering one can ask for.
 
-\subsection{Inspection, connections, repair}
+\subsection{Inspection, connections, prune}
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
@@ -565,7 +565,7 @@ is the most general covering one can ask for.
       \texttt{covmap unlink $K$ $h_A$ $h_B$}\\
       Add or remove a single link, optionally annotated with note
       $\nu$.
-\item \texttt{covmap repair $K$}\\
+\item \texttt{covmap prune $K$}\\
       Drop every link of $K$ whose endpoint is no longer in its
       covering.
 \item \texttt{covmap fsck}\\

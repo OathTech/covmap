@@ -103,7 +103,7 @@ are unique.
 | `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
 | `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
-| `covmap repair <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
+| `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
 | `covmap html [-o <path>]` | Render a static HTML browser. For humans, not you. | no |
 
@@ -232,7 +232,7 @@ Steps:
    matches.
 4. Only for **anonymous** (hash-linked) segments: `unlink` the old link,
    `link` the new one. Named (`@name`) segments need no relinking.
-5. Run `covmap repair <K>` to drop any genuinely-abandoned links.
+5. Run `covmap prune <K>` to drop any genuinely-abandoned links.
 6. Confirm with `covmap status` (broken count = 0, drift = clean).
 
 **Prefer naming the segments you map.** Before linking, `covmap name
@@ -322,7 +322,7 @@ connections:
 - `drift: N file(s) edited` — N files have been modified since their
   segments were recorded. Use `recut` (or merge+split if boundaries
   moved) to refresh.
-- `<conn> -> <repo>/<C> : N links, M broken` — repair if `M > 0`.
+- `<conn> -> <repo>/<C> : N links, M broken` — relink or `prune` if `M > 0`.
 
 ## Efficiency rules
 

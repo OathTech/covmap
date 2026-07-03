@@ -52,7 +52,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "link" => cmd_link(&rest),
         "unlink" => cmd_unlink(&rest),
         "connect" => cmd_connect(&rest),
-        "repair" => cmd_repair(&rest),
+        "prune" => cmd_prune(&rest),
         "html" => cmd_html(&rest),
         // plumbing
         "hash-segment" => cmd_hash_segment(&rest),
@@ -92,7 +92,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a link to connection K",
         "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
-        "repair" => "covmap repair <K>                            drop links whose endpoints are no longer in their coverings",
+        "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "html" => "covmap html [-o <path>]                      render a static HTML browser",
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
@@ -128,7 +128,7 @@ PORCELAIN
   link <K> <h_A> <h_B> [<note>]       add a link to connection K
   unlink <K> <h_A> <h_B>              remove a link
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
-  repair <K>                          drop links whose endpoints are no longer in their coverings
+  prune <K>                           drop links whose endpoints are no longer in their coverings
   html [-o <path>]                    render a static HTML browser
 
 PLUMBING
@@ -1218,12 +1218,12 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-// ---- repair ---------------------------------------------------------------
+// ---- prune ----------------------------------------------------------------
 
-fn cmd_repair(args: &[String]) -> io::Result<u8> {
+fn cmd_prune(args: &[String]) -> io::Result<u8> {
     let kname = args
         .first()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "repair <connection>"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "prune <connection>"))?;
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
     let src = Covering::read(&repo, &k.source_covering)?;
@@ -1261,7 +1261,7 @@ fn cmd_repair(args: &[String]) -> io::Result<u8> {
     k.links = kept;
     k.write(&repo)?;
     println!(
-        "repair: {} link(s) dropped, {} kept",
+        "prune: {} link(s) dropped, {} kept",
         dropped,
         k.links.len()
     );

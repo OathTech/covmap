@@ -93,9 +93,9 @@ remapping, a propose-only fingerprint suggestion of its new location
 ranked by similarity. Fingerprinting shall never mutate state on its
 own. merge then split remains available as the manual fallback.
 
-## req14 — Broken-link detection and repair
+## req14 — Broken-link detection and pruning
 covmap shall identify connection links whose endpoints no longer
-resolve in their coverings and offer to drop them. An endpoint resolves
+resolve in their coverings and offer to drop (prune) them. An endpoint resolves
 by name (broken only when the named segment is deleted) or by hash
 (broken when that content no longer appears), so a content edit to a
 named segment does not, by itself, break a link.

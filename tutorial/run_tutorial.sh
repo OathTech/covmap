@@ -256,13 +256,13 @@ assert "remap left the covering unmutated for the moved file (still drifted)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'file(s) edited' )"
 
 #############################################################################
-hr "13. repair: drop a genuinely broken link  (REQ14)"
+hr "13. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
-# Demonstrate repair on a deliberately broken link: clear a segment's name,
-# which deletes that segment identity, breaking its link. Then repair drops it.
+# Demonstrate prune on a deliberately broken link: clear a segment's name,
+# which deletes that segment identity, breaking its link. Then prune drops it.
 ( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-meaning"{print $1}' )" - )
 ( cd "$WORK/spec" && run fsck --broken-links || true )
-( cd "$WORK/spec" && run repair queue_links )
+( cd "$WORK/spec" && run prune queue_links )
 ( cd "$WORK/spec" && run status main )
 
 #############################################################################

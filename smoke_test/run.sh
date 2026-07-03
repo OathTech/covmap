@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
 #   init -> cover -> split -> merge -> connect -> link -> fsck
-#   -> label -> drift after edit -> repair
+#   -> label -> drift after edit -> prune
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
 # Set KEEP=1 to preserve the workdir for inspection.
@@ -137,8 +137,8 @@ hr "status (should report drift: 1 file edited)"
 hr "fsck --broken-links (one broken: the Increment hash moved when we relabeled to 'mapped')"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ) || true
 
-hr "repair widget_links (drops links whose endpoints disappeared from a covering)"
-( cd "$WORK/spec" && "$COVMAP_BIN" repair widget_links )
+hr "prune widget_links (drops links whose endpoints disappeared from a covering)"
+( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
 
 hr "final fsck"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

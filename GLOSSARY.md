@@ -168,7 +168,7 @@ relation `κ ⊆ C_A × C_B`).
 
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
-state, healable only by relinking or dropping (`covmap repair` drops
+state, healable only by relinking or dropping (`covmap prune` drops
 broken links; `fsck` reports them). Contrast **link drift**, its
 repairable precursor. A name endpoint breaks only when the named segment
 is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
@@ -218,16 +218,14 @@ absent column (`⊥` / `None`) means the first character of the line for a
 start, and the last character (through the trailing newline) for an end;
 `(i,1)` and `(i,⊥)` name the same start boundary.
 
-**Repair** **[T][R][S]** — restoring correspondence between a covering
-(or connection) and edited files. Two distinct senses share the word:
-
-1. **Drift repair** — bringing a covering's segments back in line with
-   edited files, as a *layered fallback chain*, each layer narrowing what
-   it hands the next: a **segment name** keeps a link alive → **recut** /
-   **diff-remap** deterministically re-fit boundaries that survived in
-   place → **fingerprinting** *proposes* a relocation for what remains.
-2. **Connection repair** — the `covmap repair K` command, which drops the
-   connection's broken links (endpoints that no longer resolve).
+**Repair** **[T][R][S]** — bringing a covering's segments back in line
+with edited files (drift repair): a *layered fallback chain*, each layer
+narrowing what it hands the next — a **segment name** keeps a link alive
+→ **recut** / **diff-remap** deterministically re-fit boundaries that
+survived in place → **fingerprinting** *proposes* a relocation for what
+remains. Repair *restores*; a **broken link** whose endpoint is gone
+cannot be repaired, only dropped — that is the separate `covmap prune`
+command, deliberately named apart from repair.
 
 The drift-repair layers and their supporting concepts follow (each a
 sub-concept of **repair**).
@@ -342,10 +340,6 @@ These are notes for discussion, not defects.
   state, is this glossary's synthesis of `def:broken` +
   `endpoint_resolves` + the name/hash distinction. Worth promoting into
   the theory (and `req14`) if we agree the framing holds.
-- **`repair` is overloaded.** It names both the layered *drift* repair
-  (recut → diff-remap → fingerprint) and the `covmap repair K` command
-  that drops *broken links*. Different operations, one word — worth
-  disambiguating in the docs.
 - **Self-connection** (a covering linked to another, or the same,
   covering of one repo) is implemented and used (`reqmap`, self-map), but
   the theory frames connections as strictly between two repos `A` and

@@ -426,21 +426,21 @@ across content edits → **diff-remap** deterministically re-fits
 boundaries that survived in place → **fingerprint** proposes a relocation
 for whatever remains.
 
-## 13. Drop a genuinely broken link: `repair`  (req14)
+## 13. Drop a genuinely broken link: `prune`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
 named segment, when that segment is **deleted**. Clear a segment's name to
-simulate that, then repair:
+simulate that, then prune:
 
 ```sh
 covmap name main:@queuefull-meaning -            # clears the name
 covmap fsck --broken-links                       # queue_links  @queuefull-meaning  …
-covmap repair queue_links                        # drops the dead link
+covmap prune queue_links                         # drops the dead link
 ```
 
 ```
 broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
-repair: 1 link(s) dropped, 2 kept
+prune: 1 link(s) dropped, 2 kept
 ```
 
 ## 14. Render the HTML report  (req20)
@@ -472,7 +472,7 @@ highlighted.
 | drift: recut (named link survives) | 10 | req13, req14 |
 | drift: diff-remap | 11 | req13 |
 | drift: fingerprint proposal | 12 | req13, req14 |
-| repair | 13 | req14 |
+| prune | 13 | req14 |
 | HTML report | 14 | req20 |
 
 Not shown: connection algebra (inverse / composition / union, req11),

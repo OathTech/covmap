@@ -142,7 +142,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
 | `link <K> <h_A> <h_B> [<note>]` | Add a link. |
 | `unlink <K> <h_A> <h_B>` | Remove a link. |
-| `repair <K>` | Drop links whose endpoints have left their coverings. |
+| `prune <K>` | Drop links whose endpoints have left their coverings. |
 | `html [-o <path>]` | Render a static HTML browser. |
 
 Plumbing commands (line-oriented, stable for scripts):
@@ -211,7 +211,7 @@ covmap/
 ```
 
 Goes through init → cover → split → merge → connect → link → fsck →
-label → drift → repair on a small fixture in a temporary directory.
+label → drift → prune on a small fixture in a temporary directory.
 
 ## For agents
 

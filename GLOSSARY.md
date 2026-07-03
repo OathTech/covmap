@@ -50,12 +50,13 @@ is the "map" covmap produces. Stored separately from coverings, in the
 source repo's `.covmap/connections/<name>`. The two coverings may be in
 different repositories or the same one (even the same covering).
 
-**Connection algebra** **[T][R]** — *(defined, not yet implemented)* the
+**Connection algebra** **[T][R]** — *(recommended future direction)* the
 derived operations the model gives connections: *inverse* (`κ⁻¹`),
 *composition* (`λ ∘ κ`), and *union*. Specified in the theory and
-`req11`, but no CLI command exercises them today. A candidate for a
-future release once a concrete need appears (e.g. composing a docs→code
-map with a code→test map to derive docs→test).
+`req11`, but no CLI command exercises them today; kept as a documented
+future direction, to be implemented once a concrete workflow needs it
+(e.g. composing a docs→code map with a code→test map to derive
+docs→test).
 
 **Cover** **[T][R][S]** — the `covmap cover` operation that seeds a
 covering with one **whole-file segment** (labelled `unknown`) per
@@ -336,10 +337,6 @@ sources have drifted apart. These are notes for discussion, not defects.
 
 ### Concepts whose keep-or-cut is worth a decision
 
-- **Connection algebra.** Defined in T and `req11`, not implemented, no
-  workflow needs it yet. Elegant and plausibly useful later (composing
-  maps). Keep as a documented future direction, or drop from the
-  requirements until a use lands?
 - **Partition entropy.** Computed and printed, but nothing consumes it
   and it is hard to act on. Is a single evenness number worth a line in
   `status`, or do cardinality + granularity already say enough?

@@ -1,8 +1,10 @@
 # covmap — Requirements
 
 High-level requirements for covmap. Each captures a capability the tool
-must provide, derived from the formal model (`theory/main.tex`) and the
+provides, derived from the formal model (`theory/main.tex`) and the
 command interface (`covmap --help`). At most 20, intentionally coarse.
+All are realized today except req11 (connection algebra), which is
+explicitly kept as a recommended future direction.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -64,9 +66,14 @@ Each endpoint shall reference its segment either by name (preferred
 for mapped segments, so the link is resilient to content edits) or by
 segment hash.
 
-## req11 — Connection algebra
-Connections shall support inverse, composition, and union, so derived
-relations can be computed from existing ones.
+## req11 — Connection algebra (recommended future direction)
+The model equips connections with inverse, composition, and union
+(`theory/main.tex`, Operations), so derived relations can be computed
+from existing ones. Unlike the other requirements, this one is *not yet
+realized*: the algebra is specified in the theory but has no CLI surface.
+It is kept as a recommended future direction, to be implemented once a
+concrete workflow needs it (e.g. composing a docs→code map with a
+code→test map to derive docs→test).
 
 ## req12 — Quantitative measures
 covmap shall report covering metrics (cardinality, granularity, partition

@@ -401,7 +401,7 @@ determined; each segment is re-extracted from $N$ over its new range and
 re-hashed, keeping its name and label. A cut that falls on a changed or
 deleted line is \emph{unresolved}: the file is left untouched
 (all-or-nothing, preserving the partition invariant) and the affected
-segments are reported as residue for relocation (\S\ref{sec:fingerprint}).
+segments are reported as unresolved, for relocation (\S\ref{sec:fingerprint}).
 
 \begin{proposition}[Exactness of a successful remap]\label{prop:remap}
 If diff-remap resolves every cut of $f$, the rebuilt segments are a
@@ -445,7 +445,7 @@ Together the three layers form a fallback chain: a segment name
 (\S\ref{sec:segment-names}) keeps a link \emph{alive}; diff-remap
 (\S\ref{sec:diffremap}) deterministically re-fits boundaries that
 survived in place; fingerprinting proposes a relocation for what
-remains. Each layer narrows the residue handed to the next, and only
+remains. Each layer narrows what it hands the next, and only
 the last is probabilistic.
 
 \section{An interface for \texttt{covmap}}\label{sec:interface}
@@ -529,7 +529,7 @@ There is no segmentation rule. The interface gives the user one
       the unchanged regions, re-extracting and re-hashing content while
       preserving each segment's name and label. Per file it is
       all-or-nothing: a file whose boundaries fall in changed regions is
-      left untouched and its segments reported as residue. Absorbs
+      left untouched and its segments reported as unresolved. Absorbs
       boundary drift automatically for localized edits, so connections
       by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
 \item \texttt{covmap label $C$:$h$ $\lambda$}\\

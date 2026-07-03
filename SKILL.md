@@ -257,7 +257,7 @@ re-fits every line-aligned segment's boundaries through the unchanged
 regions — following the insertion/deletion automatically. Names (hence
 `@name` connections) are preserved, so nothing needs relinking. It is
 per-file all-or-nothing: a file whose boundaries land in changed regions
-is left untouched and its segments are listed as **unresolved** residue.
+is left untouched and its segments are listed as **unresolved**.
 After a successful remap, `status` is clean and `fsck` passes. This is
 task T6.
 

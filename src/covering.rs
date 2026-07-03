@@ -740,8 +740,8 @@ pub enum RemapError {
     CharLevel(Vec<String>),
     /// These segment boundaries fell in changed regions, so their new
     /// positions are unknown. The file is left untouched (all-or-nothing)
-    /// and these segments are the residue to relocate (e.g. by fingerprint
-    /// proposal). The whole list of the file's segments is returned for
+    /// and these segments are the unresolved ones to relocate (e.g. by
+    /// fingerprint proposal). The whole list of the file's segments is returned for
     /// reporting context.
     Unresolved(Vec<CoveringEntry>),
 }

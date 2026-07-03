@@ -246,11 +246,10 @@ diff-remap could not resolve, it ranks candidate windows in the new file
 by **similarity score** and prints them (a *fingerprint proposal*). It
 never mutates state — see **propose-only**. Sub-concept of **repair**.
 
-**Repair residue** *(also: unresolved segment)* **[T][S]** — the segments
-diff-remap cannot re-fit (boundaries fell in changed regions, or the
-segment moved). Reported per file and handed to fingerprinting. The code
-calls these *unresolved*; the theory calls them *residue*. Sub-concept of
-**repair**.
+**Unresolved segment** **[T][S]** — a segment diff-remap cannot re-fit
+(its boundaries fell in changed regions, or the segment moved). Reported
+per file and handed to fingerprinting for relocation. `status`/`recut
+--remap` count them as *unresolved*. Sub-concept of **repair**.
 
 **Similarity score** **[T][S]** — `sim(τ, w) ∈ [0,1]` between a lost
 segment's recorded content `τ` and a candidate window `w`: `1.00`
@@ -327,8 +326,6 @@ These are notes for discussion, not defects.
 
 ### Still-unreconciled vocabulary across T / R / S
 
-- **residue (T) = unresolved (S).** Folded into **Repair residue**; the
-  sources themselves still use two words.
 - **auto-heal rate (T) vs. healed / refreshed counts (S output).** Same
   quantity, described as a ratio in theory and as counts in CLI output.
 

@@ -819,7 +819,7 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
 /// every segment's boundaries through the unchanged regions, refreshing
 /// content and preserving names so connections carry forward. Per-file
 /// all-or-nothing: a file whose boundaries fall in changed regions is
-/// left untouched and its segments reported as residue. With an address
+/// left untouched and its segments reported as unresolved. With an address
 /// `<C>:<addr>` only that segment's file is remapped; otherwise every
 /// drifted file in the covering is.
 fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
@@ -845,7 +845,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
 
     let mut healed_files = 0usize;
     let mut total_refreshed = 0usize;
-    let mut residue = 0usize;
+    let mut unresolved_count = 0usize;
     // Accumulate the rebuilt entry list; replace whole files atomically.
     let mut new_entries: Vec<CoveringEntry> = Vec::with_capacity(c.entries.len());
     // Process files in covering order so the rebuilt list stays ordered.
@@ -932,7 +932,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                      line-aligned segments only; left untouched",
                     locs.join(", ")
                 );
-                residue += locs.len();
+                unresolved_count += locs.len();
                 new_entries.extend(old_entries);
             }
             Err(covering::RemapError::Unresolved(items)) => {
@@ -942,7 +942,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                      was changed):",
                     items.len()
                 );
-                residue += items.len();
+                unresolved_count += items.len();
                 for it in &items {
                     let who = it
                         .name
@@ -984,9 +984,9 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
     c.write(&repo)?;
     println!(
         "remap: {healed_files} file(s) healed, {total_refreshed} segment(s) refreshed, \
-         {residue} unresolved"
+         {unresolved_count} unresolved"
     );
-    Ok(if residue > 0 { 1 } else { 0 })
+    Ok(if unresolved_count > 0 { 1 } else { 0 })
 }
 
 // ---- merge ----------------------------------------------------------------

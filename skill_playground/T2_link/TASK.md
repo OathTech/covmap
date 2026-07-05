@@ -23,16 +23,16 @@
    heading segments (Enqueue, Dequeue, Length) by their labels.
 2. From `impl_rs/`, list segments: `covmap ls-segments`. There is
    exactly one impl segment.
-3. Add three pairs to `queue_links` with `covmap link queue_links
+3. Add three links to `queue_links` with `covmap link queue_links
    <spec_hash> <impl_hash> "<note>"` — one for each heading. The
    note should mention the corresponding Rust function.
 4. Run `covmap status` from `spec/` and confirm `0 broken` and
-   `3 pairs`.
+   `3 links`.
 
 ## Success criteria (graded)
 
-- `queue_links` has exactly 3 pairs.
-- All three pairs reference the single impl_rs hash on the right.
+- `queue_links` has exactly 3 links.
+- All three links reference the single impl_rs hash on the right.
 - `covmap fsck` passes in both directories.
 
 ## Grading

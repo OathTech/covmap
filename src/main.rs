@@ -9,6 +9,8 @@ use std::process::ExitCode;
 mod cli;
 mod connection;
 mod covering;
+mod diff;
+mod fingerprint;
 mod html;
 mod repo;
 mod segment;

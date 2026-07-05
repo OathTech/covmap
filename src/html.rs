@@ -44,36 +44,44 @@ pub fn render(repo: &Repo) -> io::Result<String> {
     }
 
     // Build segment indices for the source covering.
-    // For each segment hash in the source covering, list outgoing pairs.
+    // For each segment hash in the source covering, list outgoing links.
     let mut outgoing: BTreeMap<String, Vec<OutgoingLink>> = BTreeMap::new();
     let mut incoming: BTreeMap<(String, String), Vec<IncomingLink>> = BTreeMap::new();
     // key for incoming: (target_repo, target_hash)
     if let Some(src) = &src_cov {
-        let src_set = covering::hashes(src);
         for cv in &conn_data {
-            let tgt_set = cv
-                .tgt_cov
-                .as_ref()
-                .map(covering::hashes)
-                .unwrap_or_default();
-            for p in &cv.k.pairs {
-                let a_in = src_set.contains(&p.a);
-                let b_in = tgt_set.contains(&p.b);
-                outgoing.entry(p.a.clone()).or_default().push(OutgoingLink {
-                    conn_name: cv.k.name.clone(),
-                    target_repo: cv.k.target_repo.clone(),
-                    target_covering: cv.k.target_covering.clone(),
-                    target_hash: p.b.clone(),
-                    note: p.note.clone(),
-                    src_resolved: a_in,
-                    tgt_resolved: b_in,
-                });
+            for p in &cv.k.links {
+                // Endpoints may be `@name` segment references or bare
+                // hashes. Resolve each to the segment's *current* hash so
+                // the views (which key on hashes) stay correct after a
+                // content edit; `None` means the endpoint is broken.
+                let a_hash = covering::endpoint_to_hash(src, &p.a);
+                let b_hash = cv
+                    .tgt_cov
+                    .as_ref()
+                    .and_then(|t| covering::endpoint_to_hash(t, &p.b));
+                let a_in = a_hash.is_some();
+                let b_in = b_hash.is_some();
+                let a_key = a_hash.unwrap_or_else(|| p.a.clone());
+                let b_key = b_hash.unwrap_or_else(|| p.b.clone());
+                outgoing
+                    .entry(a_key.clone())
+                    .or_default()
+                    .push(OutgoingLink {
+                        conn_name: cv.k.name.clone(),
+                        target_repo: cv.k.target_repo.clone(),
+                        target_covering: cv.k.target_covering.clone(),
+                        target_hash: b_key.clone(),
+                        note: p.note.clone(),
+                        src_resolved: a_in,
+                        tgt_resolved: b_in,
+                    });
                 incoming
-                    .entry((cv.k.target_repo.clone(), p.b.clone()))
+                    .entry((cv.k.target_repo.clone(), b_key.clone()))
                     .or_default()
                     .push(IncomingLink {
                         conn_name: cv.k.name.clone(),
-                        source_hash: p.a.clone(),
+                        source_hash: a_key.clone(),
                         note: p.note.clone(),
                         src_resolved: a_in,
                         tgt_resolved: b_in,
@@ -90,10 +98,9 @@ pub fn render(repo: &Repo) -> io::Result<String> {
         Some(c) => {
             let st = covering::stats(c);
             format!(
-                "{} segments · {} lines · entropy {:.2} bits · {} connection(s)",
+                "{} segments · {} lines · {} connection(s)",
                 st.cardinality,
                 st.total_lines,
-                st.entropy_bits,
                 conn_data.len()
             )
         }
@@ -136,7 +143,7 @@ pub fn render(repo: &Repo) -> io::Result<String> {
                 m.entry(e.file.clone()).or_default().push(e);
             }
             for v in m.values_mut() {
-                v.sort_by_key(|e| e.a);
+                v.sort_by_key(|e| e.sort_key());
             }
             m
         }
@@ -285,10 +292,10 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
     let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     for cv in conns {
         if let Some(tc) = &cv.tgt_cov {
-            let by_pair_target: BTreeSet<&str> = cv.k.pairs.iter().map(|p| p.b.as_str()).collect();
+            let by_link_target: BTreeSet<&str> = cv.k.links.iter().map(|p| p.b.as_str()).collect();
             let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
             for e in &tc.entries {
-                if by_pair_target.contains(e.hash.as_str()) {
+                if by_link_target.contains(e.hash.as_str()) {
                     *by_file.entry(e.file.clone()).or_insert(0) += 1;
                 }
             }
@@ -306,7 +313,7 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
         s.push_str(&format!(
             "<div class=\"file\" data-target-file=\"{}\">\
                <div class=\"name\">{}</div>\
-               <div class=\"counts\">{} · {} incoming pair(s)</div>\
+               <div class=\"counts\">{} · {} incoming link(s)</div>\
              </div>",
             esc(&key),
             esc(&file),
@@ -336,7 +343,7 @@ fn render_list_view(
         return s;
     }
     for entries in by_file.values() {
-        for e in entries {
+        for (i, e) in entries.iter().enumerate() {
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
             let label = if e.label.is_empty() {
@@ -345,13 +352,14 @@ fn render_list_view(
                 &e.label
             };
             s.push_str(&format!(
-                "<div class=\"segment clickable status-{}\" data-status=\"{}\" \
+                "<div class=\"segment clickable status-{} zebra-{}\" data-status=\"{}\" \
                        data-file=\"{}\" data-hash=\"{}\" data-tip='{}'>\
                    <h3>{} <span class=\"badge {}\">{}</span></h3>\
-                   <div class=\"meta\"><code>{}</code> · {}:{}-{} · {} lines · label {}</div>\
+                   <div class=\"meta\"><code>{}</code> · {} · {} lines · label {}</div>\
                    {}\
                  </div>\n",
                 status,
+                i % 2,
                 status,
                 esc(&e.file),
                 &e.hash,
@@ -360,9 +368,7 @@ fn render_list_view(
                 status,
                 status,
                 &e.hash,
-                esc(&e.file),
-                e.a,
-                e.b,
+                esc(&e.loc()),
                 e.b - e.a + 1,
                 label_html(label),
                 links_block(&links)
@@ -377,7 +383,7 @@ fn heading_for(e: &CoveringEntry) -> String {
     if !e.label.is_empty() {
         e.label.clone()
     } else {
-        format!("{}:{}-{}", e.file, e.a, e.b)
+        e.loc()
     }
 }
 
@@ -440,15 +446,18 @@ fn render_source_view(
             esc(fname),
             esc(fname)
         ));
-        for e in entries {
+        for (i, e) in entries.iter().enumerate() {
             let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
                 .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
+            let inline = if e.is_line_aligned() { "" } else { " inline" };
             s.push_str(&format!(
-                "<span class=\"src-seg status-{}\" data-status=\"{}\" \
+                "<span class=\"src-seg status-{}{} zebra-{}\" data-status=\"{}\" \
                        data-segid=\"{}\" data-file=\"{}\" data-tip='{}'>",
                 status,
+                inline,
+                i % 2,
                 status,
                 &e.hash,
                 esc(fname),
@@ -485,10 +494,10 @@ fn render_target_view(
             by_file.entry(e.file.clone()).or_default().push(e);
         }
         for v in by_file.values_mut() {
-            v.sort_by_key(|e| e.a);
+            v.sort_by_key(|e| e.sort_key());
         }
 
-        // Only emit files that have at least one incoming pair.
+        // Only emit files that have at least one incoming link.
         let target_hashes_with_incoming: BTreeSet<&str> = incoming
             .keys()
             .filter(|(rp, _)| rp == &cv.k.target_repo)
@@ -518,7 +527,7 @@ fn render_target_view(
                 esc(&short_repo_name(&cv.k.target_repo)),
                 esc(&cv.k.target_covering)
             ));
-            for e in entries {
+            for (i, e) in entries.iter().enumerate() {
                 let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
                     .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
                 let inc = incoming
@@ -533,9 +542,13 @@ fn render_target_view(
                 } else {
                     " covered cov-linked"
                 };
+                let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
-                    "<span class=\"tgt-block{}\" data-tgt-hash=\"{}\">",
-                    cov_class, &e.hash
+                    "<span class=\"tgt-block{}{} zebra-{}\" data-tgt-hash=\"{}\">",
+                    cov_class,
+                    inline,
+                    i % 2,
+                    &e.hash
                 ));
                 s.push_str(&esc(&content));
                 if !inc.is_empty() {
@@ -567,7 +580,7 @@ fn render_target_view(
         }
     }
     if printed == 0 {
-        s.push_str("<div class=\"empty\">No target files have incoming pairs.</div>");
+        s.push_str("<div class=\"empty\">No target files have incoming links.</div>");
     }
     Ok(s)
 }
@@ -626,17 +639,20 @@ fn render_compare_view(
                 esc(fname),
                 esc(fname)
             ));
-            for e in entries {
+            for (i, e) in entries.iter().enumerate() {
                 let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
                     .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
                 let status = seg_status(outgoing, &e.hash);
                 let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
                 let link_hashes: Vec<String> =
                     links.iter().map(|l| l.target_hash.clone()).collect();
+                let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
-                    "<span class=\"cmp-seg cmp-seg-a status-{}\" data-status=\"{}\" \
+                    "<span class=\"cmp-seg cmp-seg-a status-{}{} zebra-{}\" data-status=\"{}\" \
                            data-cmp-a-hash=\"{}\" data-cmp-links=\"{}\" data-tip='{}'>",
                     status,
+                    inline,
+                    i % 2,
                     status,
                     &e.hash,
                     esc(&link_hashes.join(" ")),
@@ -665,7 +681,7 @@ fn render_compare_view(
             tgt_by_file.entry(e.file.clone()).or_default().push(e);
         }
         for v in tgt_by_file.values_mut() {
-            v.sort_by_key(|e| e.a);
+            v.sort_by_key(|e| e.sort_key());
         }
         for (fname, entries) in &tgt_by_file {
             any_b = true;
@@ -678,7 +694,7 @@ fn render_compare_view(
                 esc(&short_repo_name(&cv.k.target_repo)),
                 esc(&cv.k.target_covering)
             ));
-            for e in entries {
+            for (i, e) in entries.iter().enumerate() {
                 let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
                     .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
                 let inc = incoming
@@ -693,10 +709,13 @@ fn render_compare_view(
                 } else {
                     "linked"
                 };
+                let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
-                    "<span class=\"cmp-seg cmp-seg-b status-{}\" data-status=\"{}\" \
+                    "<span class=\"cmp-seg cmp-seg-b status-{}{} zebra-{}\" data-status=\"{}\" \
                            data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\">",
                     status,
+                    inline,
+                    i % 2,
                     status,
                     &e.hash,
                     esc(&back_hashes.join(" "))
@@ -804,10 +823,7 @@ fn cmp_file_item(
 fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
     let mut s = String::from("{");
     s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
-    s.push_str(&format!(
-        "\"loc\":\"{}\",",
-        json_escape(&format!("{}:{}-{}", e.file, e.a, e.b))
-    ));
+    s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
     s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
     let status = if links.is_empty() {
         "unlinked"
@@ -936,6 +952,13 @@ section { padding: 1.5rem; overflow-y: auto; }
   display: block; border-left: 4px solid transparent; padding: 0.15rem 0.4rem 0.15rem 0.6rem;
   margin: 0.35rem -1rem 0.35rem -1rem; position: relative; cursor: help;
 }
+/* Character-level fragments flow inline so adjacent chunks share the
+   same source line; the real newlines in the content (under pre-wrap)
+   do the line breaking. The highlight hugs just those characters. */
+.src-seg.inline {
+  display: inline; border-left: none; padding: 0.05em 0.1em;
+  margin: 0; border-radius: 3px; box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
 .src-seg:hover { filter: brightness(0.97); }
 .src-seg.status-linked   { background: rgba(34, 197, 94, 0.12); border-left-color: var(--c-linked); }
 .src-seg.status-unlinked { background: rgba(203, 213, 225, 0.25); border-left-color: var(--c-unlinked); }
@@ -975,6 +998,10 @@ section { padding: 1.5rem; overflow-y: auto; }
   background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.75rem 1rem;
 }
 .tgt-block { display: block; padding: 0.15rem 0.4rem; margin: 0.2rem -0.4rem; border-left: 4px solid transparent; }
+.tgt-block.inline {
+  display: inline; border-left: none; padding: 0.05em 0.1em; margin: 0; border-radius: 3px;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
 .tgt-block.covered.cov-linked { background: rgba(34, 197, 94, 0.12); border-left-color: var(--c-linked); }
 .tgt-block.covered.cov-broken { background: rgba(239, 68, 68, 0.14); border-left-color: var(--c-broken); }
 .tgt-block.flash { animation: flash 1.6s ease-out; }
@@ -1028,12 +1055,30 @@ main.compare-active { grid-template-columns: 1fr; }
   display: block; border-left: 4px solid transparent; padding: 0.12rem 0.35rem 0.12rem 0.5rem;
   margin: 0.3rem -0.8rem; cursor: pointer; position: relative;
 }
+.cmp-seg.inline {
+  display: inline; border-left: none; padding: 0.05em 0.1em; margin: 0; border-radius: 3px;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
 .cmp-seg.status-linked   { background: rgba(34, 197, 94, 0.12); border-left-color: var(--c-linked); }
 .cmp-seg.status-unlinked { background: rgba(203, 213, 225, 0.25); border-left-color: var(--c-unlinked); }
 .cmp-seg.status-broken   { background: rgba(239, 68, 68, 0.14); border-left-color: var(--c-broken); }
 .cmp-seg.dimmed { opacity: 0.28; }
 .cmp-seg.cmp-hot { box-shadow: 0 0 0 2px #3b82f6 inset; }
 .cmp-seg.flash  { animation: flash 1.6s ease-out; }
+
+/* Zebra shading: alternate chunks get a faint neutral darken, so two
+   contiguous chunks of the same status still show a visible seam. The
+   darken is a translucent background-image layered ON TOP of each
+   chunk's status background-color, so it composes with the linked /
+   broken / unlinked tints instead of replacing them — and it never
+   touches box-shadow, leaving the hover frame and flash untouched.
+   `zebra-0` chunks are left untouched; only the odd ones darken. */
+.segment.zebra-1,
+.src-seg.zebra-1,
+.tgt-block.zebra-1,
+.cmp-seg.zebra-1 {
+  background-image: linear-gradient(rgba(15, 23, 42, 0.16), rgba(15, 23, 42, 0.16));
+}
 </style>
 </head>
 <body>

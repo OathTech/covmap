@@ -5,16 +5,25 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
 
 ## Tasks
 
-- **T1_bootstrap** — initialize covmap on two unconfigured directories.
-- **T2_link** — bootstrap is done; link spec headings to an
+- **T1_initial_cover** — initialize covmap on two unconfigured
+  directories and take the initial cover of each.
+- **T2_link** — the initial cover is done; link spec headings to an
   implementation segment.
-- **T3_drift_repair** — a spec edit broke one connection pair; recover
+- **T3_drift_repair** — a spec edit broke one connection link; recover
   the covering and re-link it.
+- **T4_char_split** — isolate one inline clause with a character-level
+  split (`split <C>:<h> <line>:<col>`), then link it.
+- **T5_name_stable** — a named, linked segment survives an in-place byte
+  edit: `recut` refreshes it with no broken link and no relinking.
+- **T6_diff_remap** — an insertion moves section boundaries;
+  `recut --remap` re-fits every segment automatically, links preserved.
+- **T7_fingerprint** — a section is moved elsewhere; `recut --remap`
+  can't place it and prints a propose-only fingerprint relocation guess.
 
 ## Running a task
 
 ```bash
-./run_task.sh T1_bootstrap
+./run_task.sh T1_initial_cover
 ```
 
 Each run instantiates a fresh workspace under `_runs/<task>/<ts>/`,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap, refine, link all three headings, then drift the spec.
+# Cover, refine, link all three headings, then drift the spec.
 set -euo pipefail
 
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null

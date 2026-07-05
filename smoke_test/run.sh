@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
 #   init -> cover -> split -> merge -> connect -> link -> fsck
-#   -> label -> drift after edit -> repair
+#   -> label -> drift after edit -> prune
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
 # Set KEEP=1 to preserve the workdir for inspection.
@@ -57,10 +57,18 @@ split_at() {
   local cwd="$1" line="$2" lt="$3" lb="$4"
   local h
   # find the hash whose [a,b] range contains <line>
+  # $3 is "file:a..b" where a/b are line numbers (line-level segments
+  # have no ":col"). Parse the file before the first ':' and the line
+  # range around "..".
   h=$( cd "$cwd" && "$COVMAP_BIN" ls -l | awk -F'\t' -v l="$line" '
     {
-      split($3, fr, /[: -]/)
-      file=fr[1]; a=fr[2]; b=fr[3]
+      loc=$3
+      ci=index(loc, ":")
+      file=substr(loc, 1, ci-1)
+      range=substr(loc, ci+1)
+      di=index(range, "..")
+      a=substr(range, 1, di-1) + 0
+      b=substr(range, di+2) + 0
       if (file=="widget.md" && a<=l && l<=b) { print $1; exit }
     }')
   ( cd "$cwd" && "$COVMAP_BIN" split "main:$h" "$line" "$lt" "$lb" )
@@ -126,11 +134,11 @@ PY
 hr "status (should report drift: 1 file edited)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
-hr "fsck --broken-pairs (one broken: the Increment hash moved when we relabeled to 'mapped')"
-( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-pairs ) || true
+hr "fsck --broken-links (one broken: the Increment hash moved when we relabeled to 'mapped')"
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ) || true
 
-hr "repair widget_links (drops pairs whose endpoints disappeared from a covering)"
-( cd "$WORK/spec" && "$COVMAP_BIN" repair widget_links )
+hr "prune widget_links (drops links whose endpoints disappeared from a covering)"
+( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
 
 hr "final fsck"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

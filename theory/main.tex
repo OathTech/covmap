@@ -26,14 +26,14 @@
 \maketitle
 
 \begin{abstract}
-\texttt{covmap} links two repositories $A$ and $B$ by partitioning each
-into content-addressed \emph{segments} and relating those segments
-across repositories. This note gives precise, minimal definitions of
+\texttt{covmap} links two repositories $A$ and $B$ (possibly the same
+one) by partitioning each into content-addressed \emph{segments} and
+relating those segments across repositories. This note gives precise, minimal definitions of
 repositories, segments, coverings, sharing of segments across
 coverings, and connections, then describes the command interface that
 realizes them. The implementation deliberately ships no segmentation
 \emph{rule}: every covering is built up by hand, segment by segment,
-from a single whole-file bootstrap.
+from a single whole-file \texttt{cover}.
 \end{abstract}
 
 \tableofcontents
@@ -44,41 +44,60 @@ from a single whole-file bootstrap.
 
 \begin{definition}[Repository]\label{def:repo}
 A \emph{repository} $A$ is a finite set of files, each a finite
-sequence of lines. We write $|f|_A$ for the number of lines of file
-$f$ in $A$, and $\mathrm{content}_A(f, i)$ for the text of line $i$ of
-file $f$. \texttt{covmap} considers only files whose bytes are valid
-UTF-8; other files are skipped on bootstrap and never appear in any
-covering.
+sequence of lines, each line a finite sequence of characters (Unicode
+scalar values, the trailing newline counted as the line's last
+character when present). We write $|f|_A$ for the number of lines of
+file $f$ in $A$, $\mathrm{content}_A(f, i)$ for the text of line $i$
+of file $f$, and $|f, i|_A$ for the number of characters of that line.
+\texttt{covmap} considers only files whose bytes are valid UTF-8;
+other files are skipped by \texttt{cover} and never appear in any covering.
 \end{definition}
 
-\subsection{Segments}
+\subsection{Positions and segments}
 
-A segment is a contiguous range of lines inside a single file.
+A segment is a contiguous range of \emph{characters} inside a single
+file, delimited by two positions.
+
+\begin{definition}[Position]\label{def:position}
+A \emph{position} in file $f$ is a pair $p = (i, c)$ of a line index
+$i$ with $1 \le i \le |f|_A$ and an optional column $c$, written
+$c = \bot$ when absent. Columns are 1-indexed characters within the
+line. A start position with $c = \bot$ denotes the first character of
+line $i$ (equivalently $c = 1$); an end position with $c = \bot$
+denotes the last character of line $i$ (its trailing newline, when
+present). The character offset of a non-$\bot$ start position is taken
+inclusively, so $(i, 1)$ and $(i, \bot)$ name the same boundary.
+\end{definition}
 
 \begin{definition}[Segment]\label{def:segment}
-Fix a set of \emph{labels} $L$. A \emph{segment} of $A$ is a
-quadruple $s = (f, a, b, \lambda)$ where $f$ is a file of $A$,
-$1 \le a \le b \le |f|_A$, and $\lambda \in L$. Its \emph{lines} are
-\[
-  \mathrm{lines}(s) \;=\; \{(f, i) \mid a \le i \le b\},
-\]
-its \emph{content} is the concatenation
-\[
-  \mathrm{content}_A(s)
-  \;=\;
-  \mathrm{content}_A(f, a) \;\Vert\;
-  \mathrm{content}_A(f, a+1) \;\Vert\;
-  \cdots \;\Vert\;
-  \mathrm{content}_A(f, b),
-\]
-and its \emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash
-function $h$ and define the \emph{content hash} of $s$ as
+Fix a set of \emph{labels} $L$. A \emph{segment} of $A$ is a tuple
+$s = (f, a, a_c, b, b_c, \lambda)$ where $f$ is a file of $A$, the
+start position $(a, a_c)$ does not lie after the end position
+$(b, b_c)$ within $f$, both lie within $f$, and $\lambda \in L$. Its
+\emph{content} $\mathrm{content}_A(s)$ is the substring of $f$ running
+from the start character through the end character inclusive: when
+$a = b$ it is characters $a_c$ through $b_c$ of line $a$; otherwise it
+is the suffix of line $a$ from $a_c$, followed by lines $a+1, \dots,
+b-1$ in full, followed by the prefix of line $b$ through $b_c$. Its
+\emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash function
+$h$ and define the \emph{segment hash} of $s$ as
 \[
   \hash(s) \;=\; \mathrm{trunc}_{16}\bigl(h\bigl(\lambda \;\Vert\; \texttt{NUL} \;\Vert\; \mathrm{content}_A(s)\bigr)\bigr),
 \]
 the first 16 hex characters (64 bits) of the SHA-256 of the labelled
 content. The truncated hash is the segment's identity.
 \end{definition}
+
+\begin{remark}[Line-level segments]\label{rem:line-level}
+The common case takes $a_c = b_c = \bot$, recovering the line-range
+segment $(f, a, b, \lambda)$ with
+$\mathrm{content}_A(s) = \mathrm{content}_A(f,a) \Vert \cdots \Vert
+\mathrm{content}_A(f,b)$. Character columns are an optional
+refinement: \texttt{covmap cover} creates every segment at line
+granularity, and on disk a boundary records its column only when it is
+not $\bot$, so the format is backward compatible with line-only
+coverings.
+\end{remark}
 
 \begin{remark}[Why 64-bit identity]
 With $n$ segments in play, the birthday-bound collision probability
@@ -89,16 +108,21 @@ display and storage compared to full SHA-256 is significant.
 
 The label is part of identity: two segments with identical content
 but different labels have different hashes and are therefore
-distinguishable as endpoints of a connection. \texttt{covmap}
-bootstraps every segment with the label \texttt{unknown}; typical
+distinguishable as endpoints of a connection. \texttt{covmap cover}
+labels every segment \texttt{unknown}; typical
 re-labels include \emph{ignored}, \emph{reviewed}, and \emph{mapped},
 used to record per-segment status while preserving content-based
 sharing among segments that agree in both content and label.
 
-Two segments $s_1 = (f, a_1, b_1, \lambda_1)$ and
-$s_2 = (f, a_2, b_2, \lambda_2)$ in the same file are
-\emph{adjacent} if $b_1 + 1 = a_2$, and they \emph{overlap} if their
-line ranges intersect (regardless of label).
+Let the \emph{successor} of an end position $(b, b_c)$ be the next
+character position: $(b+1, \bot)$ when $b_c = \bot$ (the end ran
+through the newline, so the next character is the start of line
+$b+1$), and $(b, b_c + 1)$ otherwise. Two segments $s_1, s_2$ in the
+same file are \emph{adjacent} if the successor of $s_1$'s end equals
+$s_2$'s start (treating $(i,1)$ and $(i,\bot)$ as equal), and they
+\emph{overlap} if their character ranges intersect (regardless of
+label). At line granularity ($a_c = b_c = \bot$) adjacency reduces to
+$b_1 + 1 = a_2$.
 
 \subsection{Coverings}
 
@@ -106,11 +130,11 @@ line ranges intersect (regardless of label).
 Let $F \subseteq \mathrm{files}(A)$. A \emph{covering of $A$ on $F$}
 is a finite set of segments $\Cov = \{s_1, \dots, s_n\}$ such that,
 for every file $f \in F$, the segments of $\Cov$ that lie in $f$ form
-a partition of $f$ into contiguous blocks:
+a partition of $f$ into contiguous segments:
 \begin{enumerate}[label=(C\arabic*),leftmargin=2.5em]
 \item \textbf{Disjointness:} no two segments of $\Cov$ overlap;
-\item \textbf{Completeness:} every line $(f, i)$ with $f \in F$ and
-      $1 \le i \le |f|_A$ lies in some segment of $\Cov$;
+\item \textbf{Completeness:} every character of every file $f \in F$
+      lies in some segment of $\Cov$;
 \item \textbf{Confinement:} every segment of $\Cov$ lies in some
       file of $F$.
 \end{enumerate}
@@ -119,23 +143,28 @@ We call $F = F(\Cov)$ the \emph{covered set} of $\Cov$.
 
 A covering need not partition the whole repository. It declares which
 files it accepts responsibility for. New files appearing in $A$ are
-covered by re-running the bootstrap on $\Cov$ (\S\ref{sec:bootstrap}),
+covered by re-running \texttt{cover} on $\Cov$ (\S\ref{sec:initial-cover}),
 which is additive and never disturbs existing segments.
 
 Equivalently, for each file $f \in F$ a covering supplies a sequence
-of cut points $1 = c_0 < c_1 < \cdots < c_{k_f} = |f|_A + 1$ together
-with a label $\lambda_j \in L$ for each block, and the segments in
-$f$ are $(f, c_{j-1}, c_j - 1, \lambda_j)$.
+of cut \emph{positions} $p_0 \prec p_1 \prec \cdots \prec p_{k_f}$,
+where $p_0$ is the start of the file, $p_{k_f}$ is one past its last
+character, $\prec$ is the within-file character order, and each
+$p_{j}$ is the start of segment $j+1$ as well as the successor of the
+end of segment $j$; together with a label $\lambda_j \in L$ per segment.
+When every cut falls on a line boundary this is the line-level
+covering with cut points $1 = c_0 < \cdots < c_{k_f} = |f|_A + 1$ and
+segments $(f, c_{j-1}, c_j - 1, \lambda_j)$.
 
-\begin{proposition}[Block lookup]\label{prop:lookup}
-For any covering $\Cov$ and any line $(f, i)$ of $A$ with
-$f \in F(\Cov)$, exactly one segment of $\Cov$ contains $(f, i)$.
+\begin{proposition}[Segment lookup]\label{prop:lookup}
+For any covering $\Cov$ and any character of $A$ in a file
+$f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
 \end{proposition}
 
 \subsection{Multiple coverings and sharing}\label{sec:sharing}
 
 A repository may carry several coverings simultaneously. Different
-coverings often agree on some blocks. Because identity is
+coverings often agree on some segments. Because identity is
 content-addressed, agreement is automatic: two coverings $\Cov_1$ and
 $\Cov_2$ \emph{share} a segment $s$ exactly when $s \in \Cov_1$,
 $s \in \Cov_2$, and $\hash(s)$ is the same in both.
@@ -162,19 +191,68 @@ This graph is acyclic, and a segment that belongs to several
 coverings is represented exactly once.
 \end{proposition}
 
+\subsection{Segment names}\label{sec:segment-names}
+
+Content-addressing makes identity coincide with content: editing a
+segment's bytes changes its hash, hence its identity. That is exactly
+what makes sharing (\S\ref{sec:sharing}) and drift detection
+(\S\ref{sec:complexity}) automatic, but it also means anything that
+points \emph{at} a segment by hash is invalidated by any edit. To let a
+reference survive content edits, we add a second, optional identity
+axis.
+
+\begin{definition}[Segment name]\label{def:segment-name}
+Fix a set of \emph{names} $\mathcal{N}$. A covering may assign to some
+of its segments a \emph{name} $\nu \in \mathcal{N}$, injectively: no two
+segments of one covering share a name. A segment carrying a name is
+\emph{named}; a segment without one is \emph{anonymous}. The name is
+covering-local metadata: it is \emph{not} an input to $\hash$, so
+naming, relabelling, or recutting a segment leaves the shared object
+store (\S\ref{sec:sharing}) untouched.
+\end{definition}
+
+Identity is thus two-level: the \emph{hash identity} of a segment is its
+segment hash $\hash(s)$ (immutable, shared); the \emph{name identity} of
+a named segment is its name $\nu$ (stable across content edits, local to
+one covering). A reference may name a segment by either axis.
+
+\begin{definition}[Endpoint resolution]\label{def:endpoint}
+An \emph{endpoint} into a covering $\Cov$ is either a name $\nu$ or a
+hash $h$. A name endpoint $\nu$ \emph{resolves} iff some segment of
+$\Cov$ carries the name $\nu$, and then denotes that segment's current
+hash; a hash endpoint $h$ resolves iff some segment of $\Cov$ has
+$\hash(s) = h$. A name endpoint therefore continues to resolve after an
+edit that changes the named segment's bytes, whereas a hash endpoint
+does not.
+\end{definition}
+
+Operations propagate names as follows: \texttt{split} keeps the name on
+the top segment and leaves the bottom anonymous; \texttt{merge} keeps
+the single surviving name (the earlier segment's if both are named);
+\texttt{recut} and \texttt{label} preserve the name. A first-class
+\texttt{name} operation sets, renames, or clears a name.
+
 \section{Connections}\label{sec:conn}
 
 \begin{definition}[Connection]\label{def:connection}
 Let $\Cov^A$ be a covering of $A$ and $\Cov^B$ a covering of $B$. A
 \emph{connection} from $\Cov^A$ to $\Cov^B$ is a relation
 \[
-  \kappa \;\subseteq\; \Cov^A \times \Cov^B.
+  \kappa \;\subseteq\; \Cov^A \times \Cov^B,
 \]
+whose elements are called \emph{links}. Each link $(s, t)$ is recorded
+by two \emph{endpoints} (Definition~\ref{def:endpoint}): a name when the
+segment is named (so the link survives edits to that segment's content),
+otherwise a segment hash.
 \end{definition}
 
-A pair $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
+A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
 to segment $t$ of $B$. Connections are stored separately from
-coverings and refer to their endpoints by hash.
+coverings and refer to their endpoints by hash. Note that nothing
+requires $A$ and $B$ to be distinct: they may be the same repository, and
+$\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
+also relate a repository to itself (e.g. a docs-to-code map, or a
+duplication audit within one tree).
 
 \begin{definition}[Coverage]\label{def:coverage}
 The \emph{source coverage} of $\kappa$ is
@@ -201,13 +279,28 @@ Connections support
 \end{itemize}
 \end{definition}
 
+\begin{remark}[Not yet realized]
+These operations are part of the model but are not exposed on the command
+interface (\S\ref{sec:interface}); \texttt{req11} keeps them as a
+recommended future direction, to be implemented once a concrete workflow
+(e.g. composing a docs-to-code map with a code-to-test map) calls for
+them.
+\end{remark}
+
 \section{Complexity of a covering}\label{sec:complexity}
 
 A covering can be characterized by several quantitative measures.
 
-Let $\ell(s) = b - a + 1$ be the \emph{length} of a segment
-$s = (f, a, b)$, and let $N_\Cov = \sum_{s \in \Cov} \ell(s)$ be the
-total number of covered lines.
+Let $\ell(s) = b - a + 1$ be the \emph{length} of a segment, measured
+in lines spanned (a character-level segment within one line has
+$\ell = 1$), and let $N_\Cov = \sum_{s \in \Cov} \ell(s)$ be the total
+span of the covering. For a line-aligned covering this is exactly the
+number of covered lines; in general it is the \emph{sum of segment
+line-spans}, so a line hosting several character-level segments is
+counted once per segment. The complexity measures below are defined in
+terms of this line-span length; a character-level cut therefore
+increases both cardinality and $N_\Cov$ (it adds a segment of span
+$\ell \ge 1$).
 
 \subsection{Cardinality and granularity}
 
@@ -219,8 +312,12 @@ The \emph{cardinality} of $\Cov$ is $|\Cov|$, and its
 \]
 \end{definition}
 
-A bootstrap covering (one segment per covered file) has $g$ close to
-$0$; the one-line-per-segment covering has $g = 1$.
+The range holds because every $\ell(s) \ge 1$, so
+$N_\Cov = \sum_s \ell(s) \ge |\Cov|$; the bound $g = 1$ is reached exactly
+when every segment has $\ell(s) = 1$. The initial cover (one segment per
+covered file) has $g$ close to $0$; the one-line-per-segment covering has
+$g = 1$. Character-level cuts push $g$ back below $1$, since they add
+segments while each still contributes $\ell \ge 1$ to $N_\Cov$.
 
 \subsection{Partition entropy}
 
@@ -231,20 +328,24 @@ Let $p_\Cov(s) = \ell(s)/N_\Cov$. The \emph{entropy} of $\Cov$ is
 \]
 \end{definition}
 
-Entropy ranges from $0$ (a single block covering one one-line file)
-to $\log_2 N_\Cov$ (one block per line). Coverings with equal-length
-blocks maximize entropy at fixed cardinality.
+Entropy ranges from $0$ (a single segment covering one one-line file)
+to $\log_2 N_\Cov$ (one segment per line). Coverings with equal-length
+segments maximize entropy at fixed cardinality. It is a defined measure
+of a covering, but \texttt{covmap} does not surface it in any command
+output (it is not actionable on its own); \texttt{status} reports
+cardinality and line count.
 
 \subsection{Edit stability and drift}
 
 A covering exists to be reused after the repository is edited. We
 measure how stable a covering is under edits.
 
-\begin{definition}[File-level drift]\label{def:drift-file}
+\begin{definition}[Segment drift]\label{def:segment-drift}
 Let $\Cov$ be a covering of $A$ and let $A'$ be a repository obtained
-from $A$ by an edit. A file $f \in F(\Cov)$ is \emph{drifted} under
-this edit when at least one segment $s = (f, a, b, \lambda) \in \Cov$
-satisfies $\mathrm{content}_{A'}(s) \neq \mathrm{content}_A(s)$.
+from $A$ by an edit. A segment $s = (f, a, b, \lambda) \in \Cov$ is
+\emph{drifted} under this edit when
+$\mathrm{content}_{A'}(s) \neq \mathrm{content}_A(s)$; a file
+$f \in F(\Cov)$ is \emph{drifted} when it contains a drifted segment.
 \end{definition}
 
 \begin{definition}[Boundary drift]\label{def:drift-bound}
@@ -253,20 +354,127 @@ $\Cov$ in $f$ has $b > |f|_{A'}$, i.e., the recorded line range no
 longer fits the file.
 \end{definition}
 
-The two flavours of drift correspond to two repair operations
-(\S\ref{sec:interface}): \texttt{recut} for file-level drift with
-intact boundaries, \texttt{merge} + \texttt{split} for boundary
-drift.
+Each flavour of drift has a repair, developed in
+\S\ref{sec:diffremap}--\S\ref{sec:fingerprint}: \texttt{recut} refreshes a
+segment whose line boundaries are still intact (segment drift), while
+boundary drift is absorbed automatically by \emph{diff-remap}
+(\S\ref{sec:diffremap}) wherever the surrounding lines survived, with
+manual \texttt{merge} + \texttt{split} as the fallback. A segment that
+moved or was rewritten beyond remapping is relocated by a
+\emph{fingerprint} proposal (\S\ref{sec:fingerprint}). Together these
+form a layered fallback chain (\S\ref{sec:fingerprint}).
 
-\begin{definition}[Broken pair]\label{def:broken}
-A pair $(s, t) \in \kappa$ is \emph{broken} relative to current
-$\Cov^A$ and $\Cov^B$ when $\hash(s) \notin \hash(\Cov^A)$ or
-$\hash(t) \notin \hash(\Cov^B)$.
+\begin{definition}[Broken link]\label{def:broken}
+A link $(s, t) \in \kappa$ is \emph{broken} relative to current
+$\Cov^A$ and $\Cov^B$ when its $A$-endpoint or its $B$-endpoint fails
+to resolve (Definition~\ref{def:endpoint}). For a \emph{hash} endpoint this means
+the hash is no longer present in its covering; for a \emph{name}
+endpoint it means no segment carries that name any longer.
 \end{definition}
 
-A pair becomes broken precisely when its endpoint is rewritten
-(\texttt{recut}, \texttt{label}, \texttt{split}, \texttt{merge}) or
-removed.
+The two identity axes give two breakage regimes. A link recorded by
+hash breaks as soon as its endpoint is rewritten (\texttt{recut},
+\texttt{label}, \texttt{split}, \texttt{merge}) or removed — i.e. on
+any content edit to the endpoint. A link recorded by name breaks
+\emph{only} when the named segment is deleted; an edit that changes the
+segment's bytes (followed by \texttt{recut}) leaves the name, hence
+the link, intact. Naming the segments one intends to map therefore
+shrinks ``broken'' from the routine outcome of any edit to the rare
+outcome of a genuine structural deletion.
+
+\begin{definition}[Link drift]\label{def:link-drift}
+A link is \emph{drifted} when it still resolves
+(Definition~\ref{def:endpoint}) but an endpoint denotes a segment that has
+drifted (Definition~\ref{def:segment-drift}): its content changed, yet the
+segment still exists. Re-synchronizing the segment (\texttt{recut} or
+diff-remap) carries the drifted link forward untouched.
+\end{definition}
+
+A named link therefore passes through a repairable middle state:
+$\textsc{in-sync} \to \textsc{drifted} \to \textsc{broken}$, drifting when
+its segment's bytes change and breaking only if that segment is later
+deleted. A hash-recorded link has no such middle state — its identity
+\emph{is} the content, so a content edit takes it straight
+$\textsc{in-sync} \to \textsc{broken}$. Drift is thus the repairable
+precursor of breakage, available precisely to links carried by name.
+
+\subsection{Diff-remap}\label{sec:diffremap}
+
+Names keep a connection \emph{alive} across an edit, but they do not by
+themselves say where the segment's boundaries now lie: an insertion
+above a segment shifts its line range even though its name and content
+are unchanged. \emph{Diff-remap} recovers the new boundaries
+deterministically using the fact that a covering reconstructs its
+pre-edit file exactly (\S\ref{sec:cov}).
+
+\begin{definition}[Line map]\label{def:linemap}
+For files $O$ and $N$ given as line sequences, a \emph{line map} is a
+monotone partial injection $\mu$ from line indices of $O$ to line
+indices of $N$ such that $\mu(i) = j$ only if line $i$ of $O$ equals
+line $j$ of $N$. \texttt{covmap} computes one by trimming the common
+prefix and suffix and running a longest-common-subsequence match on the
+residual middle.
+\end{definition}
+
+Let $\Cov$ restricted to a file $f$ be the line-aligned cut sequence
+$1 = c_0 < c_1 < \cdots < c_k = |f|_O + 1$. Diff-remap reconstructs
+$O$ from $\Cov$, computes the line map $\mu$ for $O \to N$, and sends
+each interior cut $c_j$ to $\mu(c_j)$. If every interior cut lies in the
+domain of $\mu$ (i.e. on a preserved line) the new cut sequence is
+determined; each segment is re-extracted from $N$ over its new range and
+re-hashed, keeping its name and label. A cut that falls on a changed or
+deleted line is \emph{unresolved}: the file is left untouched
+(all-or-nothing, preserving the partition invariant) and the affected
+segments are reported as unresolved, for relocation (\S\ref{sec:fingerprint}).
+
+\begin{proposition}[Exactness of a successful remap]\label{prop:remap}
+If diff-remap resolves every cut of $f$, the rebuilt segments are a
+valid covering of $N$ on $f$: they partition $f$ in $N$, and their
+concatenation reproduces $N$ byte-for-byte.
+\end{proposition}
+
+The auto-heal rate is the fraction of cuts lying in unchanged regions,
+which approaches $1$ as the edit becomes more localized. This rate is an
+analytical characterization of diff-remap's behavior; \texttt{covmap}
+does not print it, reporting instead the operational outcome of a run
+(files healed and segments refreshed, with any unresolved segments
+counted). Diff-remap is restricted to line-aligned segments; a covering
+with character-level cuts in $f$ falls back to manual
+\texttt{merge}/\texttt{split} for that file.
+
+\subsection{Fingerprinting}\label{sec:fingerprint}
+
+Diff-remap leaves a segment unresolved when its boundaries were rewritten
+or the segment was \emph{moved} (a diff sees a deletion at the old site
+and an unrelated insertion at the new one, not a move). The segment's
+content still exists somewhere in $N$, so the residual task is one of
+\emph{relocation by similarity} rather than position arithmetic.
+
+\begin{definition}[Similarity, proposal]\label{def:fingerprint}
+For the unresolved segment's recorded content $\tau$ and a candidate line
+window $w$ of $N$, define a score $\mathrm{sim}(\tau, w) \in [0,1]$:
+$1$ if $w = \tau$ verbatim; near-$1$ if they agree after normalization
+(lowercasing and whitespace collapse); otherwise the Jaccard overlap of
+their word-trigram shingle sets. A \emph{proposal} is the
+highest-scoring window (over widths near $\tau$'s line count), reported
+with its score when the score meets a threshold $\theta$.
+\end{definition}
+
+Fingerprinting is strictly \emph{propose-only}: it ranks candidates and
+prints them, but never edits a covering or a connection. A score is a
+likelihood, not a proof — repeated boilerplate yields false positives,
+a heavy rewrite yields false negatives — so adjudication is left to the
+user or agent, who confirms the top candidate (often cheaply, e.g. an
+agent re-reading those lines) before relinking. The threshold $\theta$
+trades recall against noise: lower surfaces more (and weaker) guesses,
+higher suppresses all but near-certain matches.
+
+Together the three layers form a fallback chain: a segment name
+(\S\ref{sec:segment-names}) keeps a link \emph{alive}; diff-remap
+(\S\ref{sec:diffremap}) deterministically re-fits boundaries that
+survived in place; fingerprinting proposes a relocation for what
+remains. Each layer narrows what it hands the next, and only
+the last is probabilistic.
 
 \section{An interface for \texttt{covmap}}\label{sec:interface}
 
@@ -284,7 +492,7 @@ directory:
   ignore              optional gitignore-lite patterns
   objects/<hh>/<rest> segments, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
-  connections/<name>  one file per connection (metadata + pairs)
+  connections/<name>  one file per connection (metadata + links)
 \end{verbatim}
 
 \subsection{Addressing}
@@ -296,6 +504,7 @@ throughout the interface and can be mixed freely.
 \hspace{4.2cm}\=\kill
 \texttt{<hash>}            \> a segment, by full or short hex prefix\\
 \texttt{$C$:$h$}           \> a segment $h$ in covering $C$\\
+\texttt{$C$:@$\nu$}        \> the segment named $\nu$ in covering $C$\\
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
@@ -303,12 +512,14 @@ A bare \texttt{$h$} is short for \texttt{HEAD:$h$}. Where a covering
 is expected, the literal \texttt{HEAD} resolves to the default
 covering recorded in \texttt{.covmap/HEAD}. Hash prefixes follow
 \texttt{git}-style disambiguation: any unique prefix works,
-ambiguity is an error.
+ambiguity is an error. An \texttt{@$\nu$} address selects a segment by
+its name; connection endpoints store \texttt{@$\nu$} for named segments
+so that links survive content edits.
 
-\subsection{Bootstrap and refinement}\label{sec:bootstrap}
+\subsection{Initial cover and refinement}\label{sec:initial-cover}
 
 There is no segmentation rule. The interface gives the user one
-bootstrap operation and two refinement operations.
+\texttt{cover} operation and two refinement operations.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap init}\\
@@ -319,10 +530,16 @@ bootstrap operation and two refinement operations.
       \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
       adds segments only for new files. Existing segments are never
       touched, so any user-driven refinement is preserved.
-\item \texttt{covmap split $C$:$h$ $c$ [$\lambda_t$] [$\lambda_b$]}\\
-      Replace the segment with hash $h$ by two adjacent segments
-      $(f, a, c-1, \lambda_t)$ and $(f, c, b, \lambda_b)$, where
-      $a \le c \le b$ and $a < c$. Both new labels default to
+\item \texttt{covmap split $C$:$h$ $\ell$\texttt{[:}$k$\texttt{]} [$\lambda_t$] [$\lambda_b$]}\\
+      Cut the segment with hash $h$ at the position $(\ell, k)$, which
+      becomes the first character of the bottom segment; the top segment
+      ends at the immediately preceding character. With the column
+      omitted, the cut is the line boundary $(\ell, \bot)$, recovering
+      the line-level split into $(f, a, \ell-1, \lambda_t)$ and
+      $(f, \ell, b, \lambda_b)$. The cut must leave both segments
+      non-empty. The split is computed on the stored content, so
+      $\mathrm{content}(\text{top}) \Vert \mathrm{content}(\text{bot})
+      = \mathrm{content}(s)$ exactly. Both new labels default to
       \texttt{unknown}.
 \item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
@@ -331,27 +548,46 @@ bootstrap operation and two refinement operations.
       Refresh the segment's hash from current disk bytes. Keeps
       $(f, a, b, \lambda)$; rewrites the content from the file as it
       is now. Errors if the segment no longer fits the file (boundary
-      drift); use \texttt{merge}+\texttt{split} in that case.
+      drift); use \texttt{recut --remap} or \texttt{merge}+\texttt{split}
+      in that case.
+\item \texttt{covmap recut --remap [$C$[:$a$]]}\\
+      \emph{Diff-remap} (\S\ref{sec:diffremap}). Reconstruct each
+      covered file $O$ from the covering, diff it against the bytes $N$
+      on disk, and carry every line-aligned segment's boundaries through
+      the unchanged regions, re-extracting and re-hashing content while
+      preserving each segment's name and label. Per file it is
+      all-or-nothing: a file whose boundaries fall in changed regions is
+      left untouched and its segments reported as unresolved. Absorbs
+      boundary drift automatically for localized edits, so connections
+      by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
 \item \texttt{covmap label $C$:$h$ $\lambda$}\\
       Replace the label of one segment. Because labels are part of
       identity, this rewrites the entry in $C$; old hashes remain in
       the object store so any connection that referenced them keeps
-      resolving.
+      resolving. The segment's name, if any, is preserved.
+\item \texttt{covmap name $C$:$h$ $\nu$} (or \texttt{@$\nu'$}; \texttt{-} to clear)\\
+      Set, rename, or clear the name of one segment
+      (Definition~\ref{def:segment-name}). Names are unique within $C$ and are
+      covering-local metadata, so this does not touch the object store
+      and shares nothing across coverings. Connections referencing the
+      segment by \texttt{@$\nu$} are unaffected unless the name string
+      itself changes.
 \end{itemize}
 
-These five operations are the only way to change a covering after
+These operations are the only way to change a covering after
 \texttt{cover}. Together they are complete: any covering reachable
-from the bootstrap by repeated splits / merges / recuts / relabels
+from the initial cover by repeated splits / merges / recuts / relabels /
+re-tags
 is the most general covering one can ask for.
 
-\subsection{Inspection, connections, repair}
+\subsection{Inspection, connections, prune}
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
-      One-line summary per covering: cardinality, line count,
-      entropy. A drift line reports the number of files whose bytes
-      have changed since their segments were recorded. Broken pair
-      counts are reported per connection.
+      One-line summary per covering: cardinality and line count. A drift
+      line reports the number of files whose bytes have changed since
+      their segments were recorded. Broken link counts are reported per
+      connection.
 \item \texttt{covmap show <addr>}\\
       Print the segment, covering, or connection at \texttt{<addr>}.
 \item \texttt{covmap ls [-l] $C$}\\
@@ -364,10 +600,10 @@ is the most general covering one can ask for.
       Create an empty connection between two coverings.
 \item \texttt{covmap link $K$ $h_A$ $h_B$ [$\nu$]}\\
       \texttt{covmap unlink $K$ $h_A$ $h_B$}\\
-      Add or remove a single pair, optionally annotated with note
+      Add or remove a single link, optionally annotated with note
       $\nu$.
-\item \texttt{covmap repair $K$}\\
-      Drop every pair of $K$ whose endpoint is no longer in its
+\item \texttt{covmap prune $K$}\\
+      Drop every link of $K$ whose endpoint is no longer in its
       covering.
 \item \texttt{covmap fsck}\\
       Verify that every covering is a partition of its covered set
@@ -379,12 +615,12 @@ is the most general covering one can ask for.
 Lower-level commands meant for scripts.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
-\item \texttt{covmap hash-segment <file> <a> <b> [<label>] [-w]}
+\item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [<label>] [-w]}
 \item \texttt{covmap cat-segment <hash>}
 \item \texttt{covmap ls-segments $C$}
-\item \texttt{covmap ls-pairs $K$}
+\item \texttt{covmap ls-links $K$}
 \item \texttt{covmap rev-parse <addr>}
-\item \texttt{covmap fsck --broken-pairs}
+\item \texttt{covmap fsck --broken-links}
 \end{itemize}
 
 \subsection{Design discipline}
@@ -396,8 +632,11 @@ Lower-level commands meant for scripts.
       additive only. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —
       \texttt{covmap} never silently re-segments existing files.
-\item The plumbing/porcelain split is hard: every porcelain command
-      is implementable as a shell pipeline of plumbing commands.
+\item covmap is built from a small set of composable primitives:
+      convenience commands are intended to be expressible as shell
+      pipelines over the lower-level, line-oriented commands. This is
+      \texttt{git}'s plumbing (the primitives) / porcelain (the
+      convenience commands) split.
 \item Hashes are the lingua franca. Every command accepts them on
       input and prints them on output, so commands compose without
       glue code.

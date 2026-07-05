@@ -4,7 +4,7 @@
 implementation — content-addressed and drift-aware.**
 
 covmap is a small CLI for cross-referencing two repositories at the
-granularity of arbitrary line ranges. Typical use: a Markdown
+granularity of arbitrary line — or character — ranges. Typical use: a Markdown
 specification and the code that implements it; or a paper and a
 mechanized proof. You partition each side into named **coverings**
 and record **connections** between them. When either side is edited,
@@ -47,15 +47,23 @@ There are no runtime dependencies beyond `sha2`.
 
 ## Mental model
 
-- A **segment** is `(file, line_a, line_b, label)` plus its content.
-  Its identity is the first 16 hex chars of
-  `sha256(label || NUL || content)`.
+- A **segment** is a contiguous range of a file plus a label and its
+  content. The range is given by a start and end position
+  `file:a[:col]..b[:col]`, where each `col` is an optional 1-indexed
+  inclusive character column (omitted = line boundary). Its identity is
+  the first 16 hex chars of `sha256(label || NUL || content)`.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
+- A **segment name** is an optional stable identity for a segment, set
+  with `covmap name` and shown as `@name`. A connection that references a
+  segment by `@name` survives edits to the segment's content, because the
+  link identity is the name rather than the hash. Anonymous segments are
+  referenced by segment hash (which changes on every edit).
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
-  live at `.covmap/connections/<name>` in the *source* repo.
+  live at `.covmap/connections/<name>` in the *source* repo. Each
+  endpoint is a segment name (`@name`) or a segment hash.
 - Sharing is automatic: any two coverings producing a segment with
   the same content+label end up referencing the same object.
 
@@ -77,14 +85,16 @@ cd spec/
 covmap init
 covmap cover                          # one whole-file `unknown` segment per file
 covmap status
-# covering main: segments=1 lines=42 entropy=0.000
+# covering main: segments=1 lines=42
 #   drift: clean
 
 # 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+).
 covmap ls -l                          # find the spec.md hash
-# 7f0a8e83a07ef76d  unknown  spec.md:1-42  42
+# 7f0a8e83a07ef76d  unknown  spec.md:1..42  42
 covmap split main:7f0a8e83 10 "Intro" "Body"
 # split 7f0a8e83a07ef76d -> 838a4a248219f38c + 8c39d43caabe6fc6
+# A cut can also fall mid-line: `covmap split main:<h> 10:5` begins the
+# bottom segment at character 5 of line 10 (1-indexed, inclusive).
 
 # 3. Cover the implementation side.
 cd ../impl/
@@ -98,14 +108,14 @@ covmap link spec_to_impl 8c39d43c <impl_hash> "fn body"
 
 # 5. Edit spec.md. Status now reports drift.
 covmap status
-# covering main: segments=2 lines=42 entropy=...
+# covering main: segments=2 lines=42
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
-#   spec_to_impl -> .../impl/main : 1 pairs, 0 broken
+#   spec_to_impl -> .../impl/main : 1 links, 0 broken
 
-# 6. Refresh the changed segment in place. The pair tied to its old
+# 6. Refresh the changed segment in place. The link tied to its old
 #    hash becomes broken; relink it to the new hash.
 covmap recut main:8c39d43c            # recompute hash from disk bytes
-covmap fsck --broken-pairs
+covmap fsck --broken-links
 covmap unlink spec_to_impl 8c39d43c <impl_hash>
 covmap link   spec_to_impl <new_hash> <impl_hash> "fn body"
 ```
@@ -118,30 +128,36 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
-| `status [<C>]` | Cardinality, entropy, drift, broken pairs. |
+| `status [<C>]` | Cardinality, lines, drift, broken links. |
 | `ls [-l] [<C>]` | List segments in a covering. |
 | `show <addr>` | Pretty-print a segment, covering, or connection. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (re-hashes). |
-| `split <C>:<h> <line> [<top>] [<bot>]` | Split a segment at a line. |
+| `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. |
+| `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
+| `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
 | `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
-| `link <K> <h_A> <h_B> [<note>]` | Add a pair. |
-| `unlink <K> <h_A> <h_B>` | Remove a pair. |
-| `repair <K>` | Drop pairs whose endpoints have left their coverings. |
+| `link <K> <h_A> <h_B> [<note>]` | Add a link. |
+| `unlink <K> <h_A> <h_B>` | Remove a link. |
+| `prune <K>` | Drop links whose endpoints have left their coverings. |
 | `html [-o <path>]` | Render a static HTML browser. |
 
 Plumbing commands (line-oriented, stable for scripts):
-`hash-segment`, `cat-segment`, `ls-segments`, `ls-pairs`, `rev-parse`,
-`fsck [--broken-pairs]`.
+`hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
+`fsck [--broken-links]`.
 
 ## Address forms
 
 - `<hash>` — full or short hex prefix (≥2 chars). Resolved against
   the object store.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
+- `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
+- `<C>:<file>:<line>[:<col>]` — the segment of `<file>` covering that
+  position (unique by the partition invariant); a stable, hash-free
+  handle. Every command taking a segment address accepts all three forms.
 - `HEAD` resolves to the covering named in `.covmap/HEAD`.
 
 ## Ignoring files
@@ -163,7 +179,7 @@ one per line. Supported syntax:
   ignore               # optional gitignore-lite patterns
   objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
   coverings/<name>     # covered files + one segment hash per line
-  connections/<name>   # connection metadata + pairs
+  connections/<name>   # connection metadata + links
 ```
 
 Every command checks `.covmap/version` and refuses to operate on a
@@ -178,9 +194,12 @@ covmap/
   Cargo.toml
   LICENSE
   README.md
+  DEVELOPER.md         # how to evolve covmap (five-artifact consistency contract)
   SKILL.md             # agent-facing workflow guide
-  src/                 # Rust implementation
+  GLOSSARY.md          # vocabulary across theory / requirements / source
+  src/                 # Rust implementation (incl. unit tests)
   theory/main.tex      # mathematical foundation
+  tutorial/            # guided end-to-end tour (run_tutorial.sh is an integration test)
   smoke_test/          # end-to-end shell test
   skill_playground/    # self-contained agent evaluation tasks
 ```
@@ -192,7 +211,7 @@ covmap/
 ```
 
 Goes through init → cover → split → merge → connect → link → fsck →
-label → drift → repair on a small fixture in a temporary directory.
+label → drift → prune on a small fixture in a temporary directory.
 
 ## For agents
 
@@ -201,6 +220,15 @@ agents (Claude Code's skill mechanism reads its frontmatter, but the
 content is plain Markdown). The
 [`skill_playground/`](skill_playground/README.md) directory has
 fixture-based tasks for evaluating how well an agent drives covmap.
+
+## Contributing / evolving covmap
+
+covmap is described by five artifacts that must be kept consistent with
+each other — theory, requirements, implementation + tests, skill, and
+tutorial. Any change to one must be reconciled across the rest.
+[`DEVELOPER.md`](DEVELOPER.md) is the contract: propagation rules by
+change type, the gates to run, and the definition of done. Agents should
+also read [`AGENT.md`](AGENT.md).
 
 ## License
 

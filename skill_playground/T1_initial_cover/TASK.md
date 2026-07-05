@@ -1,4 +1,4 @@
-# T1 — Bootstrap a covmap project
+# T1 — Initial cover of a covmap project
 
 ## User prompt (hand this to the agent)
 

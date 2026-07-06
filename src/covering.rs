@@ -72,7 +72,7 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 /// Parse a `line` or `line:col` field into `(line, Option<col>)`.
-fn parse_pos_field(s: &str) -> io::Result<(usize, Option<usize>)> {
+pub(crate) fn parse_pos_field(s: &str) -> io::Result<(usize, Option<usize>)> {
     let bad = |_| io::Error::new(io::ErrorKind::InvalidData, format!("bad position '{s}'"));
     match s.split_once(':') {
         Some((l, c)) => {

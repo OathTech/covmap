@@ -5,6 +5,7 @@
 
 use crate::connection::{Connection, Link};
 use crate::covering::{self, Covering, CoveringEntry};
+use crate::iterator::{self, Iter, Order, Task, TaskState};
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
 use crate::walk::{self, DEFAULT_LABEL};
@@ -53,6 +54,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "unlink" => cmd_unlink(&rest),
         "connect" => cmd_connect(&rest),
         "prune" => cmd_prune(&rest),
+        "iter" => cmd_iter(&rest),
         "html" => cmd_html(&rest),
         // plumbing
         "hash-segment" => cmd_hash_segment(&rest),
@@ -93,6 +95,9 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
         "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
+        "iter" => {
+            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
+        }
         "html" => "covmap html [-o <path>]                      render a static HTML browser",
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
@@ -129,7 +134,17 @@ PORCELAIN
   unlink <K> <h_A> <h_B>              remove a link
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
   prune <K>                           drop links whose endpoints are no longer in their coverings
+  iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>]                    render a static HTML browser
+
+ITERATORS (covmap iter <name> <verb>)
+  <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
+  <name> next | current                               advance to / reprint the current task
+  <name> done [-m <msg>] | skip [-m <msg>]            resolve the current task (does not advance)
+  <name> choose <addr> | rewind [<addr>]              jump the cursor / reset a task to pending
+  <name> peek [--all] [--content] | status | finished  look ahead / summarize / test exhaustion
+  <name> rm                                           delete the iterator (never touches the covering)
+  (bare `covmap iter` lists all iterators)
 
 PLUMBING
   hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]
@@ -1267,6 +1282,399 @@ fn cmd_prune(args: &[String]) -> io::Result<u8> {
     k.write(&repo)?;
     println!("prune: {} link(s) dropped, {} kept", dropped, k.links.len());
     Ok(0)
+}
+
+// ---- iter -----------------------------------------------------------------
+
+/// Two-level dispatch for `covmap iter`. Grammar is *name-first*:
+/// `covmap iter <name> <verb> [args]`, so `covmap iter <name>` is a stable
+/// prefix. Bare `covmap iter` lists all iterators; there is no implicit
+/// verb (`covmap iter <name>` with no verb is an error that prints the
+/// available verbs).
+fn cmd_iter(args: &[String]) -> io::Result<u8> {
+    // Bare `covmap iter` → list every iterator.
+    if args.is_empty() {
+        let repo = current_repo()?;
+        let names = Iter::list(&repo)?;
+        if names.is_empty() {
+            println!("(no iterators yet — run `covmap iter <name> new <covering>`)");
+            return Ok(0);
+        }
+        // Gather the rows first so we can align the name and covering
+        // columns to their widest entry (a plain `\t` leaves them ragged).
+        let mut rows: Vec<(String, String, String)> = Vec::new();
+        for n in &names {
+            let it = Iter::read(&repo, n)?;
+            let (done, _active, skipped, total) = it.counts();
+            let active = match it.active_index() {
+                Some(i) => format!("active {}", it.tasks[i].handle()),
+                None => "no active task".to_string(),
+            };
+            let summary = format!("{done}/{total} done, {skipped} skipped, {active}");
+            rows.push((n.clone(), it.covering.clone(), summary));
+        }
+        let name_w = rows.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
+        let cov_w = rows.iter().map(|(_, c, _)| c.len()).max().unwrap_or(0);
+        for (n, cov, summary) in &rows {
+            println!("{n:<name_w$}  {cov:<cov_w$}  {summary}");
+        }
+        return Ok(0);
+    }
+
+    let name = args[0].as_str();
+    let verb = match args.get(1) {
+        Some(v) => v.as_str(),
+        None => {
+            eprintln!(
+                "covmap iter {name} <verb> — no verb given. Verbs: new, next, current, \
+                 done, skip, choose, rewind, peek, status, finished, rm"
+            );
+            return Ok(2);
+        }
+    };
+    let rest = &args[2..];
+
+    match verb {
+        "new" => cmd_iter_new(name, rest),
+        "next" => no_args(verb, rest).and_then(|_| cmd_iter_next(name)),
+        "current" => no_args(verb, rest).and_then(|_| cmd_iter_current(name)),
+        "done" => cmd_iter_resolve(name, rest, TaskState::Done),
+        "skip" => cmd_iter_resolve(name, rest, TaskState::Skipped),
+        "choose" => cmd_iter_choose(name, rest),
+        "rewind" => cmd_iter_rewind(name, rest),
+        "peek" => cmd_iter_peek(name, rest),
+        "status" => no_args(verb, rest).and_then(|_| cmd_iter_status(name)),
+        "finished" => no_args(verb, rest).and_then(|_| cmd_iter_finished(name)),
+        "rm" => no_args(verb, rest).and_then(|_| cmd_iter_rm(name)),
+        other => {
+            eprintln!(
+                "covmap iter {name}: unknown verb '{other}'. Verbs: new, next, current, \
+                 done, skip, choose, rewind, peek, status, finished, rm"
+            );
+            Ok(2)
+        }
+    }
+}
+
+/// Print the frozen content of a task to stdout (used by `--content`).
+fn print_task_content(repo: &Repo, t: &Task) -> io::Result<()> {
+    match segment::read_object(&repo.objects_dir(), &t.hash) {
+        Ok((_, content)) => {
+            let mut out = io::stdout().lock();
+            out.write_all(content.as_bytes())?;
+            if !content.ends_with('\n') {
+                out.write_all(b"\n")?;
+            }
+            Ok(())
+        }
+        Err(_) => {
+            eprintln!("(content for {} unavailable in object store)", t.handle());
+            Ok(())
+        }
+    }
+}
+
+fn cmd_iter_new(name: &str, args: &[String]) -> io::Result<u8> {
+    let mut covering: Option<String> = None;
+    let mut order = Order::File;
+    let mut label: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--order" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--order needs a value")
+                })?;
+                order = Order::parse(v)?;
+                i += 2;
+            }
+            "--label" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--label needs a value")
+                })?;
+                label = Some(v.clone());
+                i += 2;
+            }
+            other if other.starts_with('-') => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("iter new: unexpected flag '{other}'"),
+                ));
+            }
+            other => {
+                if covering.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "iter new accepts a single covering name",
+                    ));
+                }
+                covering = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let covering = covering.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "iter <name> new <covering> [--order file|label] [--label <l>]",
+        )
+    })?;
+    let repo = current_repo()?;
+    if repo.iterators_dir().join(name).exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("iterator '{name}' already exists (rm it first to re-freeze)"),
+        ));
+    }
+    // Resolve the covering now (accepting HEAD), but store its given name so
+    // a later reader sees what the user asked for.
+    let cov = resolve_covering(&repo, &covering)?;
+    let tasks = iterator::freeze(&cov, order, label.as_deref());
+    if tasks.is_empty() {
+        eprintln!(
+            "(warning: iterator '{name}' froze 0 tasks{})",
+            match &label {
+                Some(l) => format!(" — no segment labelled '{l}' in covering '{}'", cov.name),
+                None => String::new(),
+            }
+        );
+    }
+    let it = Iter {
+        name: name.to_string(),
+        covering: cov.name.clone(),
+        order,
+        label,
+        cursor: None,
+        tasks,
+    };
+    it.write(&repo)?;
+    let (_, _, _, total) = it.counts();
+    println!(
+        "froze covering '{}' into iterator '{}': {} task(s), order={}{}",
+        it.covering,
+        name,
+        total,
+        it.order.as_str(),
+        match &it.label {
+            Some(l) => format!(", label={l}"),
+            None => String::new(),
+        }
+    );
+    Ok(0)
+}
+
+fn cmd_iter_next(name: &str) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let mut it = Iter::read(&repo, name)?;
+    // Enumeration guarantee: refuse to advance off a still-pending task.
+    if it.current_is_pending() {
+        let cur = &it.tasks[it.cursor.unwrap()];
+        eprintln!(
+            "current task is still pending: {} — resolve it with `covmap iter {name} done` \
+             or `covmap iter {name} skip` before advancing",
+            cur.handle()
+        );
+        return Ok(1);
+    }
+    match it.first_pending() {
+        Some(idx) => {
+            it.cursor = Some(idx);
+            it.write(&repo)?;
+            println!("{}", it.tasks[idx].print_line());
+            Ok(0)
+        }
+        None => {
+            // Exhausted: print nothing, exit non-zero so a shell loop stops.
+            Ok(1)
+        }
+    }
+}
+
+fn cmd_iter_current(name: &str) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let it = Iter::read(&repo, name)?;
+    match it.cursor {
+        Some(idx) => {
+            println!("{}", it.tasks[idx].print_line());
+            Ok(0)
+        }
+        None => {
+            eprintln!("(cursor unset — run `covmap iter {name} next` to start)");
+            Ok(1)
+        }
+    }
+}
+
+fn cmd_iter_resolve(name: &str, args: &[String], state: TaskState) -> io::Result<u8> {
+    let note = parse_message(args)?;
+    let repo = current_repo()?;
+    let mut it = Iter::read(&repo, name)?;
+    // A resolution replaces the note, so re-resolving without -m clears a
+    // stale one (e.g. `done -m "verified"` then `skip` leaves no note).
+    let idx = it.resolve_current(state, note)?;
+    it.write(&repo)?;
+    let verb = match state {
+        TaskState::Done => "done",
+        TaskState::Skipped => "skipped",
+        TaskState::Pending => "pending",
+    };
+    println!("{}\t{verb}", it.tasks[idx].handle());
+    Ok(0)
+}
+
+fn cmd_iter_choose(name: &str, args: &[String]) -> io::Result<u8> {
+    let addr = args
+        .first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "iter <name> choose <addr>"))?;
+    let repo = current_repo()?;
+    let mut it = Iter::read(&repo, name)?;
+    let idx = it.resolve_task(addr)?;
+    it.cursor = Some(idx);
+    it.write(&repo)?;
+    println!("{}", it.tasks[idx].print_line());
+    Ok(0)
+}
+
+fn cmd_iter_rewind(name: &str, args: &[String]) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let mut it = Iter::read(&repo, name)?;
+    let idx = match args.first() {
+        Some(addr) => it.resolve_task(addr)?,
+        None => it.cursor.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "iter <name> rewind [<addr>] — no cursor set, pass an address",
+            )
+        })?,
+    };
+    if it.tasks[idx].state == TaskState::Pending {
+        println!("{}\t(already pending)", it.tasks[idx].handle());
+        return Ok(0);
+    }
+    it.tasks[idx].state = TaskState::Pending;
+    it.tasks[idx].note.clear();
+    it.write(&repo)?;
+    println!("{}\trewound to pending", it.tasks[idx].handle());
+    Ok(0)
+}
+
+fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
+    let mut all = false;
+    let mut content = false;
+    for a in args {
+        match a.as_str() {
+            "--all" => all = true,
+            "--content" => content = true,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("iter peek: unexpected arg '{other}'"),
+                ));
+            }
+        }
+    }
+    let repo = current_repo()?;
+    let it = Iter::read(&repo, name)?;
+    if all {
+        // The whole worklist in frozen order, each line tagged with its
+        // state (and note) — an audit view including done/skipped tasks.
+        for t in &it.tasks {
+            println!("{}", t.print_line_stateful());
+            if content {
+                print_task_content(&repo, t)?;
+            }
+        }
+        return Ok(0);
+    }
+    // Default: every *pending* task, in frozen order — the set you can
+    // `choose` among (includes the active one). This is a look-ahead, so it
+    // does not move the cursor.
+    let pending = it.pending_indices();
+    if pending.is_empty() {
+        eprintln!("(no pending tasks remain)");
+        return Ok(1);
+    }
+    for &idx in &pending {
+        println!("{}", it.tasks[idx].print_line());
+        if content {
+            print_task_content(&repo, &it.tasks[idx])?;
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_iter_status(name: &str) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let it = Iter::read(&repo, name)?;
+    let (done, _active, skipped, total) = it.counts();
+    // There is at most one active task (a single cursor), so name it rather
+    // than print a 0/1 count.
+    let active = match it.active_index() {
+        Some(i) => format!("active {}", it.tasks[i].handle()),
+        None => "no active task".to_string(),
+    };
+    println!("{done}/{total} done, {skipped} skipped, {active}");
+    Ok(0)
+}
+
+fn cmd_iter_finished(name: &str) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let it = Iter::read(&repo, name)?;
+    Ok(if it.is_finished() { 0 } else { 1 })
+}
+
+fn cmd_iter_rm(name: &str) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let path = repo.iterators_dir().join(name);
+    if !path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("iterator '{name}' not found"),
+        ));
+    }
+    fs::remove_file(&path)?;
+    println!("removed iterator '{name}' (covering untouched)");
+    Ok(0)
+}
+
+/// Reject any argument to a verb that takes none. This makes a stray token
+/// fail loudly instead of being silently ignored — notably a `#` comment
+/// pasted into an interactive zsh, where `#` is not a comment and arrives
+/// as an argument (which otherwise leaves the task unresolved and a
+/// `while ! finished` loop spinning).
+fn no_args(verb: &str, args: &[String]) -> io::Result<()> {
+    match args.first() {
+        None => Ok(()),
+        Some(a) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("iter {verb} takes no arguments (got '{a}')"),
+        )),
+    }
+}
+
+/// Parse an optional `-m <msg>` / `--message <msg>` note argument. Any other
+/// argument is an error.
+fn parse_message(args: &[String]) -> io::Result<Option<String>> {
+    let mut msg: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-m" | "--message" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "-m needs a message")
+                })?;
+                msg = Some(v.clone());
+                i += 2;
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected argument '{other}' (only -m <msg> is accepted)"),
+                ));
+            }
+        }
+    }
+    Ok(msg)
 }
 
 // ---- html -----------------------------------------------------------------

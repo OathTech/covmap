@@ -12,6 +12,7 @@ mod covering;
 mod diff;
 mod fingerprint;
 mod html;
+mod iterator;
 mod repo;
 mod segment;
 mod store;

@@ -37,7 +37,7 @@ number is an identifier, not a priority.
 
 | # | Proposal | Stage | Summary |
 | - | -------- | ----- | ------- |
-| [0001](0001-iterators.md) | iterators | Draft | Freeze a covering into an ordered, stateful worklist — a durable, resumable work plan an agent or human pulls one task at a time. |
+| [0001](0001-iterators.md) | iterators | Landed | Freeze a covering into an ordered, stateful worklist — a durable, resumable work plan an agent or human pulls one task at a time. |
 
 ## Writing a cip
 

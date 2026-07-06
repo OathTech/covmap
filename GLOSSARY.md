@@ -149,6 +149,46 @@ segment ↔ segment.
 (one per line, `#` comments) that keep build output, vendored, or
 generated files out of coverings. Dot-directories are always skipped.
 
+**Iterator** **[T][R][S]** — a covering frozen into an ordered, stateful
+*worklist*: each segment becomes a **task** an external consumer (an agent,
+a human, a script) pulls one at a time, works against, and marks resolved.
+A snapshot layered *over* a covering — it records a per-task state and a
+**cursor** but never mutates segments, coverings, or connections; because
+the object store is append-only, each frozen task's content stays
+retrievable even after the covering is edited or deleted. Stored at
+`.covmap/iterators/<name>`, a purely additive directory (no format-version
+bump). Driven by `covmap iter <name> <verb>`. Has several sub-concepts
+(below).
+
+**Task** **[T][R][S]** — one entry of an **iterator**: a segment frozen at
+`new` time (its hash, location, label, and name) together with a **task
+state** and an optional note. Its content is anchored by the frozen hash;
+the line numbers are a hint to the current position. Sub-concept of
+**iterator**.
+
+**Task state** **[T][R][S]** — the status of a **task**: `pending` (not yet
+resolved), `done` (worked), or `skipped` (deliberately passed over). There
+is no stored `active` state — a task is *active* exactly when the **cursor**
+points at a still-`pending` task — and no `stale` state, since freezing plus
+the immortal object store pins a task's content. Sub-concept of
+**iterator**.
+
+**Cursor** **[T][R][S]** — the one task an **iterator**'s consumer is
+currently on (the theory's `γ`), unset before the first `next`. A task is
+active when the cursor points at a `pending` task. `next` moves it to the
+first pending task; `choose` moves it deliberately (a jump); `current`
+reprints it (the resume affordance after a crash or context loss).
+Sub-concept of **iterator**.
+
+**Complete enumeration** **[T][R][S]** — the invariant an **iterator**
+guarantees: every task is eventually resolved (`done` or `skipped`) and
+none is stepped over unresolved. Enforced by two rules — `next` advances to
+the first `pending` task in the frozen order (globally, not just after the
+cursor), and `next` is refused while the current task is still `pending` —
+so `finished` is true exactly when no `pending` task remains. It is to a
+worklist what the **covering invariants** (C1–C3) are to a covering.
+Sub-concept of **iterator**.
+
 **Label** **[T][R][S]** — a per-segment status string, part of the
 segment hash. `cover` assigns `unknown`; typical relabels are `ignored`,
 `reviewed`, and `mapped`. Two segments with equal content but different

@@ -106,7 +106,10 @@ RS=$(  cd "$WORK/impl_rs" && "$COVMAP_BIN" ls-segments | head -1 )
 echo "  inc:  $INC"
 echo "  dec:  $DEC"
 echo "  impl: $RS"
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$INC" "$RS" "fn increment" )
+# The Increment endpoint is given with a redundant `main:` covering prefix
+# (naming the source covering) — link accepts and strips it, like every
+# other segment-address command. Decrement uses the bare hash.
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "fn increment" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement" )
 
 hr "fsck (clean)"

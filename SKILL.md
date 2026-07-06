@@ -135,6 +135,13 @@ are unique.
 - Bare `<C>` (no colon) — covering ref by name. `HEAD` resolves to
   the covering named in `.covmap/HEAD`.
 
+For `link`/`unlink` the two endpoints are resolved against the
+connection's **own** source and target coverings (which may live in
+different repos), so a bare `@name` / hash / `file:line` is the natural
+form — `covmap link K @src-seg @tgt-seg`. A `<C>:` prefix is accepted but
+only when `<C>` is that side's covering (it is simply stripped); it cannot
+point at some other covering.
+
 ## Ignoring files — control what gets covered
 
 **This is the single most important setup step, and it is easy to skip.**

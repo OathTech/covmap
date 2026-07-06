@@ -1044,6 +1044,19 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
 
 // ---- link / unlink --------------------------------------------------------
 
+/// A link endpoint is resolved against the connection's own source/target
+/// covering, so a `<C>:` covering prefix is redundant there. For consistency
+/// with every other segment-address command, we accept it and strip it —
+/// but *only* when `<C>` names this side's covering. Anything else (a bare
+/// `@name`/hash, or a positional `file:line[:col]` address, which also
+/// contains `:`) is returned untouched so it resolves as before.
+fn strip_side_covering<'a>(arg: &'a str, side_covering: &str) -> &'a str {
+    match arg.split_once(':') {
+        Some((c, rest)) if c == side_covering => rest,
+        _ => arg,
+    }
+}
+
 fn cmd_link(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
@@ -1059,14 +1072,16 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     // Resolve each endpoint to a segment. The stored endpoint is the segment's
     // name (`@name`) when it is named — so the link survives content
     // edits — otherwise its segment hash (legacy / anonymous segments).
-    let ia = covering::resolve_segment(&src, ha_in)?;
+    // A redundant `<C>:` prefix naming this side's own covering is accepted
+    // and stripped, so `link` reads like every other segment-address command.
+    let ia = covering::resolve_segment(&src, strip_side_covering(ha_in, &k.source_covering))?;
     let ha = src.entries[ia].endpoint();
 
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
-    let ib = covering::resolve_segment(&tgt, hb_in)?;
+    let ib = covering::resolve_segment(&tgt, strip_side_covering(hb_in, &k.target_covering))?;
     let hb = tgt.entries[ib].endpoint();
 
     if k.links.iter().any(|p| p.a == ha && p.b == hb) {
@@ -1130,7 +1145,14 @@ fn resolve_endpoint_arg(
     {
         return Ok(arg.to_string());
     }
-    // (2) resolve against the covering on the relevant side.
+    // (2) resolve against the covering on the relevant side. Accept and strip
+    // a redundant `<C>:` prefix naming that side's own covering (as `link` does).
+    let side_covering = if source_side {
+        &k.source_covering
+    } else {
+        &k.target_covering
+    };
+    let addr = strip_side_covering(arg, side_covering);
     let cov = if source_side {
         Covering::read(repo, &k.source_covering)
     } else {
@@ -1140,7 +1162,7 @@ fn resolve_endpoint_arg(
         Covering::read(&tgt_repo, &k.target_covering)
     };
     if let Ok(c) = cov {
-        if let Ok(idx) = covering::resolve_segment(&c, arg) {
+        if let Ok(idx) = covering::resolve_segment(&c, addr) {
             return Ok(c.entries[idx].endpoint());
         }
     }

@@ -104,6 +104,7 @@ are unique.
 | `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
+| `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
 | `covmap html [-o <path>]` | Render a static HTML browser. For humans, not you. | no |
 
@@ -323,6 +324,96 @@ connections:
   segments were recorded. Use `recut` (or merge+split if boundaries
   moved) to refresh.
 - `<conn> -> <repo>/<C> : N links, M broken` — relink or `prune` if `M > 0`.
+
+### F. Work a covering as a worklist (iterators)
+
+When you have a covering and a *per-segment job* to do across all of it —
+audit every segment, port each chunk, write a test for each uncovered
+piece — don't hold the plan in your context and hope you don't drift. An
+**iterator** freezes the covering into an ordered, stateful worklist on
+disk: each segment becomes a **task** you pull one at a time, work, and
+mark `done` or `skipped`. The cursor and per-task state live in
+`.covmap/iterators/<name>`, so after a compaction or crash `covmap iter
+<name> current` re-establishes exactly where you were. This is why it
+matters for you specifically: the plan is durable and resumable, not
+context-window-bound.
+
+An iterator is a **snapshot**: `new` records the segments at freeze time,
+so later edits to the files or covering don't change the enumeration. And
+because the object store is append-only, each frozen task's content is
+always recoverable with `covmap cat-segment <hash>` (or `iter ... peek
+--content`) even if the covering is later edited or deleted. It never
+mutates segments, coverings, or connections.
+
+**Setup — freeze the covering:**
+
+```sh
+covmap iter sweep new main --order file        # every segment, reading order
+covmap iter backfill new main --label unknown  # only the not-yet-refined segments
+```
+
+`--order` is `file` (path, then line) or `label` (group a concern);
+`--label <l>` narrows the frozen set to one label — ideal for a backfill.
+
+**The canonical loop** — `next` hands you one task; you resolve it before
+asking for the next. Keep the loop body comment-free: an interactive
+**zsh** does not treat `#` as a comment, so a pasted `# ...` line becomes a
+command and the task never gets resolved (the loop then spins). Do the work
+between `next` and `done`:
+
+```sh
+covmap iter sweep new main --order file
+until covmap iter sweep finished; do
+  covmap iter sweep next
+  covmap iter sweep done -m "verdict"
+done
+```
+
+Between `next` and `done`, work on the current task: read its content with
+`covmap iter sweep peek --content` (or `covmap cat-segment <hash>`), edit
+code, run tests — whatever the job is. Use `covmap iter sweep skip -m "why"`
+instead of `done` to pass on a task deliberately.
+
+Each `next` / `current` / `peek` prints one parseable line per task:
+
+```
+<@name|hash>	<label>	<file>:<a>..<b>
+```
+
+Add `--content` (to `next`/`current`/`peek`) to also dump the frozen
+bytes; by default stdout stays terse so the loop is easy to parse.
+
+**The enumeration guarantee — why you can't lose a task:**
+
+- `next` advances to the **first pending task in the frozen order**
+  (globally, not just after the cursor), so nothing is stepped over.
+- `next` is **refused while the current task is still pending** — you must
+  resolve it (`done` = worked it, `skip` = deliberately passed) before
+  advancing. To pass on a task, `skip` it, then `next`.
+- `choose <addr>` is the deliberate jump: it moves the cursor (even onto a
+  pending task) but leaves every task's state alone, so a later `next`
+  comes back to anything still pending. Jumping can't break completeness.
+- `finished` is true **only** when no pending task remains (all `done` or
+  `skipped`) — the loop condition above.
+
+**Other verbs:** `peek` (list **all pending tasks** in order without
+advancing — the set you can `choose` among, including the active one;
+`peek --content` also dumps their bytes, `peek --all` lists the whole
+worklist tagged with each task's state), `choose <addr>` (jump the cursor
+to a task by `@name` or hash prefix — pick one you saw in `peek`), `status`
+(`12/40 done, 3 skipped, active <handle>`), `rewind [<addr>]` (reset a
+`done`/`skipped` task back to `pending`), `rm` (delete the iterator — never
+touches the covering). This is playground task T8. There is at most one
+active task at a time (a single cursor), which is why `status` names it
+rather than counting it.
+
+The `-m` note on `done`/`skip` is the task's verdict; each resolution
+*replaces* it, so re-resolving a task without `-m` clears any earlier
+note (`done -m "verified"` then `skip` leaves no stale "verified").
+
+Iterators are **not** for tracking drift — a frozen task never goes
+"stale" (its content is pinned by hash). Drift is a property of the
+covering; repair it with `recut` / `recut --remap` (workflows B, E).
 
 ## Efficiency rules
 

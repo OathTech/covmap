@@ -19,6 +19,9 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
   `recut --remap` re-fits every segment automatically, links preserved.
 - **T7_fingerprint** — a section is moved elsewhere; `recut --remap`
   can't place it and prints a propose-only fingerprint relocation guess.
+- **T8_iterator_sweep** — freeze a covering into an iterator and audit
+  every segment exactly once, recording a per-task verdict; the
+  enumeration guarantee ensures none is missed and the sweep is resumable.
 
 ## Running a task
 

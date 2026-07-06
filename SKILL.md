@@ -101,7 +101,7 @@ are unique.
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
 | `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
-| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. | no |
+| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
@@ -268,6 +268,10 @@ per-file all-or-nothing: a file whose boundaries land in changed regions
 is left untouched and its segments are listed as **unresolved**.
 After a successful remap, `status` is clean and `fsck` passes. This is
 task T6.
+
+When a file is healed, the output names each segment whose line range
+actually moved, `old..b -> new..b`, e.g. `@seg-mid: 3..4 -> 5..6` — so you
+can confirm a segment spans the new content without re-reading `ls -l`.
 
 Caveats: diff-remap handles **line-aligned** segments; a *drifted* file
 that contains character-level cuts is left untouched (use manual

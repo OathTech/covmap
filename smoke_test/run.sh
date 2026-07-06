@@ -112,6 +112,11 @@ echo "  impl: $RS"
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "fn increment" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement" )
 
+hr "re-link with a new note updates it in place (not a no-op)"
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
+  && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
+
 hr "fsck (clean)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
 

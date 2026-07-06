@@ -939,6 +939,23 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                         fr.refreshed,
                         fr.unchanged
                     );
+                    // Name the segments whose line range actually moved
+                    // (old..b -> new..b), so a refresh is easy to confirm
+                    // without re-reading `ls -l`. Pair old vs new by position:
+                    // remap_file emits entries sorted by start, so sort the
+                    // old ones the same way.
+                    let mut old_sorted = old_entries.clone();
+                    old_sorted.sort_by_key(|e| e.sort_key());
+                    for (old, (new, _)) in old_sorted.iter().zip(fr.entries.iter()) {
+                        if (old.a, old.b) != (new.a, new.b) {
+                            let who = new
+                                .name
+                                .as_deref()
+                                .map(|n| format!("@{n}"))
+                                .unwrap_or_else(|| covering::short_hash(&new.hash).to_string());
+                            println!("    {who}: {}..{} -> {}..{}", old.a, old.b, new.a, new.b);
+                        }
+                    }
                 }
                 new_entries.extend(fr.entries.into_iter().map(|(e, _)| e));
             }
@@ -1065,7 +1082,9 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
         ));
     }
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
-    let note = args.get(3).cloned().unwrap_or_default();
+    // `None` = no note argument (leave an existing note alone); `Some` = a
+    // note was given (set or replace it), even if it is the empty string.
+    let note = args.get(3).cloned();
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
     let src = Covering::read(&repo, &k.source_covering)?;
@@ -1084,14 +1103,24 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     let ib = covering::resolve_segment(&tgt, strip_side_covering(hb_in, &k.target_covering))?;
     let hb = tgt.entries[ib].endpoint();
 
-    if k.links.iter().any(|p| p.a == ha && p.b == hb) {
-        eprintln!("(link already present)");
+    // Re-linking an existing pair is not an error: it updates the note when
+    // one is given (a bare re-link is a harmless idempotence check that keeps
+    // the existing note). A brand-new pair is appended.
+    if let Some(p) = k.links.iter_mut().find(|p| p.a == ha && p.b == hb) {
+        match note {
+            Some(new) if new != p.note => {
+                p.note = new;
+                k.write(&repo)?;
+                println!("updated note on {} -> {}", ha, hb);
+            }
+            _ => eprintln!("(link already present)"),
+        }
         return Ok(0);
     }
     k.links.push(Link {
         a: ha.clone(),
         b: hb.clone(),
-        note,
+        note: note.unwrap_or_default(),
     });
     k.write(&repo)?;
     println!("linked {} -> {}", ha, hb);

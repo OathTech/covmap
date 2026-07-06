@@ -2,8 +2,10 @@
 
 High-level requirements for covmap. Each captures a capability the tool
 provides, derived from the formal model (`theory/main.tex`) and the
-command interface (`covmap --help`). At most 20, intentionally coarse.
-All are realized today except req11 (connection algebra), which is
+command interface (`covmap --help`). Intentionally coarse: the list stayed
+at 20 for a long time, and the count is a deliberate ceiling, lifted only
+when a genuinely new capability lands — req21 (iterators) is the first such
+lift. All are realized today except req11 (connection algebra), which is
 explicitly kept as a recommended future direction.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
@@ -131,3 +133,18 @@ convenience commands built over them.)
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
 connections (status, show, ls, grep, diff, and a static HTML browser).
+
+## req21 — Coverings as consumable work plans (iterators)
+covmap shall freeze a covering — optionally filtered to a single label —
+into an *iterator*: an ordered, stateful worklist whose tasks a consumer
+(an agent, a human, a script) pulls one at a time, works against, and
+marks `done` or `skipped`. An iterator is a snapshot layered over the
+covering: it records a per-task state and a cursor but never mutates
+segments, coverings, or connections, and — because the object store is
+append-only — each frozen task's content stays retrievable even after the
+covering is edited or deleted. It shall guarantee **complete enumeration**:
+`next` advances to the first pending task in the frozen order and is
+refused while the current task is still pending, so no task is stepped over
+unresolved and iteration is exhausted exactly when every task is `done` or
+`skipped`. Iterators live under `.covmap/iterators/`, a purely additive
+directory that needs no format-version bump.

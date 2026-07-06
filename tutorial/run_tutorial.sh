@@ -198,7 +198,78 @@ hr "9. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 assert "fsck passes after linking" bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 #############################################################################
-hr "10. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
+hr "10. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
+#############################################################################
+# An iterator freezes the covering into an ordered, stateful worklist: each
+# segment becomes a task you pull one at a time and mark done/skipped. It is
+# a snapshot layered OVER the covering — it never mutates segments — so we
+# run it here on the clean, refined covering before the drift steps below.
+( cd "$WORK/spec" && run iter review new main --order file )
+( cd "$WORK/spec" && run iter review status )
+
+# `peek` lists every pending task in order (without advancing) — the set you
+# can `choose` among. It is how you survey the worklist before diving in.
+( cd "$WORK/spec" && run iter review peek )
+
+assert "peek lists all 7 pending tasks (the choosable set)" \
+  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter review peek | wc -l ) ) -eq 7 ]]"
+
+# The manual controls — shown on a throwaway `plan` iterator so the `review`
+# sweep below stays pristine (iterators are cheap, independent overlays).
+# `choose` jumps the cursor to any task by @name, out of file order; `skip`
+# resolves it as a deliberate "not this one" with a reason; `rewind` undoes a
+# resolution, putting the task back to pending. A jump + skip can never
+# strand a task — rewind (or a later `next`) always brings it back.
+( cd "$WORK/spec" && run iter plan new main )
+( cd "$WORK/spec" && run iter plan choose @enqueue-op )
+( cd "$WORK/spec" && run iter plan skip -m "trivial — covered elsewhere" )
+( cd "$WORK/spec" && run iter plan status )       # 0/7 done, 1 skipped, ...
+( cd "$WORK/spec" && run iter plan rewind @enqueue-op )
+( cd "$WORK/spec" && run iter plan status )       # 0/7 done, 0 skipped, ...
+
+assert "rewind undid the skip (0 skipped on the plan iterator)" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' iter plan status | grep -q '0 skipped' )"
+
+( cd "$WORK/spec" && run iter plan rm )            # discard the scratch iterator
+
+# The canonical loop: `next` hands out the first pending task and is refused
+# until it is resolved, so every segment is visited exactly once. We `done`
+# each task with a one-line note (skipping nothing here). The loop body is
+# kept comment-free: an interactive zsh treats a pasted `#` as a command,
+# not a comment, which would leave the current task unresolved and spin.
+( cd "$WORK/spec" && bash -c '
+  until "'"$COVMAP"'" iter review finished; do
+    line=$("'"$COVMAP"'" iter review next)
+    handle=$(printf "%s" "$line" | cut -f1)
+    "'"$COVMAP"'" iter review done -m "audited $handle" >/dev/null
+  done
+' )
+( cd "$WORK/spec" && run iter review status )
+# `current` is the resume affordance: it reprints the cursor's task in any
+# state, so a crashed/compacted agent recovers exactly where it stood.
+( cd "$WORK/spec" && run iter review current )
+
+assert "iterator reports finished (every task resolved)" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' iter review finished )"
+assert "the sweep did not mutate the covering (fsck still clean)" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
+
+# An iterator can be filtered to one label — e.g. a backfill of only the
+# not-yet-refined `unknown` segments. `alt` (step 9) is the whole-file
+# covering: two `unknown` segments (queue.md, errors.md), so this freezes
+# exactly those two tasks, narrowing the worklist to the backlog.
+( cd "$WORK/spec" && run iter backfill new alt --label unknown )
+( cd "$WORK/spec" && run iter )        # bare `iter` lists every iterator
+
+assert "label-filtered iterator froze only the unknown segments" \
+  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter backfill status | grep -oE '/[0-9]+' | head -1 | tr -d / ) ) -eq 2 ]]"
+
+# Delete the iterators; the covering is untouched (they are pure overlays).
+( cd "$WORK/spec" && run iter review rm )
+( cd "$WORK/spec" && run iter backfill rm )
+
+#############################################################################
+hr "11. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
 #############################################################################
 # Tighten the Dequeue wording ("...or None when empty." -> "...or None
 # when the queue is empty."). Same number of lines -> segment drift
@@ -218,7 +289,7 @@ assert "queue_links still 3 links, 0 broken" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
-hr "11. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
+hr "12. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
 #############################################################################
 # Add two lines to the preamble; everything below shifts down. recut
 # --remap re-fits every line-aligned segment automatically.
@@ -236,7 +307,7 @@ assert "after remap: still 3 links, 0 broken" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
-hr "12. T7-style drift: move a section, fingerprint proposes its new home"
+hr "13. T7-style drift: move a section, fingerprint proposes its new home"
 #############################################################################
 # Move the Enqueue section (the @enqueue-op segment) to the END of the file.
 # Now the segment that was 2nd in the covering would have to map *after*
@@ -256,7 +327,7 @@ assert "remap left the covering unmutated for the moved file (still drifted)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'file(s) edited' )"
 
 #############################################################################
-hr "13. prune: drop a genuinely broken link  (REQ14)"
+hr "14. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate prune on a deliberately broken link: clear a segment's name,
 # which deletes that segment identity, breaking its link. Then prune drops it.
@@ -266,7 +337,7 @@ hr "13. prune: drop a genuinely broken link  (REQ14)"
 ( cd "$WORK/spec" && run status main )
 
 #############################################################################
-hr "14. render the HTML report  (REQ20)"
+hr "15. render the HTML report  (REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run html )
 echo "  open: $WORK/spec/.covmap/report.html"

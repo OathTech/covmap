@@ -170,7 +170,24 @@ hr "7. name the segments we intend to map  (REQ3, REQ8)"
 ( cd "$WORK/spec" && run ls -l )
 
 #############################################################################
-hr "8. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
+hr "8. annotate a segment with why it was cut  (REQ22)"
+#############################################################################
+# A `message` records free-form rationale ABOUT a segment — why this
+# boundary exists, what the chunk is — distinct from its label (a hashed
+# category) and its name (a slug identity). It is not part of the hash, so
+# editing it never causes drift, and it travels with the segment across
+# later edits. `annotate -m` is repeatable (paragraphs, git-style).
+( cd "$WORK/spec" && run annotate main:@enqueue-op \
+    -m "Core enqueue op — mapped to the Rust impl." \
+    -m "Cut as its own segment so the spec<->impl link is 1:1." )
+( cd "$WORK/spec" && run annotate main:@enqueue-op )   # no -m: print the message
+( cd "$WORK/spec" && run show main:@enqueue-op | sed -n '1,6p' )
+
+assert "the message is stored on the segment (shown by ls -l)" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' ls -l main | grep -qF 'Core enqueue op' )"
+
+#############################################################################
+hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 #############################################################################
 ( cd "$WORK/spec" && run connect main "$WORK/impl_rs:main" queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
@@ -183,7 +200,7 @@ assert "connection has 3 links, all by @name" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-links queue_links | grep -c '^@' ) ) -eq 3 ]]"
 
 #############################################################################
-hr "9. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
+hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run show queue_links )
 ( cd "$WORK/spec" && run grep capacity )
@@ -198,7 +215,7 @@ hr "9. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 assert "fsck passes after linking" bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 #############################################################################
-hr "10. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
+hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
 #############################################################################
 # An iterator freezes the covering into an ordered, stateful worklist: each
 # segment becomes a task you pull one at a time and mark done/skipped. It is
@@ -269,7 +286,7 @@ assert "label-filtered iterator froze only the unknown segments" \
 ( cd "$WORK/spec" && run iter backfill rm )
 
 #############################################################################
-hr "11. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
+hr "12. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
 #############################################################################
 # Tighten the Dequeue wording ("...or None when empty." -> "...or None
 # when the queue is empty."). Same number of lines -> segment drift
@@ -289,7 +306,7 @@ assert "queue_links still 3 links, 0 broken" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
-hr "12. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
+hr "13. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
 #############################################################################
 # Add two lines to the preamble; everything below shifts down. recut
 # --remap re-fits every line-aligned segment automatically.
@@ -307,7 +324,7 @@ assert "after remap: still 3 links, 0 broken" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
 
 #############################################################################
-hr "13. T7-style drift: move a section, fingerprint proposes its new home"
+hr "14. T7-style drift: move a section, fingerprint proposes its new home"
 #############################################################################
 # Move the Enqueue section (the @enqueue-op segment) to the END of the file.
 # Now the segment that was 2nd in the covering would have to map *after*
@@ -327,7 +344,7 @@ assert "remap left the covering unmutated for the moved file (still drifted)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'file(s) edited' )"
 
 #############################################################################
-hr "14. prune: drop a genuinely broken link  (REQ14)"
+hr "15. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate prune on a deliberately broken link: clear a segment's name,
 # which deletes that segment identity, breaking its link. Then prune drops it.
@@ -337,7 +354,7 @@ hr "14. prune: drop a genuinely broken link  (REQ14)"
 ( cd "$WORK/spec" && run status main )
 
 #############################################################################
-hr "15. render the HTML report  (REQ20)"
+hr "16. render the HTML report  (REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run html )
 echo "  open: $WORK/spec/.covmap/report.html"

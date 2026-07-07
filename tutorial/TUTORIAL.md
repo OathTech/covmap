@@ -67,10 +67,10 @@ each step starts from a known state (no in-place editing magic):
 
 | Stage | File | Used by |
 | ----- | ---- | ------- |
-| initial | `files/queue.md` | steps 1–9 |
-| in-place edit | `files/queue.reworded.md` | step 10 |
-| inserted lines | `files/queue.inserted.md` | step 11 |
-| moved section | `files/queue.moved.md` | step 12 |
+| initial | `files/queue.md` | steps 1–11 |
+| in-place edit | `files/queue.reworded.md` | step 12 |
+| inserted lines | `files/queue.inserted.md` | step 13 |
+| moved section | `files/queue.moved.md` | step 14 |
 
 (Stage files are named for the *edit* they represent, not a step number,
 so they stay meaningful if the tutorial is reordered.)
@@ -280,7 +280,37 @@ a51b8db403cc3096	reviewed	        queue.md:14..16	    3	-
 The name is *not* part of the segment hash — naming, relabelling, or
 recutting a segment never touches the shared object store.
 
-## 8. Connect and link by name  (req2, req10, req16)
+## 8. Annotate a segment with why it was cut  (req22)
+
+A **message** records free-form rationale *about a segment itself* — why
+this boundary exists, what the chunk is, why it is (or isn't) mapped. It is
+covering-local and, like a name, **not** part of the segment hash, so
+editing it never causes drift and it travels with the segment across later
+edits. `annotate -m` is repeatable — each `-m` is a paragraph, git-style.
+
+```sh
+covmap annotate main:@enqueue-op \
+  -m "Core enqueue op — mapped to the Rust impl." \
+  -m "Cut as its own segment so the spec<->impl link is 1:1."
+covmap annotate main:@enqueue-op    # no -m: print the message
+covmap show main:@enqueue-op        # message shown under the segment header
+```
+
+`covmap ls -l` shows the message's first line as a trailing column; `show`
+prints the whole thing.
+
+This is the fifth and last place text lives in covmap — keep the five
+straight by *what the text is about*:
+
+| Channel | About | Hashed? |
+| ------- | ----- | ------- |
+| **label** | a coarse status category of a segment | yes |
+| **name** | a stable slug identity of a segment | no |
+| **message** | why *this segment* (rationale/provenance) | no |
+| link note | why *this mapping* (A↔B) | n/a |
+| iterator task note | *this sweep's* verdict on a segment | n/a |
+
+## 9. Connect and link by name  (req2, req10, req16)
 
 A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
@@ -309,7 +339,7 @@ covmap ls-links queue_links
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
 
-## 9. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
+## 10. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
 
 ```sh
 covmap show queue_links     # connection metadata + links
@@ -330,7 +360,7 @@ connections:
   queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken
 ```
 
-## 10. Iterators: work the covering as a worklist  (req21)
+## 11. Iterators: work the covering as a worklist  (req21)
 
 A covering says *what* the pieces are. An **iterator** freezes it into an
 *ordered, stateful worklist*: each segment becomes a **task** you pull one
@@ -401,7 +431,7 @@ resolution, jumping around and skipping cannot strand a task — the covering
 is always fully reachable.
 
 An iterator can be **filtered to one label** — a backfill of just the
-not-yet-refined `unknown` segments, say. Here `alt` (from step 9) is the
+not-yet-refined `unknown` segments, say. Here `alt` (from step 10) is the
 whole-file covering, so this freezes its two `unknown` segments:
 
 ```sh
@@ -430,7 +460,7 @@ when files diverge from their recorded segments (**drift**) and offers a
 layered repair path. The next three steps each make a different kind of
 edit.
 
-## 11. In-place edit → `recut`; the named link survives  (req13, req14)
+## 12. In-place edit → `recut`; the named link survives  (req13, req14)
 
 Tighten the Dequeue wording — *"…or None when empty."* becomes *"…or
 None when the queue is empty."* (stage `files/queue.reworded.md`). The
@@ -459,7 +489,7 @@ covmap status                          # drift: clean, still 3 links, 0 broken
 No unlink/relink needed — contrast this with a hash-based link, which
 would have broken (playground task T3 vs. T5).
 
-## 12. Inserted lines → `recut --remap` (diff-remap)  (req13)
+## 13. Inserted lines → `recut --remap` (diff-remap)  (req13)
 
 Add two lines to the preamble (stage `files/queue.inserted.md`). Now
 every section below shifts down — **boundary drift**. A per-segment
@@ -482,7 +512,7 @@ unchanged regions — following the insertion automatically. Names (hence
 the `queue_links` links) are preserved, so `status` is clean again and
 the connection is still 3 links, 0 broken. No relinking.
 
-## 13. Moved section → fingerprint proposal (propose-only)
+## 14. Moved section → fingerprint proposal (propose-only)
 
 Move the whole **Enqueue** section to the end of the file (stage
 `files/queue.moved.md`). Its boundary lines vanish from their old
@@ -517,7 +547,7 @@ across content edits → **diff-remap** deterministically re-fits
 boundaries that survived in place → **fingerprint** proposes a relocation
 for whatever remains.
 
-## 14. Drop a genuinely broken link: `prune`  (req14)
+## 15. Drop a genuinely broken link: `prune`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
 named segment, when that segment is **deleted**. Clear a segment's name to
@@ -534,7 +564,7 @@ broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
 prune: 1 link(s) dropped, 2 kept
 ```
 
-## 15. Render the HTML report  (req20)
+## 16. Render the HTML report  (req20)
 
 ```sh
 covmap html
@@ -554,18 +584,19 @@ highlighted.
 | Feature | Step | Requirement |
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
-| status, ls (metrics) | 2, 9 | req12, req20 |
+| status, ls (metrics) | 2, 10 | req12, req20 |
 | split (line + character) | 3, 5 | req5, req8 |
-| merge / recut / label | 4, 6, 11 | req8, req4, req13 |
+| merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |
-| connect / link / addressing | 8 | req2, req10, req16 |
-| show / grep / diff / fsck | 9 | req15, req19, req20 |
-| iterator: freeze + sweep a worklist | 10 | req21 |
-| drift: recut (named link survives) | 11 | req13, req14 |
-| drift: diff-remap | 12 | req13 |
-| drift: fingerprint proposal | 13 | req13, req14 |
-| prune | 14 | req14 |
-| HTML report | 15 | req20 |
+| annotate (segment message) | 8 | req22 |
+| connect / link / addressing | 9 | req2, req10, req16 |
+| show / grep / diff / fsck | 10 | req15, req19, req20 |
+| iterator: freeze + sweep a worklist | 11 | req21 |
+| drift: recut (named link survives) | 12 | req13, req14 |
+| drift: diff-remap | 13 | req13 |
+| drift: fingerprint proposal | 14 | req13, req14 |
+| prune | 15 | req14 |
+| HTML report | 16 | req20 |
 
 Not shown: connection algebra (inverse / composition / union, req11),
 which is defined in the model but not yet exposed on the CLI.

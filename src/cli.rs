@@ -47,6 +47,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "diff" => cmd_diff(&rest),
         "label" => cmd_label(&rest),
         "name" => cmd_name(&rest),
+        "annotate" => cmd_annotate(&rest),
         "split" => cmd_split(&rest),
         "merge" => cmd_merge(&rest),
         "recut" => cmd_recut(&rest),
@@ -88,6 +89,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
         "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
+        "annotate" => "covmap annotate <C>:<addr> [-m <msg>...] | -   set, replace, clear (-), or print a segment's message",
         "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
@@ -126,6 +128,7 @@ PORCELAIN
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
   name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
+  annotate <C>:<addr> [-m <msg>...]   set/replace/clear (-)/print a segment's free-form message
   split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
@@ -310,6 +313,7 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
             b_col: None,
             label: seg.label,
             name: None,
+            message: None,
         });
         added += 1;
     }
@@ -525,17 +529,29 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         return Ok(0);
     }
 
-    let full = match covering {
+    // Resolve the segment. When addressed through a covering, keep the
+    // covering entry too, so we can surface its message (covering-local
+    // metadata that the object store does not hold).
+    let (full, message) = match covering {
         Some(cname) => {
             let c = resolve_covering(&repo, &cname)?;
-            covering::resolve_segment_hash(&c, &prefix)?
+            let idx = covering::resolve_segment(&c, &prefix)?;
+            (c.entries[idx].hash.clone(), c.entries[idx].message.clone())
         }
-        None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
+        None => (segment::resolve_prefix(&repo.objects_dir(), &prefix)?, None),
     };
     let (label, content) = segment::read_object(&repo.objects_dir(), &full)?;
     println!("segment {full}");
     println!("  label:  {}", if label.is_empty() { "-" } else { &label });
     println!("  bytes:  {}", content.len());
+    if let Some(m) = &message {
+        // The full (possibly multi-line) message, each line indented so it
+        // reads as a block under the segment header.
+        println!("  message:");
+        for line in m.split('\n') {
+            println!("    {line}");
+        }
+    }
     println!("---");
     print!("{content}");
     if !content.ends_with('\n') {
@@ -568,21 +584,28 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     let c = resolve_covering(&repo, &n)?;
     for e in &c.entries {
         if long {
-            // Columns: hash, label, loc, lines, name. The name is
-            // appended last so the historical column order (hash, label,
-            // loc, lines) is unchanged for existing scripts.
+            // Columns: hash, label, loc, lines, name, [message]. The name
+            // keeps its historical position; the message's FIRST line is a
+            // further trailing column (present only when set), so the
+            // listing stays one row per segment — `show` prints the whole
+            // (possibly multi-line) message.
             let name = e
                 .name
                 .as_deref()
                 .map(|n| format!("@{n}"))
                 .unwrap_or_else(|| "-".to_string());
+            let msg_col = match &e.message {
+                Some(m) => format!("\t{}", m.split('\n').next().unwrap_or("")),
+                None => String::new(),
+            };
             println!(
-                "{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}{}",
                 e.hash,
                 if e.label.is_empty() { "-" } else { &e.label },
                 e.loc(),
                 e.b - e.a + 1,
-                name
+                name,
+                msg_col
             );
         } else {
             println!("{}\t{}", e.hash, e.loc());
@@ -735,6 +758,90 @@ fn cmd_name(args: &[String]) -> io::Result<u8> {
             println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)")
         }
         (None, None) => println!("{h} (already anonymous)"),
+    }
+    Ok(0)
+}
+
+// ---- annotate -------------------------------------------------------------
+
+/// `annotate <C>:<addr> [-m <msg>]... | -` — set, replace, clear, or print a
+/// segment's free-form message. With no `-m` (and no `-`), prints the current
+/// message. Repeated `-m` join as blank-line-separated paragraphs (git
+/// convention). A lone `-` clears the message. `<addr>` is any segment
+/// address (`@name`, hash prefix, or `file:line[:col]`).
+fn cmd_annotate(args: &[String]) -> io::Result<u8> {
+    let addr_arg = args.first().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "annotate <covering>:<addr> [-m <msg>]... | -",
+        )
+    })?;
+    // Parse the rest: -m/--message (repeatable) sets; a lone `-` clears;
+    // nothing means read.
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut clear = false;
+    let mut set = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-m" | "--message" => {
+                let v = args.get(i + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "-m needs a message")
+                })?;
+                paragraphs.push(v.clone());
+                set = true;
+                i += 2;
+            }
+            "-" => {
+                clear = true;
+                i += 1;
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("annotate: unexpected argument '{other}' (use -m <msg> or -)"),
+                ));
+            }
+        }
+    }
+    if set && clear {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "annotate: give either -m <msg> or - (clear), not both",
+        ));
+    }
+
+    let (covname, addr) = parse_addr(addr_arg);
+    let covname = covname.unwrap_or_else(|| "HEAD".to_string());
+    let repo = current_repo()?;
+    let mut c = resolve_covering(&repo, &covname)?;
+    let idx = covering::resolve_segment(&c, &addr)?;
+    let h = covering::short_hash(&c.entries[idx].hash).to_string();
+
+    // Read mode: no -m and no `-`.
+    if !set && !clear {
+        match &c.entries[idx].message {
+            Some(m) => {
+                println!("{m}");
+                return Ok(0);
+            }
+            None => {
+                eprintln!("{h} (no message)");
+                return Ok(1);
+            }
+        }
+    }
+
+    let new_message = if clear {
+        None
+    } else {
+        Some(paragraphs.join("\n\n"))
+    };
+    covering::set_message(&mut c, idx, new_message.as_deref());
+    c.write(&repo)?;
+    match &c.entries[idx].message {
+        Some(_) => println!("annotated {h}"),
+        None => println!("cleared message from {h}"),
     }
     Ok(0)
 }

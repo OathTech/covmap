@@ -351,12 +351,18 @@ fn render_list_view(
             } else {
                 &e.label
             };
+            // A segment message (if any) renders as its own detail line under
+            // the meta, newlines preserved.
+            let message_block = match &e.message {
+                Some(m) => format!("<div class=\"seg-message\">{}</div>", esc(m)),
+                None => String::new(),
+            };
             s.push_str(&format!(
                 "<div class=\"segment clickable status-{} zebra-{}\" data-status=\"{}\" \
                        data-file=\"{}\" data-hash=\"{}\" data-tip='{}'>\
                    <h3>{} <span class=\"badge {}\">{}</span></h3>\
                    <div class=\"meta\"><code>{}</code> · {} · {} lines · label {}</div>\
-                   {}\
+                   {}{}\
                  </div>\n",
                 status,
                 i % 2,
@@ -371,6 +377,7 @@ fn render_list_view(
                 esc(&e.loc()),
                 e.b - e.a + 1,
                 label_html(label),
+                message_block,
                 links_block(&links)
             ));
         }
@@ -923,6 +930,7 @@ section { padding: 1.5rem; overflow-y: auto; }
 .segment.clickable:hover { border-color: #94a3b8; }
 .segment h3 { margin: 0 0 0.25rem 0; font-size: 1rem; }
 .segment .meta { font-size: 0.75rem; color: #64748b; margin-bottom: 0.5rem; font-family: ui-monospace, monospace; }
+.segment .seg-message { font-size: 0.8rem; color: #475569; margin-bottom: 0.5rem; white-space: pre-wrap; border-left: 3px solid #cbd5e1; padding-left: 0.6rem; }
 .segment .links { margin-top: 0.5rem; font-size: 0.82rem; }
 .segment .links code { background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 3px; }
 .segment .note { font-style: italic; color: #4b5563; }

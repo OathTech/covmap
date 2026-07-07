@@ -539,6 +539,7 @@ mod tests {
             b_col: None,
             label: label.into(),
             name: name.map(|s| s.to_string()),
+            message: None,
         }
     }
 

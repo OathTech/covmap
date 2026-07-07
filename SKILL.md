@@ -35,6 +35,11 @@ binary path is `covmap/target/release/covmap`.
   `@name` survives edits to the segment's content, because identity is the
   name, not the hash. Anonymous segments (the default, e.g. `unknown`
   segments) are referenced by segment hash, which changes on every edit.
+- A **message** is an optional free-form note *about a segment itself* —
+  why it was cut, what it represents, why it is (not) mapped — set with
+  `covmap annotate ... -m`. It may be multi-line, is covering-local, and is
+  **not** part of the segment hash, so editing it never causes drift; it
+  travels with the segment across split/merge/recut/remap like a name does.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
@@ -49,6 +54,21 @@ binary path is `covmap/target/release/covmap`.
   and adds a single whole-file segment labelled `unknown` for every
   readable UTF-8 file it has not yet covered. The user / agent then
   refines the covering with `covmap split` and `covmap merge`.
+
+### Where text lives — five channels, don't confuse them
+
+covmap has five places text can attach. Pick by *what the text is about*:
+
+| Channel | Attaches to | Purpose | Hashed? | Set with |
+| ------- | ----------- | ------- | ------- | -------- |
+| **label** | a segment | coarse status *category* (`unknown`/`reviewed`/`mapped`) | **yes** (part of identity) | `covmap label` |
+| **name** | a segment | stable *slug identity* (`@enqueue`); no spaces/`:` | no | `covmap name` |
+| **message** | a segment | free-form *why this segment* (rationale, provenance, why (un)mapped) | no | `covmap annotate -m` |
+| **link note** | a link | *why this mapping* (A↔B) | n/a | `covmap link … <note>` |
+| **task note** | an iterator task | *this sweep's verdict* on a segment (transient) | n/a | `covmap iter … done/skip -m` |
+
+Rule of thumb: **message** = a durable fact about the segment; **link
+note** = about a correspondence; **task note** = about one pass of work.
 
 ## When to use this skill
 
@@ -96,6 +116,7 @@ are unique.
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (re-hashes). | no |
 | `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. Name the segments you intend to map. | no |
+| `covmap annotate <C>:<addr> [-m <msg>]...` | Set/replace a segment's free-form **message** (why it was cut / what it is / why it is or isn't mapped). Repeatable `-m` = paragraphs; `-` clears; no `-m` prints it. Not hashed — editing it never causes drift. | yes (read) |
 | `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name; the bottom is anonymous. | yes |
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |

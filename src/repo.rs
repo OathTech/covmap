@@ -9,6 +9,7 @@
 //!     objects/<hh>/<rest> # segment object: "<label>\0<content>"
 //!     coverings/<name>    # covered files + segment list
 //!     connections/<name>  # connection metadata + links
+//!     iterators/<name>    # frozen worklist + per-task state + cursor
 //! ```
 
 use std::fs;
@@ -59,6 +60,7 @@ impl Repo {
         fs::create_dir_all(dot.join("objects"))?;
         fs::create_dir_all(dot.join("coverings"))?;
         fs::create_dir_all(dot.join("connections"))?;
+        fs::create_dir_all(dot.join("iterators"))?;
         fs::write(dot.join("version"), format!("{FORMAT_VERSION}\n"))?;
         let mut head = fs::File::create(dot.join("HEAD"))?;
         writeln!(head, "main")?;
@@ -113,6 +115,13 @@ impl Repo {
     }
     pub fn connections_dir(&self) -> PathBuf {
         self.dot().join("connections")
+    }
+    /// Directory of iterator refs. Purely additive (an older covmap never
+    /// reads it), so it needs no `FORMAT_VERSION` bump. A repo initialized
+    /// before iterators existed simply lacks the directory; the iterator
+    /// commands create it on first write via `atomic_write`.
+    pub fn iterators_dir(&self) -> PathBuf {
+        self.dot().join("iterators")
     }
     pub fn head_file(&self) -> PathBuf {
         self.dot().join("HEAD")

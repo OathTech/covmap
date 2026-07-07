@@ -16,7 +16,7 @@ agree.
 | a | **Theory** | `theory/main.tex` | The formal model — definitions, invariants, propositions. The ground truth of *what covmap means*. |
 | b | **Requirements** | `REQUIREMENTS.md` | Coarse capabilities the implementation must provide, each derived from and mapped to the theory (via the `reqmap` connection in this repo's own `.covmap/`). |
 | c | **Implementation** | `src/` (incl. `#[cfg(test)]` unit tests) | The Rust CLI and its unit tests. *What covmap does.* |
-| d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T7). *How to drive covmap.* |
+| d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T8). *How to drive covmap.* |
 | e | **Tutorial** | `tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh` | A guided end-to-end tour; the script is the source of truth and doubles as an integration test. *How covmap feels in practice.* |
 
 The `GLOSSARY.md` cross-references all five and is a good map of the

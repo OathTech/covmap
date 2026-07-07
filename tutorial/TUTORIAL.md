@@ -88,7 +88,7 @@ formal model but has no CLI surface yet. Each step is annotated with the
 requirements it exercises. For the agent-facing reference, see
 [`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
 [`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T7).
+in the scenarios from tasks T1–T8).
 
 ---
 
@@ -330,6 +330,97 @@ connections:
   queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken
 ```
 
+## 10. Iterators: work the covering as a worklist  (req21)
+
+A covering says *what* the pieces are. An **iterator** freezes it into an
+*ordered, stateful worklist*: each segment becomes a **task** you pull one
+at a time, work against, and mark `done` or `skipped`. The cursor and
+per-task state live on disk (`.covmap/iterators/<name>`), so the plan is
+durable and resumable — after a crash or a context compaction, `covmap iter
+review current` re-establishes exactly where you were. It is a **snapshot**
+layered *over* the covering: it never mutates a segment, so we run it here,
+on the clean refined covering, before the drift edits below.
+
+Freeze `main` in reading order, then check the tally:
+
+```sh
+covmap iter review new main --order file
+covmap iter review status                # 0/7 resolved (0 done, 0 skipped) — 7 pending, no active task
+```
+
+The **canonical loop** pulls one task at a time. `next` hands you the first
+pending task and is *refused* while the current task is still pending, so
+you resolve each before advancing — no segment is stepped over. Keep the
+loop body comment-free: an interactive **zsh** treats a pasted `#` as a
+command, not a comment, which would leave the task unresolved and spin the
+loop. Do the work between `next` and `done`:
+
+```sh
+until covmap iter review finished; do
+  covmap iter review next
+  covmap iter review done -m "audited"
+done
+covmap iter review status                # 7/7 resolved (7 done, 0 skipped) — finished
+covmap iter review current               # the resume affordance: reprint the cursor's task
+```
+
+(Between `next` and `done` you would inspect the task — `covmap iter review
+peek --content`, or `covmap cat-segment <hash>` — and do the actual work;
+use `skip -m "why"` in place of `done` to pass on one deliberately.)
+
+Each `next` / `current` / `peek` prints one parseable line per task —
+`<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally
+dumps the frozen bytes, so the loop's stdout stays terse by default.
+
+The enumeration guarantee is what makes "visit every segment exactly once"
+a property the tool enforces: `next` advances to the first pending task
+*globally* (not merely after the cursor), `peek` lists the pending tasks
+you can `choose` among (a jump that leaves states untouched, so a later
+`next` returns to anything still pending), and `finished` is true only when
+nothing is pending.
+
+Besides the loop, three verbs give you manual control. `choose <addr>`
+jumps the cursor to any task by `@name` or hash prefix — out of order, e.g.
+to handle a specific segment first. `skip -m "why"` resolves the current
+task as a deliberate pass rather than `done`. `rewind [<addr>]` undoes a
+resolution, returning a `done`/`skipped` task to pending. We show them on a
+throwaway `plan` iterator, so the `review` sweep above stays untouched —
+iterators are cheap, independent overlays:
+
+```sh
+covmap iter plan new main
+covmap iter plan choose @enqueue-op
+covmap iter plan skip -m "trivial — covered elsewhere"
+covmap iter plan status                  # 1/7 resolved (0 done, 1 skipped) — 6 pending, no active task
+covmap iter plan rewind @enqueue-op      # undo the skip
+covmap iter plan rm                      # discard the scratch iterator
+```
+
+Because `choose` never changes a task's state and `rewind` can undo any
+resolution, jumping around and skipping cannot strand a task — the covering
+is always fully reachable.
+
+An iterator can be **filtered to one label** — a backfill of just the
+not-yet-refined `unknown` segments, say. Here `alt` (from step 9) is the
+whole-file covering, so this freezes its two `unknown` segments:
+
+```sh
+covmap iter backfill new alt --label unknown   # froze ... 2 task(s), label=unknown
+covmap iter                                    # bare `iter` lists every iterator
+```
+
+Iterators are pure overlays, so removing them leaves the covering
+untouched:
+
+```sh
+covmap iter review rm
+covmap iter backfill rm
+```
+
+(This is playground task T8. Note an iterator is *not* a drift tracker: a
+frozen task never goes stale — its content is pinned by hash — so drift
+stays a property of the covering, repaired below with `recut`.)
+
 ---
 
 # Drift: three edits, three repair layers
@@ -339,7 +430,7 @@ when files diverge from their recorded segments (**drift**) and offers a
 layered repair path. The next three steps each make a different kind of
 edit.
 
-## 10. In-place edit → `recut`; the named link survives  (req13, req14)
+## 11. In-place edit → `recut`; the named link survives  (req13, req14)
 
 Tighten the Dequeue wording — *"…or None when empty."* becomes *"…or
 None when the queue is empty."* (stage `files/queue.reworded.md`). The
@@ -368,7 +459,7 @@ covmap status                          # drift: clean, still 3 links, 0 broken
 No unlink/relink needed — contrast this with a hash-based link, which
 would have broken (playground task T3 vs. T5).
 
-## 11. Inserted lines → `recut --remap` (diff-remap)  (req13)
+## 12. Inserted lines → `recut --remap` (diff-remap)  (req13)
 
 Add two lines to the preamble (stage `files/queue.inserted.md`). Now
 every section below shifts down — **boundary drift**. A per-segment
@@ -391,7 +482,7 @@ unchanged regions — following the insertion automatically. Names (hence
 the `queue_links` links) are preserved, so `status` is clean again and
 the connection is still 3 links, 0 broken. No relinking.
 
-## 12. Moved section → fingerprint proposal (propose-only)
+## 13. Moved section → fingerprint proposal (propose-only)
 
 Move the whole **Enqueue** section to the end of the file (stage
 `files/queue.moved.md`). Its boundary lines vanish from their old
@@ -426,7 +517,7 @@ across content edits → **diff-remap** deterministically re-fits
 boundaries that survived in place → **fingerprint** proposes a relocation
 for whatever remains.
 
-## 13. Drop a genuinely broken link: `prune`  (req14)
+## 14. Drop a genuinely broken link: `prune`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
 named segment, when that segment is **deleted**. Clear a segment's name to
@@ -443,7 +534,7 @@ broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
 prune: 1 link(s) dropped, 2 kept
 ```
 
-## 14. Render the HTML report  (req20)
+## 15. Render the HTML report  (req20)
 
 ```sh
 covmap html
@@ -465,15 +556,16 @@ highlighted.
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
 | status, ls (metrics) | 2, 9 | req12, req20 |
 | split (line + character) | 3, 5 | req5, req8 |
-| merge / recut / label | 4, 6, 10 | req8, req4, req13 |
+| merge / recut / label | 4, 6, 11 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |
 | connect / link / addressing | 8 | req2, req10, req16 |
 | show / grep / diff / fsck | 9 | req15, req19, req20 |
-| drift: recut (named link survives) | 10 | req13, req14 |
-| drift: diff-remap | 11 | req13 |
-| drift: fingerprint proposal | 12 | req13, req14 |
-| prune | 13 | req14 |
-| HTML report | 14 | req20 |
+| iterator: freeze + sweep a worklist | 10 | req21 |
+| drift: recut (named link survives) | 11 | req13, req14 |
+| drift: diff-remap | 12 | req13 |
+| drift: fingerprint proposal | 13 | req13, req14 |
+| prune | 14 | req14 |
+| HTML report | 15 | req20 |
 
 Not shown: connection algebra (inverse / composition / union, req11),
 which is defined in the model but not yet exposed on the CLI.

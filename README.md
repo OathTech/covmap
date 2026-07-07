@@ -66,6 +66,10 @@ There are no runtime dependencies beyond `sha2`.
   endpoint is a segment name (`@name`) or a segment hash.
 - Sharing is automatic: any two coverings producing a segment with
   the same content+label end up referencing the same object.
+- An **iterator** freezes a covering into an ordered, stateful worklist
+  (`covmap iter <name> new <C>`): each segment becomes a task you pull one
+  at a time and mark `done`/`skipped`. It is a resumable, on-disk work
+  plan layered over the covering — it never mutates it.
 
 There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
@@ -180,6 +184,7 @@ one per line. Supported syntax:
   objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
   coverings/<name>     # covered files + one segment hash per line
   connections/<name>   # connection metadata + links
+  iterators/<name>     # a covering frozen into an ordered, stateful worklist
 ```
 
 Every command checks `.covmap/version` and refuses to operate on a

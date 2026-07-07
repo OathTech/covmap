@@ -476,6 +476,100 @@ survived in place; fingerprinting proposes a relocation for what
 remains. Each layer narrows what it hands the next, and only
 the last is probabilistic.
 
+\section{Iterators}\label{sec:iterators}
+
+A covering says \emph{what} the pieces of a project are; it says nothing
+about \emph{in what order} an external consumer should work through them,
+or \emph{how far} that work has got. An \emph{iterator} adds exactly that:
+it freezes a covering into an ordered, stateful worklist over which a
+consumer (an agent, a human, a script) advances one segment at a time. It
+is a layer strictly \emph{over} a covering --- it never mutates segments,
+coverings, or connections.
+
+\begin{definition}[Iterator]\label{def:iterator}
+Let $\Cov$ be a covering of $A$ and let $\ell$ be an optional label. Write
+$\Cov \restriction \ell$ for the sub-multiset of segments of $\Cov$ whose
+label is $\ell$, and $\Cov \restriction \top = \Cov$ when no label is
+given. An \emph{iterator} over $\Cov$ is a tuple
+$\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \gamma)$ where
+\begin{itemize}[leftmargin=2em,itemsep=1pt]
+\item $\tau$ is a finite sequence of \emph{tasks}, one per segment of
+      $\Cov \restriction \ell$, each task freezing that segment's tuple
+      $(\hash(s),\ f, a, a_c, b, b_c,\ \mathrm{label}(s),\ \nu)$ at the
+      moment the iterator is created;
+\item $<$ is a total order on $\tau$ (the enumeration order);
+\item $\mathrm{st} : \tau \to \{\textsc{pending}, \textsc{done},
+      \textsc{skipped}\}$ is the \emph{state map}, initially
+      $\mathrm{st}(t) = \textsc{pending}$ for every task; and
+\item $\gamma \in \tau \cup \{\bot\}$ is the \emph{cursor}, the one task
+      the consumer is currently on ($\bot$ before the first task).
+\end{itemize}
+A task is \emph{active} exactly when $\gamma$ points at it and it is
+\textsc{pending}; there is no stored \textsc{active} state.
+\end{definition}
+
+The iterator is a \emph{snapshot}, not a live view. Because $\tau$ records
+each segment's hash at creation time and the object store $\sigma_A$
+(\S\ref{sec:sharing}) is append-only, every frozen task's content stays
+retrievable no matter how the files, the covering, or the connections are
+later changed --- even if the covering is deleted. The line numbers a task
+carries are a \emph{hint} to the current on-disk position; the frozen hash
+is the anchor.
+
+Two enumeration orders are canonical: \emph{file order} (by path, then by
+start position --- natural reading order) and \emph{label order} (grouping
+tasks that share a label). A label filter $\ell$ narrows the enumerated set
+to one label, e.g.\ \texttt{unknown} for a backfill of the not-yet-refined
+segments.
+
+\begin{definition}[Advance]\label{def:advance}
+The \emph{advance} operation moves the cursor to the $<$-least
+\textsc{pending} task, and is defined only when the current task is not
+\textsc{pending} (i.e.\ $\gamma = \bot$, or $\mathrm{st}(\gamma) \in
+\{\textsc{done}, \textsc{skipped}\}$). When no \textsc{pending} task
+remains it leaves the cursor unchanged and reports exhaustion.
+\end{definition}
+
+Advancing to the globally $<$-least \textsc{pending} task --- rather than
+merely the task after the cursor --- is what makes a task impossible to
+step over silently: a deliberate jump of the cursor (which may land on a
+\textsc{pending} task) leaves that task \textsc{pending}, so a later
+advance returns to it. Leaving the current task requires resolving it,
+either \textsc{done} (worked) or \textsc{skipped} (deliberately passed
+over).
+
+\begin{proposition}[Complete enumeration]\label{prop:enumeration}
+Fix an iterator $\mathcal{I}$ and consider any run in which each step is
+either an \emph{advance} (Definition~\ref{def:advance}) or a resolution of
+the current task to \textsc{done} or \textsc{skipped}. Then: (i) advance
+never moves off a \textsc{pending} task, so no task is stepped over while
+unresolved; and (ii) the run reaches a state in which every task is
+\textsc{done} or \textsc{skipped} --- \emph{exhaustion} --- iff it performs,
+for each task, at least one resolution. Equivalently, $\mathcal{I}$ is
+exhausted precisely when $\mathrm{st}^{-1}(\textsc{pending}) = \varnothing$,
+and until then advance always has a next task to offer.
+\end{proposition}
+
+The complete-enumeration invariant of Proposition~\ref{prop:enumeration} is
+to a worklist what the partition invariants (C1--C3,
+Definition~\ref{def:covering}) are to a covering: C1--C3 guarantee that
+every character lies in exactly one segment, and complete enumeration
+guarantees that every segment (of the filtered set) is eventually visited
+and resolved exactly through \textsc{done}/\textsc{skipped}, with none
+stranded. An iterator's cursor and state map are pure bookkeeping over the
+frozen order; they add no way to reach a character or a segment that the
+covering did not already contain, so the invariant composes cleanly with
+C1--C3 rather than qualifying them.
+
+\begin{remark}[No drift state on a task]\label{rem:iterator-drift}
+A task has no \textsc{stale} state. Freezing plus the append-only object
+store means a task's content is always the bytes recorded at creation; if
+the file later drifts (\S\ref{sec:complexity}) that is a property of the
+covering, surfaced by \texttt{status} and repaired by
+\texttt{recut}/diff-remap, not of the iterator, whose task still resolves
+to its frozen content via \texttt{cat-segment}.
+\end{remark}
+
 \section{An interface for \texttt{covmap}}\label{sec:interface}
 
 The model above suggests a small command surface, organized
@@ -493,7 +587,12 @@ directory:
   objects/<hh>/<rest> segments, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
+  iterators/<name>    one file per iterator (frozen worklist + cursor)
 \end{verbatim}
+The \texttt{iterators/} directory is purely additive: an older
+\texttt{covmap} simply never reads it, so introducing it needs no
+format-version change, mirroring how the character column and segment name
+were added.
 
 \subsection{Addressing}
 
@@ -608,6 +707,52 @@ is the most general covering one can ask for.
 \item \texttt{covmap fsck}\\
       Verify that every covering is a partition of its covered set
       and that every connection's endpoints resolve.
+\end{itemize}
+
+\subsection{Iterators}\label{sec:iter-interface}
+
+The commands realizing \S\ref{sec:iterators} are grouped under a
+name-first \texttt{iter} verb, so \texttt{covmap iter $I$} is a stable
+prefix. Bare \texttt{covmap iter} lists all iterators.
+
+\begin{itemize}[leftmargin=2em,itemsep=2pt]
+\item \texttt{covmap iter $I$ new $C$ [--order file|label] [--label $\ell$]}\\
+      Freeze covering $C$ into the ordered worklist $\mathcal{I}$
+      (Definition~\ref{def:iterator}). \texttt{--order} defaults to
+      \texttt{file}; \texttt{--label $\ell$} restricts $\tau$ to the
+      segments labelled $\ell$. The cursor starts at $\bot$.
+\item \texttt{covmap iter $I$ next}\\
+      \emph{Advance} (Definition~\ref{def:advance}): move the cursor to
+      the $<$-least \textsc{pending} task and print it. Refused while the
+      current task is still \textsc{pending}; exits non-zero when none
+      remains.
+\item \texttt{covmap iter $I$ current}\\
+      Reprint the cursor's task in any state --- the resume affordance
+      after a crash or context loss.
+\item \texttt{covmap iter $I$ done [-m <msg>]} / \texttt{skip [-m <msg>]}\\
+      Set $\mathrm{st}(\gamma)$ to \textsc{done} / \textsc{skipped},
+      optionally recording a note. Neither advances.
+\item \texttt{covmap iter $I$ choose <addr>}\\
+      Move the cursor to task \texttt{<addr>} (a jump); every task's state
+      is untouched, so completeness is preserved.
+\item \texttt{covmap iter $I$ rewind [<addr>]}\\
+      Reset a \textsc{done}/\textsc{skipped} task to \textsc{pending}
+      (default: the cursor's task).
+\item \texttt{covmap iter $I$ peek [--all] [--content]}\\
+      Look ahead, without advancing, at the \textsc{pending} tasks in order
+      (the set \texttt{choose} may target, including the active one);
+      \texttt{--all} lists the whole worklist tagged with each task's state,
+      and \texttt{--content} also prints frozen bytes.
+\item \texttt{covmap iter $I$ status}\\
+      Reports the resolved fraction $(k+m)/n$ (done $k$ plus skipped $m$ of
+      $n$ tasks), which reaches $n/n$ exactly at exhaustion, and marks the
+      state: \emph{finished} when no task is pending, else the active task
+      (at most one, a single cursor $\gamma$) or the pending count.
+\item \texttt{covmap iter $I$ finished}\\
+      Exit $0$ iff $\mathrm{st}^{-1}(\textsc{pending}) = \varnothing$
+      (Proposition~\ref{prop:enumeration}).
+\item \texttt{covmap iter $I$ rm}\\
+      Delete the iterator; never touches the covering.
 \end{itemize}
 
 \subsection{Plumbing}

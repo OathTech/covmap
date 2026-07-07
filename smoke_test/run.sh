@@ -157,6 +157,12 @@ hr "render html report"
 ls -la "$WORK/spec/.covmap/report.html"
 echo "  size: $(wc -c < "$WORK/spec/.covmap/report.html") bytes"
 
+hr "render html for a specific connection (--connection selector)"
+( cd "$WORK/spec" && "$COVMAP_BIN" html --connection widget_links -o "$WORK/spec/.covmap/widget_links.html" )
+grep -q "widget_links" "$WORK/spec/.covmap/widget_links.html" \
+  && echo "  OK  connection-scoped report names the connection" \
+  || { echo "  FAIL: connection missing from --connection report"; exit 1; }
+
 echo
 echo "SMOKE TEST OK — artifacts under: $WORK"
 if [[ "${KEEP:-0}" == "1" ]]; then

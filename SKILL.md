@@ -127,7 +127,7 @@ are unique.
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
-| `covmap html [-o <path>]` | Render a static HTML browser. For humans, not you. | no |
+| `covmap html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser. For humans, not you. `--covering`/`--connection` select what it shows independent of HEAD/cwd; `--connection K` fixes the source to K's source covering and renders K's target side in the Target/Compare views (run it from the connection's *source* repo). | no |
 
 ### Plumbing (for scripts and pipelines)
 

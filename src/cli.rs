@@ -65,8 +65,26 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "rev-parse" => cmd_rev_parse(&rest),
         "fsck" => cmd_fsck(&rest),
         "help" | "-h" | "--help" => {
-            print_usage();
-            Ok(0)
+            // `covmap help <cmd>` prints that command's focused synopsis
+            // (like `covmap <cmd> --help`); bare `covmap help` prints the
+            // full usage page.
+            match rest.first() {
+                Some(sub) => match command_help_line(sub) {
+                    Some(line) => {
+                        println!("{line}");
+                        Ok(0)
+                    }
+                    None => {
+                        eprintln!("unknown command: {sub}");
+                        print_usage();
+                        Ok(2)
+                    }
+                },
+                None => {
+                    print_usage();
+                    Ok(0)
+                }
+            }
         }
         _ => {
             eprintln!("unknown command: {cmd}");
@@ -100,7 +118,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "iter" => {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
         }
-        "html" => "covmap html [-o <path>]                      render a static HTML browser",
+        "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser",
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
@@ -138,7 +156,7 @@ PORCELAIN
   connect <C_A> <repoB:C_B> [<K>]     create empty connection
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
-  html [-o <path>]                    render a static HTML browser
+  html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
@@ -1826,12 +1844,26 @@ fn parse_message(args: &[String]) -> io::Result<Option<String>> {
 
 fn cmd_html(args: &[String]) -> io::Result<u8> {
     let mut out_path: Option<String> = None;
+    let mut covering: Option<String> = None;
+    let mut connection: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => {
                 out_path = Some(args.get(i + 1).cloned().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "-o needs a path")
+                })?);
+                i += 2;
+            }
+            "--covering" => {
+                covering = Some(args.get(i + 1).cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--covering needs a name")
+                })?);
+                i += 2;
+            }
+            "--connection" => {
+                connection = Some(args.get(i + 1).cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--connection needs a name")
                 })?);
                 i += 2;
             }
@@ -1848,7 +1880,12 @@ fn cmd_html(args: &[String]) -> io::Result<u8> {
         Some(p) => PathBuf::from(p),
         None => repo.dot().join("report.html"),
     };
-    let html = crate::html::render(&repo)?;
+    // `--covering`/`--connection` explicitly select what the report shows,
+    // independent of HEAD. Selecting a connection also fixes the source
+    // covering to that connection's source covering (its Target/Compare
+    // views then render the connection's target side), so pointing the
+    // report at a specific map no longer depends on cwd or HEAD.
+    let html = crate::html::render(&repo, covering.as_deref(), connection.as_deref())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

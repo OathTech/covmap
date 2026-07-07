@@ -10,17 +10,64 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 
-pub fn render(repo: &Repo) -> io::Result<String> {
+/// Render the static HTML report.
+///
+/// `sel_covering` / `sel_connection`, when given, select what the report
+/// shows instead of defaulting to HEAD + every connection:
+/// - `sel_connection` limits the report to that one connection and, unless
+///   `sel_covering` overrides, fixes the source covering to the connection's
+///   own source covering — so pointing the report at a specific map does not
+///   depend on the current working directory or `.covmap/HEAD`.
+/// - `sel_covering` sets the source-side covering explicitly.
+///
+/// An unknown covering or connection name is an error.
+pub fn render(
+    repo: &Repo,
+    sel_covering: Option<&str>,
+    sel_connection: Option<&str>,
+) -> io::Result<String> {
     let coverings = Covering::list(repo)?;
-    let connections = Connection::list(repo)?;
 
-    // Pick HEAD's covering as the source view (or the first covering).
+    // Which connections to show: one selected connection, or all of them.
+    let connections = match sel_connection {
+        Some(k) => {
+            if !repo.connections_dir().join(k).is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("connection '{k}' not found in {}", repo.root.display()),
+                ));
+            }
+            vec![k.to_string()]
+        }
+        None => Connection::list(repo)?,
+    };
+
+    // Choose the source-side covering. Precedence: --covering, else the
+    // selected connection's source covering, else HEAD, else the first
+    // covering present.
     let head_name = repo.read_head().unwrap_or_else(|_| "main".to_string());
-    let source_covering = coverings
-        .iter()
-        .find(|n| n == &&head_name)
-        .or_else(|| coverings.first())
-        .cloned();
+    let conn_source = match sel_connection {
+        Some(k) => Some(Connection::read(repo, k)?.source_covering),
+        None => None,
+    };
+    let source_covering = match sel_covering {
+        Some(c) => {
+            if !repo.coverings_dir().join(c).is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("covering '{c}' not found in {}", repo.root.display()),
+                ));
+            }
+            Some(c.to_string())
+        }
+        None => conn_source.or_else(|| {
+            coverings
+                .iter()
+                .find(|n| n == &&head_name)
+                .or_else(|| coverings.first())
+                .cloned()
+        }),
+    };
 
     let src_cov = match source_covering {
         Some(n) => Some(Covering::read(repo, &n)?),

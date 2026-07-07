@@ -577,6 +577,12 @@ from the script) in a browser for the List / Source / Target / Compare
 views, with character-level chunks rendered inline and linked segments
 highlighted.
 
+By default the report shows HEAD's covering and every connection. To point
+it at a specific map regardless of HEAD or your cwd, pass `--covering <C>`
+and/or `--connection <K>` — e.g. `covmap html --connection queue_links`
+fixes the source to that connection's source covering and renders its
+target side in the Target / Compare views.
+
 ---
 
 ## What this covered

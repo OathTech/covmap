@@ -38,6 +38,7 @@ number is an identifier, not a priority.
 | # | Proposal | Stage | Summary |
 | - | -------- | ----- | ------- |
 | [0001](0001-iterators.md) | iterators | Landed | Freeze a covering into an ordered, stateful worklist — a durable, resumable work plan an agent or human pulls one task at a time. |
+| [0002](0002-segment-messages.md) | segment-messages | Landed | Attach an optional, non-hashed, possibly multi-line message to a segment, recording why it was cut / what it represents / why it is (not) mapped. |
 
 ## Writing a cip
 

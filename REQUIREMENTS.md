@@ -4,9 +4,9 @@ High-level requirements for covmap. Each captures a capability the tool
 provides, derived from the formal model (`theory/main.tex`) and the
 command interface (`covmap --help`). Intentionally coarse: the list stayed
 at 20 for a long time, and the count is a deliberate ceiling, lifted only
-when a genuinely new capability lands — req21 (iterators) is the first such
-lift. All are realized today except req11 (connection algebra), which is
-explicitly kept as a recommended future direction.
+when a genuinely new capability lands — req21 (iterators) and req22 (segment
+messages) are such lifts. All are realized today except req11 (connection
+algebra), which is explicitly kept as a recommended future direction.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -148,3 +148,15 @@ refused while the current task is still pending, so no task is stepped over
 unresolved and iteration is exhausted exactly when every task is `done` or
 `skipped`. Iterators live under `.covmap/iterators/`, a purely additive
 directory that needs no format-version bump.
+
+## req22 — Segment messages (annotation)
+covmap shall let a segment carry an optional, free-form *message*: durable,
+possibly multi-line text recording why the segment was cut, what it
+represents, or why it is (not) mapped. A message is covering-local metadata,
+distinct from the segment's `label` (a hashed status category) and its
+`name` (a slug identity, req3): it is **not** part of the segment hash, so
+setting, changing, or clearing it leaves the shared object store untouched
+and never causes or repairs drift. It travels with its segment across
+`split`/`merge`/`recut`/diff-remap the way a name does, is set and cleared
+with `covmap annotate` and surfaced by `show`/`ls`/`html`, and is stored
+additively in the covering ref with no format-version bump.

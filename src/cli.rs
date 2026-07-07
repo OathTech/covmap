@@ -1356,13 +1356,7 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
         let mut rows: Vec<(String, String, String)> = Vec::new();
         for n in &names {
             let it = Iter::read(&repo, n)?;
-            let (done, _active, skipped, total) = it.counts();
-            let active = match it.active_index() {
-                Some(i) => format!("active {}", it.tasks[i].handle()),
-                None => "no active task".to_string(),
-            };
-            let summary = format!("{done}/{total} done, {skipped} skipped, {active}");
-            rows.push((n.clone(), it.covering.clone(), summary));
+            rows.push((n.clone(), it.covering.clone(), it.summary()));
         }
         let name_w = rows.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
         let cov_w = rows.iter().map(|(_, c, _)| c.len()).max().unwrap_or(0);
@@ -1657,14 +1651,7 @@ fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
 fn cmd_iter_status(name: &str) -> io::Result<u8> {
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
-    let (done, _active, skipped, total) = it.counts();
-    // There is at most one active task (a single cursor), so name it rather
-    // than print a 0/1 count.
-    let active = match it.active_index() {
-        Some(i) => format!("active {}", it.tasks[i].handle()),
-        None => "no active task".to_string(),
-    };
-    println!("{done}/{total} done, {skipped} skipped, {active}");
+    println!("{}", it.summary());
     Ok(0)
 }
 

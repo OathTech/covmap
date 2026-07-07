@@ -387,6 +387,28 @@ impl Iter {
         self.first_pending().is_none()
     }
 
+    /// One-line human summary shared by `status` and the `iter` listing.
+    ///
+    /// The fraction counts *resolved* tasks (done + skipped), so it reaches
+    /// `total/total` exactly when the sweep is finished — `done/total` would
+    /// read as incomplete forever on any sweep that skips a task. The tail
+    /// states completion: `— finished` when nothing is pending, otherwise the
+    /// active task (or the pending count when the cursor is unset).
+    pub fn summary(&self) -> String {
+        let (done, _active, skipped, total) = self.counts();
+        let resolved = done + skipped;
+        let head = format!("{resolved}/{total} resolved ({done} done, {skipped} skipped)");
+        let tail = if self.is_finished() {
+            "finished".to_string()
+        } else if let Some(i) = self.active_index() {
+            format!("active {}", self.tasks[i].handle())
+        } else {
+            let pending = total - resolved;
+            format!("{pending} pending, no active task")
+        };
+        format!("{head} — {tail}")
+    }
+
     /// Every pending task's index, in frozen order — the remaining worklist
     /// `peek` shows. Includes the active task (the one the cursor is on), so
     /// `peek --content` can read the task currently in hand.
@@ -631,6 +653,42 @@ mod tests {
         assert!(it.is_finished());
         let (done, active, skipped, total) = it.counts();
         assert_eq!((done, active, skipped, total), (2, 0, 1, 3));
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn summary_counts_resolved_and_marks_state() {
+        let repo = tmp_repo();
+        let cov = covering_of(vec![
+            seg_entry(&repo, "a.md", "1\n", "unknown", None),
+            seg_entry(&repo, "b.md", "2\n", "unknown", None),
+            seg_entry(&repo, "c.md", "3\n", "unknown", None),
+        ]);
+        let mut it = Iter {
+            name: "sweep".into(),
+            covering: "main".into(),
+            order: Order::File,
+            label: None,
+            cursor: None,
+            tasks: freeze(&cov, Order::File, None),
+        };
+        // Fresh: nothing resolved, no cursor -> pending count.
+        assert_eq!(
+            it.summary(),
+            "0/3 resolved (0 done, 0 skipped) — 3 pending, no active task"
+        );
+        // Cursor on a pending task -> named active.
+        it.cursor = Some(0);
+        let handle = it.tasks[0].handle();
+        assert_eq!(
+            it.summary(),
+            format!("0/3 resolved (0 done, 0 skipped) — active {handle}")
+        );
+        // Finished with a skip: fraction reaches total/total, marked finished.
+        it.tasks[0].state = TaskState::Done;
+        it.tasks[1].state = TaskState::Skipped;
+        it.tasks[2].state = TaskState::Done;
+        assert_eq!(it.summary(), "3/3 resolved (2 done, 1 skipped) — finished");
         std::fs::remove_dir_all(&repo.root).ok();
     }
 

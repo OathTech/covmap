@@ -412,7 +412,9 @@ advancing — the set you can `choose` among, including the active one;
 `peek --content` also dumps their bytes, `peek --all` lists the whole
 worklist tagged with each task's state), `choose <addr>` (jump the cursor
 to a task by `@name` or hash prefix — pick one you saw in `peek`), `status`
-(`12/40 done, 3 skipped, active <handle>`), `rewind [<addr>]` (reset a
+(`23/40 resolved (20 done, 3 skipped) — active <handle>`, or `— finished`
+when nothing is pending — the fraction counts resolved = done+skipped, so
+it hits total exactly when the sweep is done), `rewind [<addr>]` (reset a
 `done`/`skipped` task back to `pending`), `rm` (delete the iterator — never
 touches the covering). This is playground task T8. There is at most one
 active task at a time (a single cursor), which is why `status` names it

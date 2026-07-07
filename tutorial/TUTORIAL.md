@@ -345,7 +345,7 @@ Freeze `main` in reading order, then check the tally:
 
 ```sh
 covmap iter review new main --order file
-covmap iter review status                # 0/7 done, 0 skipped, no active task
+covmap iter review status                # 0/7 resolved (0 done, 0 skipped) — 7 pending, no active task
 ```
 
 The **canonical loop** pulls one task at a time. `next` hands you the first
@@ -360,7 +360,7 @@ until covmap iter review finished; do
   covmap iter review next
   covmap iter review done -m "audited"
 done
-covmap iter review status                # 7/7 done, 0 skipped, no active task
+covmap iter review status                # 7/7 resolved (7 done, 0 skipped) — finished
 covmap iter review current               # the resume affordance: reprint the cursor's task
 ```
 
@@ -391,7 +391,7 @@ iterators are cheap, independent overlays:
 covmap iter plan new main
 covmap iter plan choose @enqueue-op
 covmap iter plan skip -m "trivial — covered elsewhere"
-covmap iter plan status                  # 0/7 done, 1 skipped, no active task
+covmap iter plan status                  # 1/7 resolved (0 done, 1 skipped) — 6 pending, no active task
 covmap iter plan rewind @enqueue-op      # undo the skip
 covmap iter plan rm                      # discard the scratch iterator
 ```

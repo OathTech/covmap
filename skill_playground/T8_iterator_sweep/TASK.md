@@ -49,7 +49,7 @@
    the anonymous preamble (it is not an endpoint) with a reason.
 
 4. **Report the tally** with `covmap iter review status`
-   (e.g. `4/5 done, 0 active, 1 skipped`).
+   (e.g. `5/5 resolved (4 done, 1 skipped) — finished`).
 
 The resume affordance is `covmap iter review current`: after any
 interruption it reprints exactly the task the cursor is on.

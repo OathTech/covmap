@@ -744,8 +744,10 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       \texttt{--all} lists the whole worklist tagged with each task's state,
       and \texttt{--content} also prints frozen bytes.
 \item \texttt{covmap iter $I$ status}\\
-      Counts by state ($k$ done, $m$ skipped, of $n$) and names the active
-      task, of which there is at most one (a single cursor $\gamma$).
+      Reports the resolved fraction $(k+m)/n$ (done $k$ plus skipped $m$ of
+      $n$ tasks), which reaches $n/n$ exactly at exhaustion, and marks the
+      state: \emph{finished} when no task is pending, else the active task
+      (at most one, a single cursor $\gamma$) or the pending count.
 \item \texttt{covmap iter $I$ finished}\\
       Exit $0$ iff $\mathrm{st}^{-1}(\textsc{pending}) = \varnothing$
       (Proposition~\ref{prop:enumeration}).

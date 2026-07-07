@@ -60,6 +60,10 @@ There are no runtime dependencies beyond `sha2`.
   segment by `@name` survives edits to the segment's content, because the
   link identity is the name rather than the hash. Anonymous segments are
   referenced by segment hash (which changes on every edit).
+- A **segment message** is optional free-form text *about a segment* — why
+  it was cut, what it is, why it is (not) mapped — set with `covmap annotate
+  … -m`. Like a name it is covering-local and not part of the hash, so
+  editing it never causes drift.
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each

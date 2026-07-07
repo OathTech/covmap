@@ -213,6 +213,17 @@ is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
 whose identity *is* the content, breaks on any content edit, having no
 drift state to pass through first. Sub-concept of **link**.
 
+**Segment message** **[R][S]** — an optional, free-form, possibly
+multi-line text recording *why a segment was cut, what it represents, or
+why it is (not) mapped* (`req22`). Set with `covmap annotate … -m`, shown by
+`show`/`ls -l`/`html`. Like a **segment name** it is covering-local metadata
+and **not** part of the **segment hash**, so editing it never touches the
+object store or causes **drift**, and it travels with the segment across
+**split** (top keeps it) / **merge** (surviving side) / **recut** /
+**diff-remap**. Distinct from the two **note** senses: a segment message is
+about *the segment itself*, a **link**'s note is about a *mapping*, and an
+iterator **task**'s note is about *one sweep step*.
+
 **Segment name** **[T][R][S]** — an optional, stable, human-meaningful
 string attached to a segment (e.g. `intro`, `req-1`), unique within its
 covering, addressed as `@name`. It is *not* the segment hash and *not*

@@ -661,6 +661,14 @@ fn render_compare_view(
 ) -> io::Result<String> {
     let mut s = String::from("<div class=\"cmp-grid\">\n");
 
+    // Hash -> source entry lookup, so the B-side reverse tooltip can name the
+    // A segments (loc / label / file) that point at a target segment.
+    let src_by_hash: BTreeMap<&str, &CoveringEntry> = by_file
+        .values()
+        .flatten()
+        .map(|e| (e.hash.as_str(), *e))
+        .collect();
+
     // --- panel 1: file list for A ------------------------------------------
     s.push_str(
         "<aside class=\"cmp-files cmp-files-a\"><div class=\"cmp-files-head\">A · source</div>",
@@ -766,13 +774,14 @@ fn render_compare_view(
                 let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
                     "<span class=\"cmp-seg cmp-seg-b status-{}{} zebra-{}\" data-status=\"{}\" \
-                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\">",
+                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\" data-tip='{}'>",
                     status,
                     inline,
                     i % 2,
                     status,
                     &e.hash,
-                    esc(&back_hashes.join(" "))
+                    esc(&back_hashes.join(" ")),
+                    esc(&back_tip_json(e, status, &inc, &src_by_hash))
                 ));
                 s.push_str(&esc(&content));
                 s.push_str("</span>");
@@ -900,6 +909,44 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
             &l.target_hash,
             json_escape(&l.note),
             json_escape(&format!("{}::{}::", l.target_repo, l.target_covering)),
+            l.src_resolved && l.tgt_resolved
+        ));
+    }
+    s.push_str("]}");
+    s
+}
+
+/// Reverse tooltip for a B (target) segment: the A (source) segments that
+/// point at it. Mirrors `tip_json` but lists incoming links instead of
+/// outgoing ones. `dir:"back"` lets the shared JS pick the right renderer.
+fn back_tip_json(
+    e: &CoveringEntry,
+    status: &str,
+    incoming: &[IncomingLink],
+    src_by_hash: &BTreeMap<&str, &CoveringEntry>,
+) -> String {
+    let mut s = String::from("{\"dir\":\"back\",");
+    s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
+    s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
+    s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
+    s.push_str(&format!("\"status\":\"{}\",", status));
+    s.push_str("\"links\":[");
+    for (i, l) in incoming.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let src = src_by_hash.get(l.source_hash.as_str());
+        let src_loc = src.map(|e| e.loc()).unwrap_or_default();
+        let src_label = src.map(|e| e.label.clone()).unwrap_or_default();
+        let src_file = src.map(|e| e.file.clone()).unwrap_or_default();
+        s.push_str(&format!(
+            "{{\"conn\":\"{}\",\"source_hash\":\"{}\",\"source_loc\":\"{}\",\"source_label\":\"{}\",\"source_file\":\"{}\",\"note\":\"{}\",\"resolved\":{}}}",
+            json_escape(&l.conn_name),
+            &l.source_hash,
+            json_escape(&src_loc),
+            json_escape(&src_label),
+            json_escape(&src_file),
+            json_escape(&l.note),
             l.src_resolved && l.tgt_resolved
         ));
     }
@@ -1221,6 +1268,12 @@ document.addEventListener('click', ev => {
     jumpToSource(back.dataset.segid, '');
     return;
   }
+  // compare tooltip → jump to a specific source A segment
+  const backLink = ev.target.closest('.tt-link[data-cmp-back-hash]');
+  if (backLink) {
+    cmpJumpToA(backLink.dataset.cmpBackHash);
+    return;
+  }
   // tooltip → target jumps (forward)
   const fwd = ev.target.closest('.tt-link');
   if (fwd) {
@@ -1228,6 +1281,17 @@ document.addEventListener('click', ev => {
     return;
   }
 });
+
+// Highlight + scroll a single A segment in the compare view (used by the
+// B-side reverse tooltip, where one B may have many incoming A segments
+// spread across files).
+function cmpJumpToA(hash) {
+  const el = document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(hash)}"]`);
+  if (!el) return;
+  cmpClearHot();
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  cmpFlash(el);
+}
 
 document.querySelectorAll('.segment.clickable').forEach(card => {
   card.addEventListener('click', () => {
@@ -1316,6 +1380,7 @@ function escHtml(s) {
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function renderTip(data) {
+  if (data.dir === 'back') return renderBackTip(data);
   let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
   if (data.links && data.links.length) {
@@ -1329,6 +1394,26 @@ function renderTip(data) {
     html += '<div class="tt-meta" style="margin-top:0.35rem">click → to jump to target</div>';
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no outgoing links</div>';
+  }
+  return html;
+}
+// Reverse tooltip for a B (target) segment: the A segments pointing at it.
+function renderBackTip(data) {
+  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
+  html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
+  if (data.links && data.links.length) {
+    html += `<div class="tt-meta">← ${data.links.length} incoming from A</div>`;
+    html += '<ul class="tt-links">';
+    for (const l of data.links) {
+      const cls = l.resolved ? '' : ' broken';
+      const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
+      const name = l.source_label || l.source_loc || l.source_hash.slice(0,12);
+      html += `<li><span class="tt-link${cls}" data-cmp-back-hash="${l.source_hash}"><code>${escHtml(name)}</code></span> via ${escHtml(l.conn)}${note}</li>`;
+    }
+    html += '</ul>';
+    html += '<div class="tt-meta" style="margin-top:0.35rem">click ← to jump to source</div>';
+  } else {
+    html += '<div class="tt-note" style="color:#94a3b8">no incoming links</div>';
   }
   return html;
 }
@@ -1356,16 +1441,16 @@ function hideTipSoon() {
 }
 function cancelHide() { if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; } }
 document.addEventListener('mouseover', ev => {
-  const seg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
+  const seg = ev.target.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   if (seg && seg.dataset.tip) { cancelHide(); showTip(seg, ev); return; }
   if (ev.target.closest('#tooltip')) { cancelHide(); return; }
 });
 document.addEventListener('mouseout', ev => {
-  const leftSeg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
+  const leftSeg = ev.target.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   const wentToTooltip = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('#tooltip');
-  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a');
+  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   if (leftSeg && !wentToTooltip && !stillOnSeg) hideTipSoon();
-  if (ev.target.closest('#tooltip') && (!ev.relatedTarget || (!ev.relatedTarget.closest('#tooltip') && !ev.relatedTarget.closest('.src-seg, .segment')))) {
+  if (ev.target.closest('#tooltip') && (!ev.relatedTarget || (!ev.relatedTarget.closest('#tooltip') && !ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b')))) {
     hideTipSoon();
   }
 });

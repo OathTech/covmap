@@ -118,7 +118,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "iter" => {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
         }
-        "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser",
+        "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
@@ -1880,6 +1880,30 @@ fn cmd_html(args: &[String]) -> io::Result<u8> {
         Some(p) => PathBuf::from(p),
         None => repo.dot().join("report.html"),
     };
+    // The report renders a single connection at a time, so its Target/Compare
+    // views show one coherent B covering (mixing connections that target
+    // different coverings of the same file is what made the old all-at-once
+    // report confusing). When `--connection` is omitted, resolve it:
+    //   - 0 connections  -> None: List/Source views of the A covering only.
+    //   - exactly 1       -> use it automatically (the unambiguous case).
+    //   - 2 or more       -> error, listing names, requiring `--connection`.
+    if connection.is_none() {
+        let all = crate::connection::Connection::list(&repo)?;
+        match all.len() {
+            0 => {}
+            1 => connection = Some(all.into_iter().next().unwrap()),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "html: {} connections exist; pass --connection <K> to choose one:\n  {}",
+                        all.len(),
+                        all.join("\n  ")
+                    ),
+                ));
+            }
+        }
+    }
     // `--covering`/`--connection` explicitly select what the report shows,
     // independent of HEAD. Selecting a connection also fixes the source
     // covering to that connection's source covering (its Target/Compare

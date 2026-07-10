@@ -616,11 +616,15 @@ fn render_target_view(
                         s.push_str(&format!(
                             "<span class=\"{} tgt-to-src\" data-segid=\"{}\">\
                                 ← <code>{}</code> ({})\
-                             </span>",
+                             </span>\
+                             <span class=\"tgt-to-cmp\" title=\"show this link in Compare\" \
+                                   data-a-hash=\"{}\" data-b-hash=\"{}\">⇄</span>",
                             cls,
                             &l.source_hash,
                             &l.source_hash,
-                            esc(&l.conn_name)
+                            esc(&l.conn_name),
+                            &l.source_hash,
+                            &e.hash
                         ));
                         if !l.note.is_empty() {
                             s.push_str(&format!(" <span class=\"note\">{}</span>", esc(&l.note)));
@@ -1085,6 +1089,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 #tooltip code { background: rgba(148,163,184,0.2); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.72rem; }
 #tooltip .tt-link { pointer-events: auto; cursor: pointer; color: #93c5fd; text-decoration: underline; }
 #tooltip .tt-link:hover { color: #bfdbfe; }
+#tooltip .tt-open, #tooltip .tt-cmp { pointer-events: auto; cursor: pointer; color: #94a3b8; margin-left: 0.15rem; text-decoration: none; }
+#tooltip .tt-open:hover, #tooltip .tt-cmp:hover { color: #f1f5f9; }
 
 @keyframes flash {
   0%, 30%  { box-shadow: 0 0 0 3px rgba(59,130,246,0.55); }
@@ -1112,6 +1118,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 .tgt-marker:hover { background: #dbeafe; }
 .tgt-marker.tgt-broken { background: #fee2e2; color: #991b1b; }
 .tgt-to-src { color: #1d4ed8; }
+.tgt-to-cmp { display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.4rem; border-radius: 3px; background: #f1f5f9; color: #475569; cursor: pointer; }
+.tgt-to-cmp:hover { background: #e0e7ff; color: #1e293b; }
 
 code { background: #f1f5f9; padding: 0 .25em; border-radius: 3px;
        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
@@ -1166,7 +1174,23 @@ main.compare-active { grid-template-columns: 1fr; }
 .cmp-seg.status-broken   { background: rgba(239, 68, 68, 0.14); border-left-color: var(--c-broken); }
 .cmp-seg.dimmed { opacity: 0.28; }
 .cmp-seg.cmp-hot { box-shadow: 0 0 0 2px #3b82f6 inset; }
+/* The one counterpart the cycle pointer is currently on: a stronger,
+   filled-edge ring so it stands out among the other highlighted (cmp-hot)
+   counterparts as you click through them. */
+.cmp-seg.cmp-current { box-shadow: 0 0 0 2px #3b82f6 inset, -4px 0 0 0 #3b82f6; }
 .cmp-seg.flash  { animation: flash 1.6s ease-out; }
+/* Persistent "you came from Compare" ring on the segment a ↗ landed on, so
+   it stays marked while you read the Source / Target view. */
+.src-seg.cmp-origin, .tgt-block.cmp-origin { box-shadow: 0 0 0 2px #3b82f6 inset; }
+/* Floating "↩ Back to Compare" pill. */
+#cmp-return {
+  position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 120;
+  background: #3b82f6; color: white; padding: 0.5rem 0.9rem; border-radius: 999px;
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+  opacity: 0; transform: translateY(6px); transition: opacity 0.12s, transform 0.12s; pointer-events: none;
+}
+#cmp-return.visible { opacity: 1; transform: none; pointer-events: auto; }
+#cmp-return:hover { background: #2563eb; }
 
 /* Zebra shading: alternate chunks get a faint neutral darken, so two
    contiguous chunks of the same status still show a visible seam. The
@@ -1191,6 +1215,11 @@ const TAIL_TEMPLATE: &str = "</body></html>\n";
 const SCRIPT: &str = r#"<script>
 let activeFile = '__all__';
 let currentView = 'list';
+// Compare click-to-cycle state: repeated clicks on the same segment step
+// through its counterparts one at a time (origin element + current index).
+let cmpCycle = { origin: null, els: [], idx: 0 };
+// The link a ↗ left Compare on, so "↩ Back to Compare" can restore it exactly.
+let cmpReturn = null;
 
 document.querySelectorAll('#sidebar-source .file').forEach(f => {
   f.addEventListener('click', () => {
@@ -1235,7 +1264,13 @@ document.querySelectorAll('.view-toggle button').forEach(b => b.addEventListener
   applyAll();
 }));
 
-function jumpToSource(segid, file) {
+// Drop any persistent "came from Compare" marker before setting a new one.
+function clearOrigin() {
+  document.querySelectorAll('.cmp-origin').forEach(x => x.classList.remove('cmp-origin'));
+}
+// `origin` (set when arriving via ↗) leaves a persistent blue ring on the
+// landed segment, so it stays marked as "where you came from" while you read.
+function jumpToSource(segid, file, origin) {
   document.querySelector('.view-toggle button[data-view="source"]').click();
   if (file) {
     const sf = document.querySelector(`.src-file[data-file="${CSS.escape(file)}"]`);
@@ -1245,10 +1280,12 @@ function jumpToSource(segid, file) {
   if (el) {
     el.scrollIntoView({behavior: 'smooth', block: 'center'});
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    clearOrigin();
+    if (origin) el.classList.add('cmp-origin');
   }
 }
 
-function jumpToTarget(targetFileKey, targetHash) {
+function jumpToTarget(targetFileKey, targetHash, origin) {
   document.querySelector('.view-toggle button[data-view="target"]').click();
   const fileEl = document.querySelector(`.tgt-file[data-target-file^="${CSS.escape(targetFileKey)}"]`);
   if (fileEl) fileEl.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -1257,27 +1294,88 @@ function jumpToTarget(targetFileKey, targetHash) {
     if (block) {
       block.scrollIntoView({behavior: 'smooth', block: 'center'});
       block.classList.remove('flash'); void block.offsetWidth; block.classList.add('flash');
+      clearOrigin();
+      if (origin) block.classList.add('cmp-origin');
     }
   }
 }
 
+// Floating "↩ Back to Compare" pill, shown after a ↗ leaves Compare.
+function showReturnPill() {
+  let pill = document.getElementById('cmp-return');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.id = 'cmp-return';
+    pill.innerHTML = '↩ Back to Compare';
+    document.body.appendChild(pill);
+  }
+  pill.classList.add('visible');
+}
+function hideReturnPill() {
+  const pill = document.getElementById('cmp-return');
+  if (pill) pill.classList.remove('visible');
+}
+// Leaving for Compare by any route (view toggle, ⇄) clears the origin marker
+// and the pill, so they only mark a genuine ↗ round-trip.
+document.querySelector('.view-toggle button[data-view="compare"]').addEventListener('click', () => {
+  clearOrigin();
+  hideReturnPill();
+});
+
 document.addEventListener('click', ev => {
+  // "show link in Compare" (⇄): enter Compare and land on the link, both
+  // endpoints highlighted. Offered by the Target-view markers and the
+  // Source / List tooltip, so each single-segment view has a way back into
+  // the side-by-side. Checked before the plainer jumps that share their row.
+  const toCmp = ev.target.closest('.tt-cmp, .tgt-to-cmp');
+  if (toCmp) {
+    tooltip.classList.remove('visible');
+    cmpJumpToLink(toCmp.dataset.aHash, toCmp.dataset.bHash);
+    return;
+  }
   // target → source jumps
   const back = ev.target.closest('.tgt-to-src');
   if (back) {
     jumpToSource(back.dataset.segid, '');
     return;
   }
-  // compare tooltip → jump to a specific source A segment
-  const backLink = ev.target.closest('.tt-link[data-cmp-back-hash]');
-  if (backLink) {
-    cmpJumpToA(backLink.dataset.cmpBackHash);
+  // "open in full view" (↗): always leave Compare for the segment's own
+  // Source / Target view, whichever the tooltip entry names. Dismiss the
+  // tooltip so it doesn't linger over the view we just switched to, and
+  // remember the link so "↩ Back to Compare" can restore it exactly.
+  const open = ev.target.closest('.tt-open');
+  if (open) {
+    tooltip.classList.remove('visible');
+    cmpReturn = { a: open.dataset.aHash, b: open.dataset.bHash };
+    if (open.dataset.cmpBackHash !== undefined) {
+      jumpToSource(open.dataset.cmpBackHash, '', true);
+    } else {
+      jumpToTarget(open.dataset.targetFileKey, open.dataset.targetHash, true);
+    }
+    showReturnPill();
     return;
   }
-  // tooltip → target jumps (forward)
+  // "↩ Back to Compare": restore the exact link a ↗ left on.
+  const ret = ev.target.closest('#cmp-return');
+  if (ret) {
+    hideReturnPill();
+    if (cmpReturn) cmpJumpToLink(cmpReturn.a, cmpReturn.b);
+    return;
+  }
+  // reverse tooltip (B → A): jump to a specific source A segment. In Compare
+  // this highlights in-panel; elsewhere it opens the Source view.
+  const backLink = ev.target.closest('.tt-link[data-cmp-back-hash]');
+  if (backLink) {
+    if (currentView === 'compare') cmpJumpToA(backLink.dataset.cmpBackHash);
+    else jumpToSource(backLink.dataset.cmpBackHash, '');
+    return;
+  }
+  // forward tooltip (A → B). In Compare this highlights the B segment
+  // in-panel; elsewhere it opens the Target view.
   const fwd = ev.target.closest('.tt-link');
   if (fwd) {
-    jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
+    if (currentView === 'compare') cmpJumpToB(fwd.dataset.targetHash);
+    else jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
     return;
   }
 });
@@ -1291,6 +1389,27 @@ function cmpJumpToA(hash) {
   cmpClearHot();
   el.scrollIntoView({behavior: 'smooth', block: 'center'});
   cmpFlash(el);
+}
+// Symmetric jump to a single B segment, used by the A-side forward tooltip
+// so a click stays inside Compare instead of switching to the Target view.
+function cmpJumpToB(hash) {
+  const el = document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(hash)}"]`);
+  if (!el) return;
+  cmpClearHot();
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  cmpFlash(el);
+}
+// Enter Compare and land on a single link: highlight + scroll BOTH endpoints
+// (the A segment in its panel, the B segment in its). Used by the reciprocal
+// control in the Source / Target views. A missing endpoint (broken link) is
+// simply skipped, so a half-resolved link still shows the side that exists.
+function cmpJumpToLink(aHash, bHash) {
+  document.querySelector('.view-toggle button[data-view="compare"]').click();
+  cmpClearHot();
+  const a = aHash ? document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(aHash)}"]`) : null;
+  const b = bHash ? document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(bHash)}"]`) : null;
+  if (a) { a.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(a); }
+  if (b) { b.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(b); }
 }
 
 document.querySelectorAll('.segment.clickable').forEach(card => {
@@ -1326,39 +1445,47 @@ applyAll();
 // ---- compare view: bidirectional A <-> B highlighting ----
 function cmpClearHot() {
   document.querySelectorAll('.cmp-seg.cmp-hot').forEach(x => x.classList.remove('cmp-hot'));
+  document.querySelectorAll('.cmp-seg.cmp-current').forEach(x => x.classList.remove('cmp-current'));
+  // Any programmatic (re)highlight ends the click-to-cycle run, so the next
+  // click on a segment starts a fresh cycle rather than advancing a stale one.
+  cmpCycle = { origin: null, els: [], idx: 0 };
 }
 function cmpFlash(el) {
   el.classList.add('cmp-hot');
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
 }
-// Click an A segment -> highlight + scroll its linked B segments.
-document.querySelectorAll('.cmp-seg-a').forEach(seg => {
+// Click a Compare segment -> highlight ALL its counterparts on the other
+// side; repeated clicks on the SAME segment cycle through them one at a
+// time (wrapping), scrolling each into view. `sideSel` picks the panel and
+// `attr` the hash attribute of the counterparts; `linksAttr` is the clicked
+// segment's list of counterpart hashes.
+function cmpWire(seg, linksAttr, sideSel, attr) {
   seg.addEventListener('click', () => {
-    cmpClearHot();
-    cmpFlash(seg);
-    const targets = (seg.dataset.cmpLinks || '').split(/\s+/).filter(Boolean);
-    let first = null;
-    targets.forEach(h => {
-      const t = document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(h)}"]`);
-      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
-    });
-    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
+    const hashes = (seg.dataset[linksAttr] || '').split(/\s+/).filter(Boolean);
+    const els = hashes
+      .map(h => document.querySelector(`${sideSel}[${attr}="${CSS.escape(h)}"]`))
+      .filter(Boolean);
+    if (cmpCycle.origin === seg && cmpCycle.els.length) {
+      // Same segment clicked again: advance to the next counterpart.
+      cmpCycle.idx = (cmpCycle.idx + 1) % cmpCycle.els.length;
+    } else {
+      cmpClearHot();
+      cmpFlash(seg);
+      els.forEach(t => t.classList.add('cmp-hot'));
+      cmpCycle = { origin: seg, els, idx: 0 };
+    }
+    const cur = cmpCycle.els[cmpCycle.idx];
+    if (cur) {
+      document.querySelectorAll('.cmp-seg.cmp-current').forEach(x => x.classList.remove('cmp-current'));
+      cur.classList.add('cmp-current');
+      cur.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
   });
-});
-// Click a B segment -> highlight + scroll the A segments that point at it.
-document.querySelectorAll('.cmp-seg-b').forEach(seg => {
-  seg.addEventListener('click', () => {
-    cmpClearHot();
-    cmpFlash(seg);
-    const backs = (seg.dataset.cmpBack || '').split(/\s+/).filter(Boolean);
-    let first = null;
-    backs.forEach(h => {
-      const t = document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(h)}"]`);
-      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
-    });
-    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
-  });
-});
+}
+document.querySelectorAll('.cmp-seg-a').forEach(seg =>
+  cmpWire(seg, 'cmpLinks', '.cmp-seg-b', 'data-cmp-b-hash'));
+document.querySelectorAll('.cmp-seg-b').forEach(seg =>
+  cmpWire(seg, 'cmpBack', '.cmp-seg-a', 'data-cmp-a-hash'));
 // Compare file lists scroll their panel to the chosen file.
 document.querySelectorAll('.cmp-files-a .file').forEach(f => {
   f.addEventListener('click', () => {
@@ -1384,14 +1511,25 @@ function renderTip(data) {
   let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
   if (data.links && data.links.length) {
+    // Each row carries one secondary control, chosen by view:
+    //   - in Compare, plain click stays in-panel, so ↗ opens the Target view;
+    //   - elsewhere, plain click already opens Target, so ⇄ instead enters
+    //     Compare landing on the link (both endpoints highlighted).
+    const inCompare = currentView === 'compare';
     html += '<ul class="tt-links">';
     for (const l of data.links) {
       const cls = l.resolved ? '' : ' broken';
       const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
-      html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
+      const extra = inCompare
+        ? ` <span class="tt-open" title="open in Target view" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}" data-a-hash="${data.hash}" data-b-hash="${l.target_hash}">↗</span>`
+        : ` <span class="tt-cmp" title="show this link in Compare" data-a-hash="${data.hash}" data-b-hash="${l.target_hash}">⇄</span>`;
+      html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${extra}${note}</li>`;
     }
     html += '</ul>';
-    html += '<div class="tt-meta" style="margin-top:0.35rem">click → to jump to target</div>';
+    const hint = inCompare
+      ? 'click → highlights B here · ↗ opens Target view'
+      : 'click → to jump to target · ⇄ shows the link in Compare';
+    html += `<div class="tt-meta" style="margin-top:0.35rem">${hint}</div>`;
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no outgoing links</div>';
   }
@@ -1408,10 +1546,11 @@ function renderBackTip(data) {
       const cls = l.resolved ? '' : ' broken';
       const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
       const name = l.source_label || l.source_loc || l.source_hash.slice(0,12);
-      html += `<li><span class="tt-link${cls}" data-cmp-back-hash="${l.source_hash}"><code>${escHtml(name)}</code></span> via ${escHtml(l.conn)}${note}</li>`;
+      const open = `<span class="tt-open" title="open in Source view" data-cmp-back-hash="${l.source_hash}" data-a-hash="${l.source_hash}" data-b-hash="${data.hash}">↗</span>`;
+      html += `<li><span class="tt-link${cls}" data-cmp-back-hash="${l.source_hash}"><code>${escHtml(name)}</code></span> ${open} via ${escHtml(l.conn)}${note}</li>`;
     }
     html += '</ul>';
-    html += '<div class="tt-meta" style="margin-top:0.35rem">click ← to jump to source</div>';
+    html += '<div class="tt-meta" style="margin-top:0.35rem">click ← highlights A here · ↗ opens Source view</div>';
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no incoming links</div>';
   }

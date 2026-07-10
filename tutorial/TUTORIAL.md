@@ -577,6 +577,19 @@ from the script) in a browser for the List / Source / Target / Compare
 views, with character-level chunks rendered inline and linked segments
 highlighted.
 
+In the Compare view, clicking a segment highlights all its counterparts on
+the other side; clicking the *same* segment again cycles through them one
+at a time, scrolling each into view (handy when one item maps to many).
+Hovering a segment shows a tooltip of its links — A → B (forward) and, on a
+target segment, the A segments pointing back at it. Clicking a link in the
+tooltip highlights the counterpart *in place*, without leaving Compare; the
+small `↗` next to each link opens that segment in its own Source / Target
+view instead. When you follow a `↗`, the landed segment keeps a blue ring
+marking where you came from, and a floating **↩ Back to Compare** button
+returns you to that exact link with both endpoints re-highlighted. The
+Source and Target views also carry a `⇄` on each link that jumps into
+Compare and lands on the link directly.
+
 The report shows one connection at a time, so its Target / Compare views
 render a single coherent target covering. When exactly one connection
 exists it is selected automatically; with several, `covmap html` lists them

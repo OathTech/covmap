@@ -216,6 +216,26 @@ hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 assert "fsck passes after linking" bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 #############################################################################
+hr "10b. bounded drill-down: understand a region in a few calls  (REQ23)"
+#############################################################################
+# The inspection access pattern: narrow to a region, then `show` it to see
+# each segment together with what it maps to — resolved to label+loc, in one
+# self-sufficient call (no bare-hash hand-joining).
+( cd "$WORK/spec" && run ls -l main queue.md )        # narrow to one file
+( cd "$WORK/spec" && run show main:queue.md )         # region: segments + their images
+( cd "$WORK/spec" && run show --label reviewed main ) # label lens: a concern across files
+
+# `show <connection>` now resolves endpoints and reports coverage.
+assert "show queue_links reports coverage" bash -c "
+  ( cd '$WORK/spec' && '$COVMAP' show queue_links ) | grep -q 'coverage\|segments'"
+# `status` surfaces per-connection coverage.
+assert "status reports connection coverage" bash -c "
+  ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'coverage'"
+# region show resolves the mapping (the enqueue op maps to the impl).
+assert "region show resolves a link to its target loc" bash -c "
+  ( cd '$WORK/spec' && '$COVMAP' show main:queue.md ) | grep -q '\->'"
+
+#############################################################################
 hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
 #############################################################################
 # An iterator freezes the covering into an ordered, stateful worklist: each

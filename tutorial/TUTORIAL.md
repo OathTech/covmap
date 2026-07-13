@@ -352,14 +352,46 @@ covmap status
 ```
 
 `fsck: ok` confirms every covering is a valid partition and every
-connection endpoint resolves. `status` now shows the connection:
+connection endpoint resolves. `status` now shows the connection with its
+**coverage** — how much of each side is mapped:
 
 ```
 covering main: segments=7 lines=21
   drift: clean
 connections:
-  queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken
+  queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 2/7, target 1/3
 ```
+
+## 10b. Bounded drill-down: understand a region  (req23)
+
+The point of inspection is *understanding*: seeing a piece of the spec
+**together with** the implementation it maps to. You don't dump whole
+coverings and grep — you drill down in a few calls, ending on a view that
+resolves the relation for you.
+
+```sh
+covmap ls -l main queue.md          # narrow: just this file's segments
+covmap show main:queue.md           # understand: each segment + what it maps to
+covmap show --label reviewed main   # the label lens: a concern across files
+```
+
+`show <C>:<file>` (a **region** — add `:a..b` for a line range) prints each
+segment with its resolved counterpart(s), so one call answers "how does this
+map?":
+
+```
+region main queue.md · 4 segment(s)
+  @enqueue-op  Enqueue  queue.md:5..9
+    -> unknown   queue.rs:1..15
+       fn enqueue
+  ...
+```
+
+`covmap show --label <l>` is the same view selected by label instead of
+file — the way to pull a cross-cutting concern (spread over many files) into
+one call. And `covmap show main:@enqueue-op` on a single segment shows its
+links in both directions plus its drift state, naming the fix command if it
+has drifted.
 
 ## 11. Iterators: work the covering as a worklist  (req21)
 

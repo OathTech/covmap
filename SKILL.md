@@ -109,9 +109,9 @@ are unique.
 | ------- | ------- | ------------ |
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
-| `covmap status [<C>]` | Per-covering summary + drift + broken-link count. | **yes** |
-| `covmap ls [-l] [<C>]` | List segments of covering `C`. | yes |
-| `covmap show <addr>` | Pretty-print a segment, covering, or connection. | yes |
+| `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
+| `covmap ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to a **region** (file or line range), a label, or link status. | yes |
+| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
@@ -133,8 +133,8 @@ are unique.
 
 | Command | Purpose |
 | ------- | ------- |
-| `covmap ls-segments <C>` | One hash per line. |
-| `covmap ls-links <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line. |
+| `covmap ls-segments [-l] <C>` | One hash per line; `-l` = full record `hash⇥file⇥a⇥b⇥label⇥name⇥message` (TAB, empty fields for absent name/message). |
+| `covmap ls-links [--resolve] <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
 | `covmap hash-segment <file> <a> <b> [-w]` | Hash a candidate segment (content only) without registering it (or with `-w`). |
@@ -232,6 +232,38 @@ that first.
 5. Run `covmap status` and report cardinality back.
 6. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
    empty connection — but do not start linking yet.
+
+### A2. Understand how a part of the software maps (bounded drill-down)
+
+To understand one region of a mapping, do not dump whole coverings and grep.
+Drill down in ≤3 calls, ending on a self-sufficient view:
+
+1. **Orient** — `covmap status` shows the coverings, connections, and each
+   connection's coverage (how much is mapped).
+2. **Narrow** — `covmap ls -l <C> <file>` lists just that file's segments
+   (add `:a..b` for a line range; `--unlinked` to find gaps).
+3. **Understand** — `covmap show <C>:<file>[:a..b]` prints each segment in
+   the region *with the segment(s) it maps to*, resolved to
+   `label loc` — the combined view, in one call. For a single segment,
+   `covmap show <C>:@name` shows its links both directions plus drift state.
+
+You can open the files yourself, so these views never dump content (use
+`--content` if you want a segment's bytes inline).
+
+### A3. Trace a cross-cutting concern (label lens)
+
+When an aspect of understanding is spread across many files, label those
+segments with a shared status/tag and retrieve the whole concern in one
+call:
+
+```
+covmap show --label <l> <C>     # every segment labelled <l>, each with its image
+```
+
+Labels are ref-local and non-hashed (since cip 0004), so tagging is free and
+never breaks a link. `label` is singular per segment, so it doubles as the
+segment's status; pick a labelling scheme that suits the concern you want to
+trace.
 
 ### B. Resolve drift after a source edit
 

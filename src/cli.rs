@@ -241,16 +241,6 @@ fn short(h: &str) -> &str {
     &h[..n]
 }
 
-/// Display a link endpoint: `@name` endpoints are shown verbatim, hash
-/// endpoints are truncated to the short form.
-fn short_endpoint(ep: &str) -> &str {
-    if ep.starts_with('@') {
-        ep
-    } else {
-        short(ep)
-    }
-}
-
 // ---- init -----------------------------------------------------------------
 
 fn cmd_init(args: &[String]) -> io::Result<u8> {
@@ -439,13 +429,25 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
                     broken += 1;
                 }
             }
+            // Coverage: distinct resolving endpoints over covering size, so
+            // the reader sees how much of each side is mapped, not just a
+            // link count (the theory-defined source/target coverage).
+            let (src_cov, src_tot) = coverage(&src, k.links.iter().map(|p| p.a.as_str()));
+            let cov_note = match &tgt {
+                Some(t) => {
+                    let (tc, tt) = coverage(t, k.links.iter().map(|p| p.b.as_str()));
+                    format!("source {src_cov}/{src_tot}, target {tc}/{tt}")
+                }
+                None => format!("source {src_cov}/{src_tot}, target (covering unavailable)"),
+            };
             println!(
-                "  {} -> {}/{} : {} links, {} broken",
+                "  {} -> {}/{} : {} links, {} broken · coverage {}",
                 cn,
                 k.target_repo,
                 k.target_covering,
                 k.links.len(),
-                broken
+                broken,
+                cov_note
             );
         }
     }
@@ -496,126 +498,612 @@ fn object_exists(repo: &Repo, hash: &str) -> bool {
 // ---- show -----------------------------------------------------------------
 
 fn cmd_show(args: &[String]) -> io::Result<u8> {
-    let addr = args
-        .first()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "show <addr>"))?;
-    let repo = current_repo()?;
-    let (covering, prefix) = parse_addr(addr);
-
-    let conn_path = repo.connections_dir().join(addr);
-    if conn_path.is_file() {
-        let k = Connection::read(&repo, addr)?;
-        println!("connection {}", k.name);
-        println!("  source covering: {}", k.source_covering);
-        println!("  target repo:     {}", k.target_repo);
-        println!("  target covering: {}", k.target_covering);
-        println!("  links:           {}", k.links.len());
-        for p in &k.links {
-            if p.note.is_empty() {
-                println!("    {} {}", short_endpoint(&p.a), short_endpoint(&p.b));
-            } else {
-                println!(
-                    "    {} {}  ({})",
-                    short_endpoint(&p.a),
-                    short_endpoint(&p.b),
-                    p.note
-                );
+    // Split off flags (--label <l>, --content) from positionals.
+    let mut label_lens: Option<String> = None;
+    let mut with_content = false;
+    let mut with_all = false;
+    let mut pos: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--label" => {
+                label_lens = Some(args.get(i + 1).cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--label needs a value")
+                })?);
+                i += 2;
+            }
+            "--content" => {
+                with_content = true;
+                i += 1;
+            }
+            "--all" => {
+                with_all = true;
+                i += 1;
+            }
+            other => {
+                pos.push(other.to_string());
+                i += 1;
             }
         }
-        return Ok(0);
+    }
+    let repo = current_repo()?;
+
+    // --label <l> [<C>] — the cross-cutting "understand" call.
+    if let Some(l) = label_lens {
+        let cname = pos.first().cloned().unwrap_or_else(|| "HEAD".to_string());
+        let c = resolve_covering(&repo, &cname)?;
+        return show_label(&repo, &c, &l);
     }
 
-    let cov_path = repo.coverings_dir().join(addr);
-    if cov_path.is_file() {
-        let c = Covering::read(&repo, addr)?;
-        let st = covering::stats(&c);
-        println!(
-            "covering {}: {} segments, {} lines",
-            c.name, st.cardinality, st.total_lines
-        );
-        for e in &c.entries {
-            let name = e
-                .name
-                .as_deref()
-                .map(|n| format!("\t@{n}"))
-                .unwrap_or_default();
-            println!(
-                "  {} {}\t{}{}",
-                short(&e.hash),
-                e.loc(),
-                if e.label.is_empty() { "-" } else { &e.label },
-                name
-            );
+    let addr = pos
+        .first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "show <addr>"))?;
+
+    // Connection selectors: `<K>` (list links) or `<K> <a> <b>` (one link).
+    if repo.connections_dir().join(addr).is_file() {
+        let k = Connection::read(&repo, addr)?;
+        if pos.len() >= 3 {
+            return show_link(&repo, &k, &pos[1], &pos[2]);
         }
-        return Ok(0);
+        return show_connection(&repo, &k, with_all);
     }
 
-    // Resolve the segment. Label and message are covering-local metadata
-    // (not stored in the content-addressed object), so they are available
-    // only when the segment is addressed through a covering. A bare-hash
-    // address names content across every covering that shares it, so it has
-    // neither.
-    let (full, label, message) = match covering {
+    let (covering, prefix) = parse_addr(addr);
+
+    // Covering selector: `<C>` — either a region within it, or the whole
+    // covering listing.
+    if let Some(cname) = &covering {
+        if repo.coverings_dir().join(cname).is_file() {
+            let c = Covering::read(&repo, cname)?;
+            if let Some((file, range)) = parse_region(&c, &prefix) {
+                return show_region(&repo, &c, &file, range);
+            }
+        }
+    } else if repo.coverings_dir().join(addr).is_file() {
+        let c = Covering::read(&repo, addr)?;
+        return show_covering(&c);
+    }
+
+    // Otherwise a single segment — DETAIL.
+    show_segment(&repo, covering.as_deref(), &prefix, with_content)
+}
+
+/// Parse the part after `<C>:` as a region — a covered file, optionally
+/// with a `:a..b` line range — or `None` if it is a segment address.
+fn parse_region(c: &Covering, rest: &str) -> Option<(String, Option<(usize, usize)>)> {
+    if let Some((file, rng)) = rest.rsplit_once(':') {
+        if let Some((a, b)) = rng.split_once("..") {
+            if let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) {
+                if c.entries.iter().any(|e| e.file == file) {
+                    return Some((file.to_string(), Some((a, b))));
+                }
+            }
+        }
+    }
+    if c.entries.iter().any(|e| e.file == rest) {
+        return Some((rest.to_string(), None));
+    }
+    None
+}
+
+/// Whether a segment (line range `[a,b]`) overlaps a region `[ra,rb]`.
+fn overlaps(a: usize, b: usize, ra: usize, rb: usize) -> bool {
+    a <= rb && ra <= b
+}
+
+// ---- show sub-renderers ---------------------------------------------------
+
+fn show_covering(c: &Covering) -> io::Result<u8> {
+    let st = covering::stats(c);
+    println!(
+        "covering {}: {} segments, {} lines",
+        c.name, st.cardinality, st.total_lines
+    );
+    for e in &c.entries {
+        let name = e
+            .name
+            .as_deref()
+            .map(|n| format!("\t@{n}"))
+            .unwrap_or_default();
+        println!(
+            "  {} {}\t{}{}",
+            short(&e.hash),
+            e.loc(),
+            if e.label.is_empty() { "-" } else { &e.label },
+            name
+        );
+    }
+    Ok(0)
+}
+
+fn show_segment(
+    repo: &Repo,
+    covering: Option<&str>,
+    prefix: &str,
+    with_content: bool,
+) -> io::Result<u8> {
+    // Label, name and message are covering-local, so they are available
+    // only when addressed through a covering; a bare hash names content
+    // across every covering that shares it.
+    let (full, cname, entry) = match covering {
         Some(cname) => {
-            let c = resolve_covering(&repo, &cname)?;
-            let idx = covering::resolve_segment(&c, &prefix)?;
+            let c = resolve_covering(repo, cname)?;
+            let idx = covering::resolve_segment(&c, prefix)?;
             (
                 c.entries[idx].hash.clone(),
-                Some(c.entries[idx].label.clone()),
-                c.entries[idx].message.clone(),
+                Some(cname.to_string()),
+                Some(c.entries[idx].clone()),
             )
         }
         None => (
-            segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
+            segment::resolve_prefix(&repo.objects_dir(), prefix)?,
             None,
             None,
         ),
     };
     let content = segment::read_object(&repo.objects_dir(), &full)?;
     println!("segment {full}");
-    if let Some(l) = &label {
-        println!("  label:  {}", if l.is_empty() { "-" } else { l });
+    if let Some(cn) = &cname {
+        println!("  covering  {cn}");
     }
-    println!("  bytes:  {}", content.len());
-    if let Some(m) = &message {
-        // The full (possibly multi-line) message, each line indented so it
-        // reads as a block under the segment header.
-        println!("  message:");
-        for line in m.split('\n') {
-            println!("    {line}");
+    if let Some(e) = &entry {
+        println!("  loc       {}   ({} lines)", e.loc(), e.b - e.a + 1);
+        println!(
+            "  label     {}",
+            if e.label.is_empty() { "-" } else { &e.label }
+        );
+        println!("  name      {}", e.name.as_deref().unwrap_or("-"));
+        println!(
+            "  message   {}",
+            match &e.message {
+                Some(_) => "(below)",
+                None => "-",
+            }
+        );
+    }
+    println!("  bytes     {}", content.len());
+
+    // Drift state (only meaningful when we know the covering + location).
+    if let (Some(cn), Some(e)) = (&cname, &entry) {
+        let state = segment_drift_state(repo, cn, e, &content);
+        println!("  state     {state}");
+        // Resolved links, both directions.
+        let c = resolve_covering(repo, cn)?;
+        let rel = crate::resolve::Relation::build(repo, cn, &c)?;
+        print_seg_links(&rel.links_of(&full));
+    }
+
+    if let Some(e) = &entry {
+        if let Some(m) = &e.message {
+            println!("  message:");
+            for line in m.split('\n') {
+                println!("    {line}");
+            }
         }
     }
-    println!("---");
-    print!("{content}");
-    if !content.ends_with('\n') {
-        println!();
+
+    if with_content || entry.is_none() {
+        // A bare-hash address has no covering context, so content is all we
+        // can show; through a covering, content is opt-in (`--content`).
+        println!("--- content ---");
+        print!("{content}");
+        if !content.ends_with('\n') {
+            println!();
+        }
     }
     Ok(0)
+}
+
+/// Compare a segment's recorded content against the current file on disk.
+fn segment_drift_state(repo: &Repo, cname: &str, e: &CoveringEntry, recorded: &str) -> String {
+    let abs = repo.root.join(&e.file);
+    let lines = match walk::read_text_lines(&abs) {
+        Ok(Some(l)) => l,
+        _ => return "unreadable (file missing/binary)".to_string(),
+    };
+    let addr = e
+        .name
+        .as_deref()
+        .map(|n| format!("@{n}"))
+        .unwrap_or_else(|| short(&e.hash).to_string());
+    match segment::extract_content(&lines, e.a, e.a_col, e.b, e.b_col) {
+        Some(on_disk) if on_disk == recorded => {
+            "current            (recorded bytes match disk)".to_string()
+        }
+        Some(_) => {
+            format!("drifted            (recorded ≠ disk; run: covmap recut {cname}:{addr})")
+        }
+        None => {
+            "drifted            (boundary no longer fits; run: covmap recut --remap)".to_string()
+        }
+    }
+}
+
+fn print_seg_links(links: &crate::resolve::SegLinks) {
+    let out = links.outgoing.len();
+    let inc = links.incoming.len();
+    if out == 0 && inc == 0 {
+        println!("  links     none");
+        return;
+    }
+    println!("  links     {out} outgoing · {inc} incoming");
+    for l in &links.outgoing {
+        print_resolved_end("->", l);
+    }
+    for l in &links.incoming {
+        print_resolved_end("<-", l);
+    }
+}
+
+fn print_resolved_end(arrow: &str, l: &crate::resolve::ResolvedEnd) {
+    let far = far_label(l);
+    println!(
+        "    {arrow} [{}] {}:{}   {}",
+        l.conn,
+        l.covering,
+        far,
+        resolved_loc(l)
+    );
+    if !l.note.is_empty() {
+        println!("                {}", l.note);
+    }
+}
+
+/// The far endpoint's display handle: `@name` if named, else `label`, else
+/// a short hash; suffixed `(broken)` when it no longer resolves.
+fn far_label(l: &crate::resolve::ResolvedEnd) -> String {
+    let base = l
+        .name
+        .as_ref()
+        .map(|n| format!("@{n}"))
+        .or_else(|| l.label.clone())
+        .unwrap_or_else(|| short(&l.hash).to_string());
+    if l.resolved {
+        base
+    } else {
+        format!("{base} (broken)")
+    }
+}
+
+fn resolved_loc(l: &crate::resolve::ResolvedEnd) -> String {
+    l.loc.clone().unwrap_or_else(|| "(unresolved)".to_string())
+}
+
+/// Above this many links, `show <connection>` summarizes (coverage +
+/// fan-in hubs) instead of dumping every link; `--all` forces the full list.
+const CONN_LIST_THRESHOLD: usize = 30;
+
+fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
+    let self_map = k.target_repo == repo.root.to_string_lossy();
+    let src = Covering::read(repo, &k.source_covering)?;
+    let tgt_repo = Repo {
+        root: PathBuf::from(&k.target_repo),
+    };
+    let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
+
+    // Coverage: distinct resolving endpoints over covering cardinality.
+    let (src_cov, src_tot) = coverage(&src, k.links.iter().map(|p| p.a.as_str()));
+    let (tgt_cov, tgt_tot) = match &tgt {
+        Some(t) => coverage(t, k.links.iter().map(|p| p.b.as_str())),
+        None => (0, 0),
+    };
+
+    println!(
+        "connection {}   {} -> {}{}",
+        k.name,
+        k.source_covering,
+        k.target_covering,
+        if self_map { "   (self-map)" } else { "" }
+    );
+    println!(
+        "  {} links · source {}/{} segments · target {}/{} segments",
+        k.links.len(),
+        src_cov,
+        src_tot,
+        tgt_cov,
+        tgt_tot
+    );
+
+    // Large connections summarize by default: show the top fan-in targets
+    // (the highest-signal rows for triage — a catch-all hub stands out),
+    // and require --all for the full per-link dump.
+    if k.links.len() > CONN_LIST_THRESHOLD && !all {
+        let mut degree: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for p in &k.links {
+            *degree.entry(p.b.as_str()).or_insert(0) += 1;
+        }
+        let mut ranked: Vec<(&str, usize)> = degree.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        println!("  top targets by in-degree:");
+        for (ep, n) in ranked.iter().take(10) {
+            let disp = tgt
+                .as_ref()
+                .map(|t| resolve_display(t, ep))
+                .unwrap_or_else(|| ep.to_string());
+            println!("    {n:>4}  <- {disp}");
+        }
+        println!(
+            "  ({} links total — `covmap show {} --all` to list each)",
+            k.links.len(),
+            k.name
+        );
+        return Ok(0);
+    }
+
+    for p in &k.links {
+        let a = resolve_display(&src, &p.a);
+        let b = tgt
+            .as_ref()
+            .map(|t| resolve_display(t, &p.b))
+            .unwrap_or_else(|| p.b.clone());
+        if p.note.is_empty() {
+            println!("  {a}   ->   {b}");
+        } else {
+            println!("  {a}   ->   {b}   {}", p.note);
+        }
+    }
+    Ok(0)
+}
+
+/// `label loc` for an endpoint, or the raw endpoint + `(broken)`.
+fn resolve_display(c: &Covering, ep: &str) -> String {
+    match covering::endpoint_to_hash(c, ep) {
+        Some(h) => c
+            .entries
+            .iter()
+            .find(|e| e.hash == h)
+            .map(|e| {
+                let lbl = if e.label.is_empty() { "-" } else { &e.label };
+                format!("{lbl} {}", e.loc())
+            })
+            .unwrap_or_else(|| ep.to_string()),
+        None => format!("{ep} (broken)"),
+    }
+}
+
+/// (distinct resolving endpoints, covering cardinality).
+fn coverage<'a>(c: &Covering, eps: impl Iterator<Item = &'a str>) -> (usize, usize) {
+    let mut seen = std::collections::BTreeSet::new();
+    for ep in eps {
+        if let Some(h) = covering::endpoint_to_hash(c, ep) {
+            seen.insert(h);
+        }
+    }
+    (seen.len(), c.entries.len())
+}
+
+fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
+    let link = k
+        .links
+        .iter()
+        .find(|p| endpoints_match(&p.a, a) && endpoints_match(&p.b, b))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no link {a} -> {b} in connection '{}'", k.name),
+            )
+        })?;
+    let src = Covering::read(repo, &k.source_covering)?;
+    let tgt_repo = Repo {
+        root: PathBuf::from(&k.target_repo),
+    };
+    let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
+    let a_ok = covering::endpoint_resolves(&src, &link.a);
+    let b_ok = tgt
+        .as_ref()
+        .is_some_and(|t| covering::endpoint_resolves(t, &link.b));
+
+    println!("link in {}", k.name);
+    println!(
+        "  note    {}",
+        if link.note.is_empty() {
+            "-"
+        } else {
+            &link.note
+        }
+    );
+    let status = match (a_ok, b_ok) {
+        (true, true) => "resolved   (both endpoints present in their coverings)".to_string(),
+        (false, true) => format!(
+            "broken (source endpoint '{}' no longer in '{}')",
+            link.a, k.source_covering
+        ),
+        (true, false) => format!(
+            "broken (target endpoint '{}' no longer in '{}')",
+            link.b, k.target_covering
+        ),
+        (false, false) => "broken (neither endpoint resolves)".to_string(),
+    };
+    println!("  status  {status}");
+    println!(
+        "  source  {} : {}",
+        k.source_covering,
+        resolve_display(&src, &link.a)
+    );
+    match &tgt {
+        Some(t) => println!(
+            "  target  {} : {}",
+            k.target_covering,
+            resolve_display(t, &link.b)
+        ),
+        None => println!("  target  {} : (covering unavailable)", k.target_covering),
+    }
+    Ok(0)
+}
+
+fn endpoints_match(stored: &str, given: &str) -> bool {
+    // A stored endpoint matches if it equals the given string, or (for a
+    // hash endpoint) the given string is a prefix of it.
+    stored == given
+        || (!stored.starts_with('@') && !given.starts_with('@') && stored.starts_with(given))
+        || format!("@{given}") == *stored
+}
+
+fn show_region(
+    repo: &Repo,
+    c: &Covering,
+    file: &str,
+    range: Option<(usize, usize)>,
+) -> io::Result<u8> {
+    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
+    let mut segs: Vec<&CoveringEntry> = c
+        .entries
+        .iter()
+        .filter(|e| {
+            e.file == file
+                && range
+                    .map(|(ra, rb)| overlaps(e.a, e.b, ra, rb))
+                    .unwrap_or(true)
+        })
+        .collect();
+    segs.sort_by_key(|e| e.sort_key());
+    let where_ = match range {
+        Some((a, b)) => format!("{file}:{a}..{b}"),
+        None => file.to_string(),
+    };
+    println!("region {} {} · {} segment(s)", c.name, where_, segs.len());
+    print_region_segs(&rel, &segs);
+    Ok(0)
+}
+
+fn show_label(repo: &Repo, c: &Covering, label: &str) -> io::Result<u8> {
+    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
+    let mut segs: Vec<&CoveringEntry> = c.entries.iter().filter(|e| e.label == label).collect();
+    segs.sort_by_key(|e| e.sort_key());
+    println!(
+        "label \"{}\" in {} · {} segment(s)",
+        label,
+        c.name,
+        segs.len()
+    );
+    print_region_segs(&rel, &segs);
+    Ok(0)
+}
+
+/// Shared relationship-view body: each segment then its resolved
+/// counterparts (the compare view, in text).
+fn print_region_segs(rel: &crate::resolve::Relation, segs: &[&CoveringEntry]) {
+    for e in segs {
+        let handle = e
+            .name
+            .as_deref()
+            .map(|n| format!("@{n}"))
+            .unwrap_or_else(|| short(&e.hash).to_string());
+        let lbl = if e.label.is_empty() { "-" } else { &e.label };
+        println!("  {handle}  {lbl}  {}", e.loc());
+        let links = rel.links_of(&e.hash);
+        if links.outgoing.is_empty() && links.incoming.is_empty() {
+            println!("    (unlinked)");
+        }
+        for l in &links.outgoing {
+            println!("    -> {}   {}", far_label(l), resolved_loc(l));
+            if !l.note.is_empty() {
+                println!("       {}", l.note);
+            }
+        }
+        for l in &links.incoming {
+            println!("    <- {}   {}", far_label(l), resolved_loc(l));
+            if !l.note.is_empty() {
+                println!("       {}", l.note);
+            }
+        }
+    }
 }
 
 // ---- ls -------------------------------------------------------------------
 
 fn cmd_ls(args: &[String]) -> io::Result<u8> {
     let mut long = false;
-    let mut name: Option<String> = None;
-    for a in args {
-        match a.as_str() {
-            "-l" => long = true,
+    let mut label_filter: Option<String> = None;
+    let mut link_filter: Option<bool> = None; // Some(true)=linked, Some(false)=unlinked
+    let mut positionals: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-l" => {
+                long = true;
+                i += 1;
+            }
+            "--label" => {
+                label_filter = Some(args.get(i + 1).cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--label needs a value")
+                })?);
+                i += 2;
+            }
+            "--linked" => {
+                link_filter = Some(true);
+                i += 1;
+            }
+            "--unlinked" => {
+                link_filter = Some(false);
+                i += 1;
+            }
             other => {
-                if name.is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "ls accepts a single covering name",
-                    ));
-                }
-                name = Some(other.to_string());
+                positionals.push(other.to_string());
+                i += 1;
             }
         }
     }
+    // Positionals: an optional covering name and/or a region (a covered
+    // file, or `<file>:a..b`). `ls [<C>] [<file>[:a..b]]`.
+    if positionals.len() > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ls [-l] [<covering>] [<file>[:a..b]] [--label <l>] [--linked|--unlinked]",
+        ));
+    }
     let repo = current_repo()?;
-    let n = name.unwrap_or_else(|| "HEAD".to_string());
-    let c = resolve_covering(&repo, &n)?;
+    // Decide which positional is the covering and which is the region.
+    let (cov_name, region) = split_ls_positionals(&repo, &positionals)?;
+    let c = resolve_covering(&repo, &cov_name)?;
+
+    // Region filter (file + optional line range).
+    let region_parsed: Option<(String, Option<(usize, usize)>)> = match &region {
+        Some(r) => match r.split_once(':') {
+            Some((f, rng)) => match rng.split_once("..") {
+                Some((a, b)) => {
+                    let a: usize = a.parse().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
+                    })?;
+                    let b: usize = b.parse().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
+                    })?;
+                    Some((f.to_string(), Some((a, b))))
+                }
+                None => Some((r.clone(), None)),
+            },
+            None => Some((r.clone(), None)),
+        },
+        None => None,
+    };
+
+    // Build the link relation only when a link filter is requested.
+    let rel = match link_filter {
+        Some(_) => Some(crate::resolve::Relation::build(&repo, &cov_name, &c)?),
+        None => None,
+    };
+
     for e in &c.entries {
+        if let Some(l) = &label_filter {
+            if &e.label != l {
+                continue;
+            }
+        }
+        if let Some((f, rng)) = &region_parsed {
+            if &e.file != f {
+                continue;
+            }
+            if let Some((ra, rb)) = rng {
+                if !overlaps(e.a, e.b, *ra, *rb) {
+                    continue;
+                }
+            }
+        }
+        if let (Some(want_linked), Some(rel)) = (link_filter, &rel) {
+            if rel.is_linked(&e.hash) != want_linked {
+                continue;
+            }
+        }
         if long {
             // Columns: hash, label, loc, lines, name, [message]. The name
             // keeps its historical position; the message's FIRST line is a
@@ -645,6 +1133,31 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
         }
     }
     Ok(0)
+}
+
+/// Split `ls` positionals into (covering, region). A positional that names
+/// an existing covering is the covering; anything else is a region (a
+/// covered file, optionally `file:a..b`). Defaults the covering to HEAD.
+fn split_ls_positionals(
+    repo: &Repo,
+    positionals: &[String],
+) -> io::Result<(String, Option<String>)> {
+    let is_cov = |s: &str| repo.coverings_dir().join(s).is_file() || s == "HEAD";
+    match positionals {
+        [] => Ok(("HEAD".to_string(), None)),
+        [one] => {
+            if is_cov(one) {
+                Ok((one.clone(), None))
+            } else {
+                Ok(("HEAD".to_string(), Some(one.clone())))
+            }
+        }
+        [a, b] => {
+            // Two positionals: <covering> <region>.
+            Ok((a.clone(), Some(b.clone())))
+        }
+        _ => unreachable!("caller guards length"),
+    }
 }
 
 // ---- grep -----------------------------------------------------------------
@@ -2112,29 +2625,103 @@ fn cmd_cat_segment(args: &[String]) -> io::Result<u8> {
 }
 
 fn cmd_ls_segments(args: &[String]) -> io::Result<u8> {
-    let n = args.first().cloned().unwrap_or_else(|| "HEAD".to_string());
+    let mut long = false;
+    let mut name: Option<String> = None;
+    for a in args {
+        match a.as_str() {
+            "-l" => long = true,
+            other => name = Some(other.to_string()),
+        }
+    }
     let repo = current_repo()?;
-    let c = resolve_covering(&repo, &n)?;
+    let c = resolve_covering(&repo, &name.unwrap_or_else(|| "HEAD".to_string()))?;
     for e in &c.entries {
-        println!("{}", e.hash);
+        if long {
+            // Full per-segment record, TAB-delimited, empty fields for
+            // absent name/message — the machine substrate `ls -l` renders.
+            // Columns: hash file a b label name message(first line).
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                e.hash,
+                e.file,
+                e.a,
+                e.b,
+                e.label,
+                e.name.as_deref().unwrap_or(""),
+                e.message
+                    .as_deref()
+                    .map(|m| m.split('\n').next().unwrap_or(""))
+                    .unwrap_or("")
+            );
+        } else {
+            println!("{}", e.hash);
+        }
     }
     Ok(0)
 }
 
 fn cmd_ls_links(args: &[String]) -> io::Result<u8> {
-    let n = args
-        .first()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ls-links <connection>"))?;
+    let mut resolve = false;
+    let mut name: Option<String> = None;
+    for a in args {
+        match a.as_str() {
+            "--resolve" => resolve = true,
+            other => name = Some(other.to_string()),
+        }
+    }
+    let n = name.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ls-links [--resolve] <connection>",
+        )
+    })?;
     let repo = current_repo()?;
-    let k = Connection::read(&repo, n)?;
-    for p in &k.links {
-        if p.note.is_empty() {
-            println!("{}\t{}", p.a, p.b);
-        } else {
-            println!("{}\t{}\t{}", p.a, p.b, p.note);
+    let k = Connection::read(&repo, &n)?;
+    if resolve {
+        // Resolved form: a-label a-loc b-label b-loc note (TAB), so a
+        // consumer never has to join by hand. Endpoints that no longer
+        // resolve emit empty label/loc fields.
+        let src = Covering::read(&repo, &k.source_covering)?;
+        let tgt_repo = Repo {
+            root: PathBuf::from(&k.target_repo),
+        };
+        let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
+        for p in &k.links {
+            let (al, aloc) = resolve_fields(Some(&src), &p.a);
+            let (bl, bloc) = resolve_fields(tgt.as_ref(), &p.b);
+            println!("{}\t{}\t{}\t{}\t{}", al, aloc, bl, bloc, p.note);
+        }
+    } else {
+        for p in &k.links {
+            if p.note.is_empty() {
+                println!("{}\t{}", p.a, p.b);
+            } else {
+                println!("{}\t{}\t{}", p.a, p.b, p.note);
+            }
         }
     }
     Ok(0)
+}
+
+/// (label, loc) for an endpoint, or empty strings when it does not resolve.
+fn resolve_fields(c: Option<&Covering>, ep: &str) -> (String, String) {
+    let hash = c.and_then(|c| covering::endpoint_to_hash(c, ep));
+    match (c, hash) {
+        (Some(c), Some(h)) => c
+            .entries
+            .iter()
+            .find(|e| e.hash == h)
+            .map(|e| {
+                let l = if e.label.is_empty() {
+                    String::new()
+                } else {
+                    e.label.clone()
+                };
+                (l, e.loc())
+            })
+            .unwrap_or_default(),
+        _ => (String::new(), String::new()),
+    }
 }
 
 fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {

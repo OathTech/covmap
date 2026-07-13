@@ -141,9 +141,9 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
-| `status [<C>]` | Cardinality, lines, drift, broken links. |
-| `ls [-l] [<C>]` | List segments in a covering. |
-| `show <addr>` | Pretty-print a segment, covering, or connection. |
+| `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
+| `ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to a region, label, or link status. |
+| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. `--label <l>` = label lens. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |

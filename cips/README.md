@@ -39,7 +39,7 @@ number is an identifier, not a priority.
 | - | -------- | ----- | ------- |
 | [0001](0001-iterators.md) | iterators | Landed | Freeze a covering into an ordered, stateful worklist — a durable, resumable work plan an agent or human pulls one task at a time. |
 | [0002](0002-segment-messages.md) | segment-messages | Landed | Attach an optional, non-hashed, possibly multi-line message to a segment, recording why it was cut / what it represents / why it is (not) mapped. |
-| [0003](0003-bounded-drill-down.md) | bounded-drill-down | Draft | Reorganize inspection so understanding one region of the mapping takes ≤3 self-sufficient calls, with condensed-list vs full-detail modes and a one-call label lens. Output/query only, no format change. |
+| [0003](0003-bounded-drill-down.md) | bounded-drill-down | Landed | Reorganize inspection so understanding one region of the mapping takes ≤3 self-sufficient calls, with condensed-list vs full-detail modes and a one-call label lens. Output/query only, no format change. |
 | [0004](0004-content-only-hash.md) | content-only-hash | Landed | Drop the label from the segment hash so identity is a pure function of content; label joins name/message as ref-local metadata. Reverses req4; on-disk format change (v1→v2) with a `covmap migrate`. |
 
 ## Writing a cip

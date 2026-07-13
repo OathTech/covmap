@@ -22,6 +22,9 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
 - **T8_iterator_sweep** — freeze a covering into an iterator and audit
   every segment exactly once, recording a per-task verdict; the
   enumeration guarantee ensures none is missed and the sweep is resumable.
+- **T9_drill_down** — understand a complete map without re-reading files:
+  drill down to how one endpoint maps (a resolved single-segment / region
+  view) and trace a cross-cutting `auth` concern with the label lens.
 
 ## Running a task
 

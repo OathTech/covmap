@@ -27,7 +27,9 @@ resolve a bare-hash endpoint. This cip reorganizes inspection around a single,
    is spread across many files, the reader tags those segments with a shared
    **label**, then retrieves *every segment carrying that label together with its
    mappings* in **one** command. A label turns a scattered concern into a named,
-   one-call region.
+   one-call region. Since cip 0004, labels are non-hashed, ref-local metadata, so
+   tagging and re-tagging a segment is free — it never re-hashes it or breaks a
+   link, so a lens can be built and refined at will.
 
 Nothing here changes the on-disk format. The whole proposal is **output and
 query** over data covmap already stores; the enabling join is code that already
@@ -76,14 +78,15 @@ No new on-disk state. Two query-time notions:
   connection κ, i.e. κ(S) ⊆ Cov^B, presented as resolved pairs.
 
 **A deliberate scoping choice.** The label lens leverages the *existing* `label`
-field (cheap, no format change). Two known constraints follow, and we accept
-them for now: `label` is **part of the segment hash** (`segment.rs`:
-`sha256(label ‖ NUL ‖ content)`), so re-tagging re-hashes and would break
-*hash*-linked endpoints (not `@name`-linked ones — and the guidance already is
-"name what you map"); and `label` is **singular** (a segment holds one). A
-dedicated multi-valued, non-hashed `tag` channel would remove both constraints
-but is a *format change* and a separate cip — deferred until real use shows the
-singular/hashed limits bite. This cip is the zero-format-change version.
+field (cheap, no format change). Since cip 0004 made `label` non-hashed,
+ref-local metadata, tagging is now free — it never re-hashes a segment or breaks
+a hash- or name-linked endpoint — so the lens can be built and re-tagged freely.
+**One constraint remains:** `label` is **singular** (a segment holds exactly
+one), so it doubles as both the segment's status *category* and its lens tag; you
+cannot give one segment both a `mapped` status and a `security` theme. A
+dedicated multi-valued `tag` channel would lift this, but is a *format change* and
+a separate cip — deferred until real use shows the singular limit bite. This cip
+is the zero-format-change version.
 
 ## Commands / API
 
@@ -113,9 +116,9 @@ names can be long, semantic slugs):
 
 ```
 LOC                     LABEL    HASH              NAME
-REQUIREMENTS.md:1..14   req1     4dfdc8a00223fd25  -
-REQUIREMENTS.md:15..20  req2     468ccf747f69fbc7  -
-Cargo.toml:1..22        unknown  83ce6021534727f6  -
+REQUIREMENTS.md:1..14   req1     c812f565864a42bc  -
+REQUIREMENTS.md:15..20  req2     7edaea424c8956b1  -
+Cargo.toml:1..22        unknown  4bb144832fba6f8e  -
 ```
 
 `covmap ls -l main REQUIREMENTS.md` prints only that file's rows — the **narrow**
@@ -126,7 +129,7 @@ covering-local one, so it lives in `show`.
 ### `show <segment>` — DETAIL mode (all information, resolved links)
 
 ```
-segment 4dfdc8a00223fd25
+segment c812f565864a42bc
   covering  main
   loc       REQUIREMENTS.md:1..14   (14 lines)
   label     req1
@@ -188,8 +191,8 @@ connection reqmap   main -> theory   (self-map)
 link in reqmap
   note    links two repositories A and B
   status  resolved   (both endpoints present in their coverings)
-  source  main : req1        REQUIREMENTS.md:1..14      4dfdc8a00223fd25
-  target  theory : connection theory/main.tex:165..178   36b72d06d6cd0fae
+  source  main : req1        REQUIREMENTS.md:1..14      c812f565864a42bc
+  target  theory : connection theory/main.tex:165..178   d71ac0c86f66d177
 ```
 
 ### Orient (call 1) — landscape
@@ -279,4 +282,18 @@ Per `DEVELOPER.md`, this is a **new capability with a behavior change** to
 No `FORMAT_VERSION` bump — every change is output/query over existing state. (A
 future multi-valued `tag` channel, if pursued, *would* be a format change and a
 separate cip.)
+
+## Landing notes (as built)
+
+Landed. One deliberate deviation from the checklist above: **`html.rs` was not
+refactored to consume `src/resolve.rs`.** The two already share the *resolution
+rule* — both resolve endpoints through `covering::endpoint_to_hash` — so they
+cannot disagree about which segment an endpoint denotes, which is the property
+that mattered. Forcing html's richer, compare-view-specific link structs
+(per-file-key grouping, separate `src_resolved`/`tgt_resolved` flags) onto
+`resolve.rs`'s shape would have been churn with real risk to the working HTML
+views and no user-visible benefit. `resolve.rs` is therefore the CLI's shared
+substrate; if the two ever need to converge further, that is a follow-up cleanup,
+not a correctness fix. Everything else landed as specified, gates green, `covmap
+fsck` clean on this repo's own `.covmap/`.
 ```

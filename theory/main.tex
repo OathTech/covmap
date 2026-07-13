@@ -261,6 +261,23 @@ $\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
 also relate a repository to itself (e.g. a docs-to-code map, or a
 duplication audit within one tree).
 
+\begin{definition}[Image of a subset]\label{def:image}
+For a subset $S \subseteq \Cov^A$, the \emph{image} of $S$ under $\kappa$
+is
+\[
+  \kappa(S) \;=\; \{\, t \in \Cov^B \mid \exists s \in S.\ (s, t) \in \kappa \,\},
+\]
+the segments of $B$ that some segment of $S$ links to; the \emph{preimage}
+$\kappa^{-1}(T)$ of $T \subseteq \Cov^B$ is defined symmetrically. Selecting
+$S$ by a shared property makes $\kappa(S)$ the corresponding slice of the
+relation: when $S$ is the segments of one file (or a line range within it)
+this is the \emph{region} view, and when $S = \Cov^A \restriction \ell$ is
+the segments carrying a label $\ell$ (\S\ref{sec:complexity}) it is the
+\emph{label lens} --- one query returning a cross-cutting concern together
+with everything it maps to. This is the formal basis of covmap's
+inspection-for-understanding access pattern (\S\ref{sec:interface}).
+\end{definition}
+
 \begin{definition}[Coverage]\label{def:coverage}
 The \emph{source coverage} of $\kappa$ is
 \[
@@ -688,16 +705,30 @@ is the most general covering one can ask for.
 
 \subsection{Inspection, connections, prune}
 
+Inspection is organized for \emph{bounded drill-down}: understanding one
+region of the mapping should take a short, bounded sequence of commands
+whose final step resolves the relation fully (endpoints shown as
+\texttt{covering:label loc}, not bare hashes), so no follow-up lookup is
+forced. Listing commands print one condensed line per item; a command that
+names one item prints all covmap holds about it. The region view and the
+label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a
+file/range or a label, presenting each selected segment together with its
+image.
+
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
       One-line summary per covering: cardinality and line count. A drift
       line reports the number of files whose bytes have changed since
-      their segments were recorded. Broken link counts are reported per
-      connection.
+      their segments were recorded. Per connection: link count, broken
+      count, and source/target coverage (Definition~\ref{def:coverage}).
 \item \texttt{covmap show <addr>}\\
-      Print the segment, covering, or connection at \texttt{<addr>}.
-\item \texttt{covmap ls [-l] $C$}\\
-      List segments of $C$ in file-and-line order.
+      Print the segment, covering, connection, \emph{region}
+      ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
+      link shows its resolved links, a region/label its image. \texttt{--label
+      $\ell$} runs the label lens; \texttt{--all} expands a large connection.
+\item \texttt{covmap ls [-l] [$C$] [region] [--label $\ell$] [--linked|--unlinked]}\\
+      List segments of $C$ in file-and-line order, optionally narrowed to a
+      region, a label, or link status.
 \item \texttt{covmap grep [-l] [-c $C$] <pattern>}\\
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
@@ -769,8 +800,12 @@ Lower-level commands meant for scripts.
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [-w]}
 \item \texttt{covmap cat-segment <hash>}
-\item \texttt{covmap ls-segments $C$}
-\item \texttt{covmap ls-links $K$}
+\item \texttt{covmap ls-segments [-l] $C$}\\
+      Segment hashes, one per line; \texttt{-l} emits the full per-segment
+      record (hash, file, $a$, $b$, label, name, message) as TAB fields.
+\item \texttt{covmap ls-links [--resolve] $K$}\\
+      Link endpoint pairs; \texttt{--resolve} emits each endpoint resolved
+      to its label and location as TAB fields.
 \item \texttt{covmap rev-parse <addr>}
 \item \texttt{covmap fsck --broken-links}
 \end{itemize}

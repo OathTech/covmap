@@ -136,6 +136,10 @@ convenience commands built over them.)
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
 connections (status, show, ls, grep, diff, and a static HTML browser).
+Inspection output shall resolve link endpoints to their covering, label,
+and location — not leave them as bare hashes — and `status` shall report
+per-connection source/target coverage (req12), so a reader sees a mapping's
+completeness and its relations without hand-joining separate outputs.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -156,10 +160,25 @@ directory that needs no format-version bump.
 covmap shall let a segment carry an optional, free-form *message*: durable,
 possibly multi-line text recording why the segment was cut, what it
 represents, or why it is (not) mapped. A message is covering-local metadata,
-distinct from the segment's `label` (a hashed status category) and its
-`name` (a slug identity, req3): it is **not** part of the segment hash, so
+distinct from the segment's `label` (a status category) and its
+`name` (a slug identity, req3): like both of those it is **not** part of the
+segment hash, so
 setting, changing, or clearing it leaves the shared object store untouched
 and never causes or repairs drift. It travels with its segment across
 `split`/`merge`/`recut`/diff-remap the way a name does, is set and cleared
 with `covmap annotate` and surfaced by `show`/`ls`/`html`, and is stored
 additively in the covering ref with no format-version bump.
+
+## req23 — Bounded drill-down to understanding
+covmap shall let a reader reach *understanding of one region of a mapping*
+— a set of source segments together with the segments they map to — in a
+short, bounded sequence of inspection commands, without unbounded dumps or
+manual cross-referencing. Concretely: inspection shall support restricting a
+listing to a **region** (a covered file, or a line range within it) and to a
+**label**; a `show` of a region or label shall present each selected segment
+with its resolved image (req20), realizing κ(S) (the image of a subset under
+a connection); and a `show` of a single segment or link shall resolve its
+links in both directions. A large connection shall summarize (coverage plus
+the highest fan-in targets) rather than dump every link unless `--all` is
+given. This is output/query behavior over existing state; it needs no
+format-version bump.

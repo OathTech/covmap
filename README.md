@@ -51,7 +51,8 @@ There are no runtime dependencies beyond `sha2`.
   content. The range is given by a start and end position
   `file:a[:col]..b[:col]`, where each `col` is an optional 1-indexed
   inclusive character column (omitted = line boundary). Its identity is
-  the first 16 hex chars of `sha256(label || NUL || content)`.
+  the first 16 hex chars of `sha256(content)` — content only; the label is
+  covering-local metadata and not part of the hash.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
@@ -68,8 +69,12 @@ There are no runtime dependencies beyond `sha2`.
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
   endpoint is a segment name (`@name`) or a segment hash.
+- A **label** is a per-segment status string (`unknown`, `reviewed`,
+  `mapped`, …) set with `covmap label`. Like a name and a message it is
+  covering-local and not part of the hash, so relabelling never changes a
+  segment's identity or breaks a link.
 - Sharing is automatic: any two coverings producing a segment with
-  the same content+label end up referencing the same object.
+  the same content end up referencing the same object.
 - An **iterator** freezes a covering into an ordered, stateful worklist
   (`covmap iter <name> new <C>`): each segment becomes a task you pull one
   at a time and mark `done`/`skipped`. It is a resumable, on-disk work
@@ -141,7 +146,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `show <addr>` | Pretty-print a segment, covering, or connection. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
-| `label <C>:<h> <label>` | Relabel a segment (re-hashes). |
+| `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
 | `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. |
 | `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
@@ -182,7 +187,7 @@ one per line. Supported syntax:
 
 ```
 <repo>/.covmap/
-  version              # on-disk format version (currently "1")
+  version              # on-disk format version (currently "2")
   HEAD                 # default covering name (one line)
   ignore               # optional gitignore-lite patterns
   objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
@@ -194,7 +199,9 @@ one per line. Supported syntax:
 Every command checks `.covmap/version` and refuses to operate on a
 repo created by an incompatible covmap version. The format version
 is bumped on changes to the segment hash, object encoding, or ref
-formats; patch releases never bump it.
+formats; patch releases never bump it. To upgrade a repo across a bump,
+run `covmap migrate` (e.g. format 1 → 2 re-keys every object under the
+content-only segment hash).
 
 ## Repository layout
 

@@ -173,10 +173,11 @@ hr "7. name the segments we intend to map  (REQ3, REQ8)"
 hr "8. annotate a segment with why it was cut  (REQ22)"
 #############################################################################
 # A `message` records free-form rationale ABOUT a segment — why this
-# boundary exists, what the chunk is — distinct from its label (a hashed
-# category) and its name (a slug identity). It is not part of the hash, so
-# editing it never causes drift, and it travels with the segment across
-# later edits. `annotate -m` is repeatable (paragraphs, git-style).
+# boundary exists, what the chunk is — distinct from its label (a status
+# category) and its name (a slug identity). Like the label and name it is
+# ref-local and not part of the hash, so editing it never causes drift, and
+# it travels with the segment across later edits. `annotate -m` is
+# repeatable (paragraphs, git-style).
 ( cd "$WORK/spec" && run annotate main:@enqueue-op \
     -m "Core enqueue op — mapped to the Rust impl." \
     -m "Cut as its own segment so the spec<->impl link is 1:1." )

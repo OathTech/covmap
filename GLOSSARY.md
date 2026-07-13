@@ -189,10 +189,11 @@ so `finished` is true exactly when no `pending` task remains. It is to a
 worklist what the **covering invariants** (C1–C3) are to a covering.
 Sub-concept of **iterator**.
 
-**Label** **[T][R][S]** — a per-segment status string, part of the
-segment hash. `cover` assigns `unknown`; typical relabels are `ignored`,
-`reviewed`, and `mapped`. Two segments with equal content but different
-labels are distinct.
+**Label** **[T][R][S]** — a per-segment status string, covering-local
+metadata that is *not* part of the segment hash (like the segment's name
+and message). `cover` assigns `unknown`; typical relabels are `ignored`,
+`reviewed`, and `mapped`. Two segments with equal content share one object
+regardless of label, and re-labelling never changes a hash.
 
 **Line map** **[T][S]** — a monotone partial injection from old to new
 line indices (line `i` maps to `j` only if the lines are equal),
@@ -328,12 +329,12 @@ only when set, so line-only coverings are unaffected. Diff-remap does not
 handle char-level segments and falls back to split/merge. Sub-concept of
 **segment**.
 
-**Segment hash** *(also: object identity, truncated hash)* **[T][R][S]** —
-the first 64 bits (16 hex chars) of `SHA-256(label ‖ NUL ‖ content)`. It
-*is* a segment's identity, so identical labelled content shares one
-stored object and any edit changes it. It hashes the label together with
-the content, not the content alone — which is why *segment hash* is the
-right name for it (covmap no longer calls this a *content hash*).
+**Segment hash** *(also: object identity, content hash)* **[T][R][S]** —
+the first 64 bits (16 hex chars) of `SHA-256(content)`. It *is* a
+segment's identity, so identical content shares one stored object and any
+content edit changes it. The label is *not* an input to the hash (it is
+ref-local metadata; see **Label**), so re-labelling leaves the hash
+unchanged and identical content is one object regardless of label.
 
 **Sharing** **[T][R]** — automatic reuse of a segment across coverings:
 two coverings share a segment exactly when its **segment hash** coincides

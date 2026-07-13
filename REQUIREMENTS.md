@@ -25,17 +25,20 @@ docs-to-code links within one tree.
 
 ## req3 — Two-level segment identity
 Every segment shall have a hash identity: the 64-bit truncated hash
-of its labelled content, so identical labelled content yields a single
-shared object. A segment may additionally carry a stable, covering-local
-*name*, unique within its covering, giving it a name identity that is
-independent of its bytes. The name is not part of the segment hash, so
-naming, relabelling, or recutting a segment leaves the shared object
-store untouched.
+of its content, so identical content yields a single shared object. A
+segment may additionally carry a stable, covering-local *name*, unique
+within its covering, giving it a name identity that is independent of its
+bytes. The name is not part of the segment hash, so naming, relabelling,
+or recutting a segment leaves the shared object store untouched.
 
-## req4 — Labels as part of content identity
-A segment's label shall participate in its segment hash, letting
-per-segment status (unknown, ignored, reviewed, mapped) coexist with
-content sharing. (Names, by contrast, are not hashed — see req3.)
+## req4 — Labels as ref-local status metadata
+A segment's label shall be covering-local metadata that records
+per-segment status (unknown, ignored, reviewed, mapped) and shall **not**
+participate in the segment hash. Identity is a pure function of content,
+so identical content is one shared object regardless of label, a segment
+may carry different labels in different coverings, and re-labelling never
+changes a hash or breaks a hash-addressed connection endpoint. Labels thus
+join names (req3) and messages (req22) as non-hashed annotations.
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,

@@ -204,8 +204,8 @@ covmap split main:queue.md:5 10 Enqueue Dequeue
 
 `merge` requires the two segments to be adjacent; `split` puts them back.
 Because identity is content-addressed, splitting back to the same
-boundaries with the same labels restores the original segment hashes
-exactly.
+boundaries restores the original segment hashes exactly (the label does
+not enter the hash, so it does not affect this).
 
 ## 5. Character-level split: isolate a clause inside a line  (req5)
 
@@ -245,7 +245,8 @@ which is exactly what the next step does with proper names.
 
 ## 6. Label a segment  (req4)
 
-A label is part of a segment's content identity (relabelling re-hashes).
+A label is covering-local status metadata — *not* part of the segment
+hash, so relabelling leaves the hash unchanged and never breaks a link.
 Use labels for coarse status: `unknown`, `reviewed`, `mapped`, `ignored`.
 
 ```sh

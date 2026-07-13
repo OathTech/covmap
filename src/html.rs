@@ -501,8 +501,8 @@ fn render_source_view(
             esc(fname)
         ));
         for (i, e) in entries.iter().enumerate() {
-            let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
-                .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+            let content = segment::read_object(&repo.objects_dir(), &e.hash)
+                .unwrap_or_else(|_| String::from("(missing)\n"));
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
             let inline = if e.is_line_aligned() { "" } else { " inline" };
@@ -582,8 +582,8 @@ fn render_target_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))
                     .cloned()
@@ -706,8 +706,8 @@ fn render_compare_view(
                 esc(fname)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let status = seg_status(outgoing, &e.hash);
                 let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
                 let link_hashes: Vec<String> =
@@ -761,8 +761,8 @@ fn render_compare_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))
                     .cloned()

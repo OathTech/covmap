@@ -507,11 +507,13 @@ pub fn entry_by_hash<'a>(c: &'a Covering, hash: &str) -> Option<&'a CoveringEntr
     c.entries.iter().find(|e| e.hash == hash)
 }
 
-/// Replace an entry's label, writing a new object. The old hash is
-/// preserved in the object store so any connection that referenced it
-/// keeps resolving.
+/// Replace an entry's label. The label is ref-local metadata and not a
+/// hash input, so this updates only the covering row: the segment's hash
+/// (its content identity) is unchanged, the object store is untouched, and
+/// every connection endpoint that referenced the segment — by hash or by
+/// name — keeps resolving. Returns the (unchanged) hash.
 pub fn relabel(
-    repo: &Repo,
+    _repo: &Repo,
     c: &mut Covering,
     old_hash: &str,
     new_label: &str,
@@ -526,22 +528,8 @@ pub fn relabel(
                 format!("hash '{old_hash}' not in covering '{}'", c.name),
             )
         })?;
-    let (_label_old, content) = segment::read_object(&repo.objects_dir(), old_hash)?;
-    let new_hash = segment::hash_of(new_label, &content);
-    let new_seg = Segment {
-        file: c.entries[idx].file.clone(),
-        a: c.entries[idx].a,
-        b: c.entries[idx].b,
-        label: new_label.to_string(),
-        content,
-    };
-    segment::write_object(&repo.objects_dir(), &new_seg)?;
-    c.entries[idx].hash = new_hash.clone();
     c.entries[idx].label = new_label.to_string();
-    // The name is segment identity, independent of label/content, so it
-    // is preserved — any connection referencing the segment by name is
-    // unaffected by a relabel.
-    Ok(new_hash)
+    Ok(c.entries[idx].hash.clone())
 }
 
 /// Refresh a segment's content from current disk bytes. Keeps the
@@ -629,7 +617,7 @@ pub fn split(
     if cut_line < entry.a || cut_line > entry.b {
         return Err(oob());
     }
-    let (_label_old, content) = segment::read_object(&repo.objects_dir(), old_hash)?;
+    let content = segment::read_object(&repo.objects_dir(), old_hash)?;
     let clines: Vec<&str> = content.split_inclusive('\n').collect();
     let li = cut_line - entry.a; // index of the cut line within content
     if li >= clines.len() {
@@ -756,8 +744,8 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
             format!("segments are not adjacent: {} and {}", e1.loc(), e2.loc()),
         ));
     }
-    let (_l1, c1) = segment::read_object(&repo.objects_dir(), &e1.hash)?;
-    let (_l2, c2) = segment::read_object(&repo.objects_dir(), &e2.hash)?;
+    let c1 = segment::read_object(&repo.objects_dir(), &e1.hash)?;
+    let c2 = segment::read_object(&repo.objects_dir(), &e2.hash)?;
     let merged_content = format!("{c1}{c2}");
     let merged = Segment {
         file: e1.file.clone(),
@@ -940,7 +928,7 @@ pub fn remap_file(
             Some(c) => c,
             None => return Err(bail()),
         };
-        let new_hash = segment::hash_of(&e.label, &content);
+        let new_hash = segment::hash_of(&content);
         if new_hash == e.hash {
             unchanged += 1;
         } else {
@@ -1189,8 +1177,8 @@ mod tests {
         assert_eq!(c.entries.len(), 2);
         assert_eq!(c.entries[0].range(), "1..1");
         assert_eq!(c.entries[1].range(), "2..3");
-        let (_, top) = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
-        let (_, bot) = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
+        let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
+        let bot = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
         assert_eq!(top, "a\n");
         assert_eq!(bot, "b\nc\n");
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1208,8 +1196,8 @@ mod tests {
         split(&repo, &mut c, &old, 1, Some(7), "top", "bot").unwrap();
         assert_eq!(c.entries[0].range(), "1..1:6");
         assert_eq!(c.entries[1].range(), "1:7..1");
-        let (_, top) = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
-        let (_, bot) = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
+        let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
+        let bot = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
         assert_eq!(top, "hello ");
         assert_eq!(bot, "world\n");
         std::fs::remove_dir_all(&repo.root).ok();

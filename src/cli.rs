@@ -57,6 +57,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "prune" => cmd_prune(&rest),
         "iter" => cmd_iter(&rest),
         "html" => cmd_html(&rest),
+        "migrate" => cmd_migrate(&rest),
         // plumbing
         "hash-segment" => cmd_hash_segment(&rest),
         "cat-segment" => cmd_cat_segment(&rest),
@@ -119,7 +120,8 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
-        "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]",
+        "migrate" => "covmap migrate                              upgrade .covmap/ on-disk format (1 → 2: content-only segment hash)",
+        "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
         "ls-links" => "covmap ls-links <connection>",
@@ -157,6 +159,7 @@ PORCELAIN
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
+  migrate                            upgrade .covmap/ on-disk format (1 → 2)
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
@@ -168,7 +171,7 @@ ITERATORS (covmap iter <name> <verb>)
   (bare `covmap iter` lists all iterators)
 
 PLUMBING
-  hash-segment <file> <a[:col]> <b[:col]> [<lbl>] [-w]
+  hash-segment <file> <a[:col]> <b[:col]> [-w]
   cat-segment <hash>
   ls-segments <covering>
   ls-links <connection>
@@ -471,7 +474,7 @@ fn file_matches_segments(
             None => return Ok(false),
         };
         let recorded = match segment::read_object(&repo.objects_dir(), &e.hash) {
-            Ok((_, c)) => c,
+            Ok(c) => c,
             Err(_) => return Ok(false),
         };
         if on_disk != recorded {
@@ -547,20 +550,32 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         return Ok(0);
     }
 
-    // Resolve the segment. When addressed through a covering, keep the
-    // covering entry too, so we can surface its message (covering-local
-    // metadata that the object store does not hold).
-    let (full, message) = match covering {
+    // Resolve the segment. Label and message are covering-local metadata
+    // (not stored in the content-addressed object), so they are available
+    // only when the segment is addressed through a covering. A bare-hash
+    // address names content across every covering that shares it, so it has
+    // neither.
+    let (full, label, message) = match covering {
         Some(cname) => {
             let c = resolve_covering(&repo, &cname)?;
             let idx = covering::resolve_segment(&c, &prefix)?;
-            (c.entries[idx].hash.clone(), c.entries[idx].message.clone())
+            (
+                c.entries[idx].hash.clone(),
+                Some(c.entries[idx].label.clone()),
+                c.entries[idx].message.clone(),
+            )
         }
-        None => (segment::resolve_prefix(&repo.objects_dir(), &prefix)?, None),
+        None => (
+            segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
+            None,
+            None,
+        ),
     };
-    let (label, content) = segment::read_object(&repo.objects_dir(), &full)?;
+    let content = segment::read_object(&repo.objects_dir(), &full)?;
     println!("segment {full}");
-    println!("  label:  {}", if label.is_empty() { "-" } else { &label });
+    if let Some(l) = &label {
+        println!("  label:  {}", if l.is_empty() { "-" } else { l });
+    }
     println!("  bytes:  {}", content.len());
     if let Some(m) = &message {
         // The full (possibly multi-line) message, each line indented so it
@@ -669,7 +684,7 @@ fn cmd_grep(args: &[String]) -> io::Result<u8> {
     let repo = current_repo()?;
     let c = resolve_covering(&repo, &covering_name)?;
     for e in &c.entries {
-        let (_, content) = segment::read_object(&repo.objects_dir(), &e.hash)?;
+        let content = segment::read_object(&repo.objects_dir(), &e.hash)?;
         if !(e.label.contains(&pattern) || content.contains(&pattern)) {
             continue;
         }
@@ -1017,7 +1032,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
         let mut reconstruct_ok = true;
         for oe in &ordered {
             match segment::read_object(&repo.objects_dir(), &oe.hash) {
-                Ok((_, content)) => {
+                Ok(content) => {
                     for piece in content.split_inclusive('\n') {
                         o_lines.push(piece.to_string());
                     }
@@ -1115,7 +1130,7 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                     // Read the segment's recorded content and rank candidate
                     // locations in the new file. Propose-only.
                     let target = match segment::read_object(&repo.objects_dir(), &it.hash) {
-                        Ok((_, c)) => c,
+                        Ok(c) => c,
                         Err(_) => {
                             eprintln!("  {who}: (content unavailable)");
                             continue;
@@ -1529,7 +1544,7 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
 /// Print the frozen content of a task to stdout (used by `--content`).
 fn print_task_content(repo: &Repo, t: &Task) -> io::Result<()> {
     match segment::read_object(&repo.objects_dir(), &t.hash) {
-        Ok((_, content)) => {
+        Ok(content) => {
             let mut out = io::stdout().lock();
             out.write_all(content.as_bytes())?;
             if !content.ends_with('\n') {
@@ -1918,25 +1933,141 @@ fn cmd_html(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
+// ---- migrate --------------------------------------------------------------
+
+/// Upgrade a `.covmap/` from on-disk format 1 → 2: recompute every segment
+/// hash from content alone (dropping the label from the hash and from the
+/// object body), then rewrite every hash reference in coverings,
+/// connections, and iterators. Idempotent: a version-2 repo is left alone.
+fn cmd_migrate(_args: &[String]) -> io::Result<u8> {
+    let repo = Repo::discover_unchecked(&env::current_dir()?)?;
+    let version = repo.read_version().unwrap_or_default();
+    match version.as_str() {
+        "2" => {
+            println!("already at format 2 — nothing to migrate");
+            return Ok(0);
+        }
+        "1" => {}
+        other => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cannot migrate from format '{other}' (expected '1')"),
+            ));
+        }
+    }
+
+    // old segment-hash -> new content-only hash, learned from the coverings
+    // (the only place we can recover a segment's content + old label).
+    let mut remap: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let objects = repo.objects_dir();
+    let mut objects_written = 0usize;
+
+    for cname in Covering::list(&repo)? {
+        let mut c = Covering::read(&repo, &cname)?;
+        for e in &mut c.entries {
+            // Read the v1 object body (`label \0 content`) and recover the
+            // pure content, then re-key it under the content-only hash.
+            let content = read_v1_content(&objects, &e.hash)?;
+            let new_hash = segment::hash_of(&content);
+            if new_hash != e.hash {
+                remap.insert(e.hash.clone(), new_hash.clone());
+            }
+            let seg = crate::segment::Segment {
+                file: e.file.clone(),
+                a: e.a,
+                b: e.b,
+                label: e.label.clone(),
+                content,
+            };
+            segment::write_object(&objects, &seg)?;
+            objects_written += 1;
+            e.hash = new_hash;
+        }
+        c.write(&repo)?;
+    }
+
+    // Rewrite bare-hash endpoints in connections. `@name` endpoints and
+    // endpoints into a not-yet-migrated target repo are left untouched
+    // (the latter resolve again once that repo is migrated).
+    let mut conn_eps = 0usize;
+    for kname in Connection::list(&repo)? {
+        let mut k = Connection::read(&repo, &kname)?;
+        for l in &mut k.links {
+            if let Some(n) = remap.get(&l.a) {
+                l.a = n.clone();
+                conn_eps += 1;
+            }
+            if let Some(n) = remap.get(&l.b) {
+                l.b = n.clone();
+                conn_eps += 1;
+            }
+        }
+        k.write(&repo)?;
+    }
+
+    // Rewrite frozen task hashes in iterators (the cursor is an index, not
+    // a hash, so it needs no rewrite).
+    let mut iter_tasks = 0usize;
+    for iname in crate::iterator::Iter::list(&repo)? {
+        let mut it = crate::iterator::Iter::read(&repo, &iname)?;
+        for t in &mut it.tasks {
+            if let Some(n) = remap.get(&t.hash) {
+                t.hash = n.clone();
+                iter_tasks += 1;
+            }
+        }
+        it.write(&repo)?;
+    }
+
+    fs::write(repo.dot().join("version"), "2\n")?;
+    println!(
+        "migrated to format 2: {} object(s) re-keyed ({} hash change(s)), \
+         {} connection endpoint(s) and {} iterator task(s) rewritten",
+        objects_written,
+        remap.len(),
+        conn_eps,
+        iter_tasks
+    );
+    println!("run `covmap fsck` to confirm every partition and endpoint resolves");
+    Ok(0)
+}
+
+/// Read a format-1 object body and return its content, stripping the
+/// leading `label \0` prefix. Format-1 objects always contain a NUL; if
+/// one is somehow absent, treat the whole body as content.
+fn read_v1_content(objects_dir: &std::path::Path, hash: &str) -> io::Result<String> {
+    let path = segment::object_path(objects_dir, hash);
+    let buf = fs::read(&path)?;
+    let content = match buf.iter().position(|&b| b == 0) {
+        Some(nul) => &buf[nul + 1..],
+        None => &buf[..],
+    };
+    Ok(String::from_utf8_lossy(content).to_string())
+}
+
 // ---- plumbing -------------------------------------------------------------
 
 fn cmd_hash_segment(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "hash-segment <file> <a> <b> [<label>] [-w]",
+            "hash-segment <file> <a> <b> [-w]",
         ));
     }
     let file = &args[0];
     let (a, a_col) = parse_line_col(&args[1])?;
     let (b, b_col) = parse_line_col(&args[2])?;
-    let mut label = String::new();
+    // The hash is content only, so hash-segment takes no label; a stray
+    // non-flag argument is a mistake (likely an old-style label).
     let mut write = false;
     for a in &args[3..] {
         if a == "-w" {
             write = true;
         } else {
-            label = a.clone();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("hash-segment: unexpected argument '{a}' (labels are not hashed; the hash is content only)"),
+            ));
         }
     }
     let raw = fs::read_to_string(file)?;
@@ -1956,7 +2087,7 @@ fn cmd_hash_segment(args: &[String]) -> io::Result<u8> {
         file: file.to_string(),
         a,
         b,
-        label,
+        label: String::new(),
         content,
     };
     let h = seg.hash();
@@ -1974,7 +2105,7 @@ fn cmd_cat_segment(args: &[String]) -> io::Result<u8> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cat-segment <hash>"))?;
     let repo = current_repo()?;
     let full = segment::resolve_prefix(&repo.objects_dir(), prefix)?;
-    let (_label, content) = segment::read_object(&repo.objects_dir(), &full)?;
+    let content = segment::read_object(&repo.objects_dir(), &full)?;
     let mut out = io::stdout().lock();
     out.write_all(content.as_bytes())?;
     Ok(0)

@@ -22,9 +22,9 @@ binary path is `covmap/target/release/covmap`.
   inclusive character column (`a:col`), so a range can be
   character-precise: `file:5:3..7:9`. An omitted column means the line
   boundary (start of the line for `a`, through the newline for `b`).
-  Its identity is the first 16 hex chars (64 bits) of
-  `sha256(label || NUL || content)`. Segments are stored under
-  `.covmap/objects/`.
+  Its identity is the first 16 hex chars (64 bits) of `sha256(content)` —
+  content only; the label is ref-local metadata, not part of the hash.
+  Segments are stored under `.covmap/objects/`.
 - A **covering** is a partition of (some files of) a repository into
   segments. It is a ref under `.covmap/coverings/<name>` listing one
   segment per line, prefixed by `# covered=<file>` lines. The default
@@ -61,7 +61,7 @@ covmap has five places text can attach. Pick by *what the text is about*:
 
 | Channel | Attaches to | Purpose | Hashed? | Set with |
 | ------- | ----------- | ------- | ------- | -------- |
-| **label** | a segment | coarse status *category* (`unknown`/`reviewed`/`mapped`) | **yes** (part of identity) | `covmap label` |
+| **label** | a segment | coarse status *category* (`unknown`/`reviewed`/`mapped`) | no (ref-local) | `covmap label` |
 | **name** | a segment | stable *slug identity* (`@enqueue`); no spaces/`:` | no | `covmap name` |
 | **message** | a segment | free-form *why this segment* (rationale, provenance, why (un)mapped) | no | `covmap annotate -m` |
 | **link note** | a link | *why this mapping* (A↔B) | n/a | `covmap link … <note>` |
@@ -114,7 +114,7 @@ are unique.
 | `covmap show <addr>` | Pretty-print a segment, covering, or connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
-| `covmap label <C>:<h> <label>` | Replace a segment's label (re-hashes). | no |
+| `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
 | `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. Name the segments you intend to map. | no |
 | `covmap annotate <C>:<addr> [-m <msg>]...` | Set/replace a segment's free-form **message** (why it was cut / what it is / why it is or isn't mapped). Repeatable `-m` = paragraphs; `-` clears; no `-m` prints it. Not hashed — editing it never causes drift. | yes (read) |
 | `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name; the bottom is anonymous. | yes |
@@ -137,7 +137,7 @@ are unique.
 | `covmap ls-links <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
-| `covmap hash-segment <file> <a> <b> [<lbl>] [-w]` | Hash a candidate segment without registering it (or with `-w`). |
+| `covmap hash-segment <file> <a> <b> [-w]` | Hash a candidate segment (content only) without registering it (or with `-w`). |
 | `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<hash_A>\t<hash_B>`. |
 
 ### Address forms
@@ -324,9 +324,10 @@ rest.
 
 ### C. Annotate / mark a batch of unlinked segments
 
-covmap labels are part of segment identity, so use them sparingly.
-Common labels: `unknown` (default for fresh segments), `ignored`,
-`reviewed`, `mapped`.
+covmap labels are ref-local status metadata — *not* part of segment
+identity — so relabelling is cheap and safe to do freely, even on linked
+segments. Common labels: `unknown` (default for fresh segments),
+`ignored`, `reviewed`, `mapped`.
 
 ```
 # label every unmapped Increment-related segment as 'reviewed'
@@ -335,9 +336,9 @@ covmap grep -l Increment | while read h; do
 done
 ```
 
-Relabeling rewrites the entry's hash; the old object stays in the
-store so any pre-existing connection keeps resolving until the user
-explicitly re-links.
+Relabeling changes only the covering row; the segment's hash (its content
+identity) is unchanged, the object store is untouched, and every
+connection endpoint — by hash or by name — keeps resolving.
 
 ### D. Triage a `covmap status` paste
 

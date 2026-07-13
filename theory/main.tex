@@ -79,13 +79,17 @@ from the start character through the end character inclusive: when
 $a = b$ it is characters $a_c$ through $b_c$ of line $a$; otherwise it
 is the suffix of line $a$ from $a_c$, followed by lines $a+1, \dots,
 b-1$ in full, followed by the prefix of line $b$ through $b_c$. Its
-\emph{label} is $\mathrm{label}(s) = \lambda$. We fix a hash function
-$h$ and define the \emph{segment hash} of $s$ as
+\emph{label} is $\mathrm{label}(s) = \lambda$, an \emph{annotation} on the
+segment (like its name; see \S\ref{sec:interface}), not a component of its
+identity. We fix a hash function $h$ and define the \emph{segment hash} of
+$s$ as
 \[
-  \hash(s) \;=\; \mathrm{trunc}_{16}\bigl(h\bigl(\lambda \;\Vert\; \texttt{NUL} \;\Vert\; \mathrm{content}_A(s)\bigr)\bigr),
+  \hash(s) \;=\; \mathrm{trunc}_{16}\bigl(h\bigl(\mathrm{content}_A(s)\bigr)\bigr),
 \]
-the first 16 hex characters (64 bits) of the SHA-256 of the labelled
-content. The truncated hash is the segment's identity.
+the first 16 hex characters (64 bits) of the SHA-256 of the segment's
+content. The truncated hash is the segment's identity: it depends only on
+$\mathrm{content}_A(s)$, so re-labelling a segment leaves its hash
+unchanged.
 \end{definition}
 
 \begin{remark}[Line-level segments]\label{rem:line-level}
@@ -106,13 +110,16 @@ tens of thousands of segments, this is negligible; the saving in
 display and storage compared to full SHA-256 is significant.
 \end{remark}
 
-The label is part of identity: two segments with identical content
-but different labels have different hashes and are therefore
-distinguishable as endpoints of a connection. \texttt{covmap cover}
-labels every segment \texttt{unknown}; typical
-re-labels include \emph{ignored}, \emph{reviewed}, and \emph{mapped},
-used to record per-segment status while preserving content-based
-sharing among segments that agree in both content and label.
+The label is \emph{not} part of identity: two segments with identical
+content share one hash regardless of their labels, so identical content
+is always the same object. \texttt{covmap cover} labels every segment
+\texttt{unknown}; typical re-labels include \emph{ignored},
+\emph{reviewed}, and \emph{mapped}, used to record per-segment status.
+Because the label is an annotation rather than a hash input, this status
+lives in the covering ref (\S\ref{sec:interface}) and a segment may carry
+different labels in different coverings while sharing one content object;
+re-labelling never changes a hash and so never breaks a hash-addressed
+connection endpoint.
 
 Let the \emph{successor} of an end position $(b, b_c)$ be the next
 character position: $(b+1, \bot)$ when $b_c = \bot$ (the end ran
@@ -760,7 +767,7 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
 Lower-level commands meant for scripts.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
-\item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [<label>] [-w]}
+\item \texttt{covmap hash-segment <file> <a[:c]> <b[:c]> [-w]}
 \item \texttt{covmap cat-segment <hash>}
 \item \texttt{covmap ls-segments $C$}
 \item \texttt{covmap ls-links $K$}

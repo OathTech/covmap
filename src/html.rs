@@ -785,7 +785,13 @@ fn render_compare_view(
                     status,
                     &e.hash,
                     esc(&back_hashes.join(" ")),
-                    esc(&back_tip_json(e, status, &inc, &src_by_hash))
+                    esc(&back_tip_json(
+                        e,
+                        status,
+                        &inc,
+                        &src_by_hash,
+                        &format!("{}::{}::", cv.k.target_repo, cv.k.target_covering),
+                    ))
                 ));
                 s.push_str(&esc(&content));
                 s.push_str("</span>");
@@ -892,6 +898,9 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
     s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
     s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
     s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
+    if let Some(m) = &e.message {
+        s.push_str(&format!("\"message\":\"{}\",", json_escape(m)));
+    }
     let status = if links.is_empty() {
         "unlinked"
     } else if links.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
@@ -928,11 +937,21 @@ fn back_tip_json(
     status: &str,
     incoming: &[IncomingLink],
     src_by_hash: &BTreeMap<&str, &CoveringEntry>,
+    tgt_file_key: &str,
 ) -> String {
     let mut s = String::from("{\"dir\":\"back\",");
     s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
     s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
     s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
+    // The B segment's own file key, so its header ↗ opens the Target view
+    // (this segment), not the counterpart A segment.
+    s.push_str(&format!(
+        "\"target_file_key\":\"{}\",",
+        json_escape(tgt_file_key)
+    ));
+    if let Some(m) = &e.message {
+        s.push_str(&format!("\"message\":\"{}\",", json_escape(m)));
+    }
     s.push_str(&format!("\"status\":\"{}\",", status));
     s.push_str("\"links\":[");
     for (i, l) in incoming.iter().enumerate() {
@@ -1089,8 +1108,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 #tooltip code { background: rgba(148,163,184,0.2); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.72rem; }
 #tooltip .tt-link { pointer-events: auto; cursor: pointer; color: #93c5fd; text-decoration: underline; }
 #tooltip .tt-link:hover { color: #bfdbfe; }
-#tooltip .tt-open, #tooltip .tt-cmp { pointer-events: auto; cursor: pointer; color: #94a3b8; margin-left: 0.15rem; text-decoration: none; }
-#tooltip .tt-open:hover, #tooltip .tt-cmp:hover { color: #f1f5f9; }
+#tooltip .tt-open { pointer-events: auto; cursor: pointer; color: #94a3b8; margin-left: 0.15rem; text-decoration: none; }
+#tooltip .tt-open:hover { color: #f1f5f9; }
 
 @keyframes flash {
   0%, 30%  { box-shadow: 0 0 0 3px rgba(59,130,246,0.55); }
@@ -1327,7 +1346,7 @@ document.addEventListener('click', ev => {
   // endpoints highlighted. Offered by the Target-view markers and the
   // Source / List tooltip, so each single-segment view has a way back into
   // the side-by-side. Checked before the plainer jumps that share their row.
-  const toCmp = ev.target.closest('.tt-cmp, .tgt-to-cmp');
+  const toCmp = ev.target.closest('.tgt-to-cmp');
   if (toCmp) {
     tooltip.classList.remove('visible');
     cmpJumpToLink(toCmp.dataset.aHash, toCmp.dataset.bHash);
@@ -1339,66 +1358,41 @@ document.addEventListener('click', ev => {
     jumpToSource(back.dataset.segid, '');
     return;
   }
-  // "open in full view" (↗): always leave Compare for the segment's own
-  // Source / Target view, whichever the tooltip entry names. Dismiss the
-  // tooltip so it doesn't linger over the view we just switched to, and
-  // remember the link so "↩ Back to Compare" can restore it exactly.
+  // "open in full view" (↗): open THIS segment in its own dedicated view —
+  // an A segment in the Source view, a B segment in the Target view. It does
+  // not jump to the linked counterpart. Dismiss the tooltip so it doesn't
+  // linger over the view we just switched to, and remember this segment so
+  // "↩ Back to Compare" can bring it back highlighted in the Compare panel.
   const open = ev.target.closest('.tt-open');
   if (open) {
     tooltip.classList.remove('visible');
-    cmpReturn = { a: open.dataset.aHash, b: open.dataset.bHash };
-    if (open.dataset.cmpBackHash !== undefined) {
-      jumpToSource(open.dataset.cmpBackHash, '', true);
+    if (open.dataset.openView === 'source') {
+      cmpReturn = { a: open.dataset.segid, b: null };
+      jumpToSource(open.dataset.segid, '', true);
     } else {
+      cmpReturn = { a: null, b: open.dataset.targetHash };
       jumpToTarget(open.dataset.targetFileKey, open.dataset.targetHash, true);
     }
     showReturnPill();
     return;
   }
-  // "↩ Back to Compare": restore the exact link a ↗ left on.
+  // "↩ Back to Compare": return to the segment a ↗ left on, highlighted.
   const ret = ev.target.closest('#cmp-return');
   if (ret) {
     hideReturnPill();
     if (cmpReturn) cmpJumpToLink(cmpReturn.a, cmpReturn.b);
     return;
   }
-  // reverse tooltip (B → A): jump to a specific source A segment. In Compare
-  // this highlights in-panel; elsewhere it opens the Source view.
-  const backLink = ev.target.closest('.tt-link[data-cmp-back-hash]');
-  if (backLink) {
-    if (currentView === 'compare') cmpJumpToA(backLink.dataset.cmpBackHash);
-    else jumpToSource(backLink.dataset.cmpBackHash, '');
-    return;
-  }
-  // forward tooltip (A → B). In Compare this highlights the B segment
-  // in-panel; elsewhere it opens the Target view.
-  const fwd = ev.target.closest('.tt-link');
+  // Forward tooltip link (List / Source views only): jump to the target.
+  // In Compare the tooltip link rows are informational (navigation is by
+  // clicking the segment in the panel), so they carry no jump target.
+  const fwd = ev.target.closest('.tt-link[data-target-hash]');
   if (fwd) {
-    if (currentView === 'compare') cmpJumpToB(fwd.dataset.targetHash);
-    else jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
+    jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
     return;
   }
 });
 
-// Highlight + scroll a single A segment in the compare view (used by the
-// B-side reverse tooltip, where one B may have many incoming A segments
-// spread across files).
-function cmpJumpToA(hash) {
-  const el = document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(hash)}"]`);
-  if (!el) return;
-  cmpClearHot();
-  el.scrollIntoView({behavior: 'smooth', block: 'center'});
-  cmpFlash(el);
-}
-// Symmetric jump to a single B segment, used by the A-side forward tooltip
-// so a click stays inside Compare instead of switching to the Target view.
-function cmpJumpToB(hash) {
-  const el = document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(hash)}"]`);
-  if (!el) return;
-  cmpClearHot();
-  el.scrollIntoView({behavior: 'smooth', block: 'center'});
-  cmpFlash(el);
-}
 // Enter Compare and land on a single link: highlight + scroll BOTH endpoints
 // (the A segment in its panel, the B segment in its). Used by the reciprocal
 // control in the Source / Target views. A missing endpoint (broken link) is
@@ -1508,49 +1502,62 @@ function escHtml(s) {
 }
 function renderTip(data) {
   if (data.dir === 'back') return renderBackTip(data);
-  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
+  const inCompare = currentView === 'compare';
+  // Header describes THIS segment. In Compare a single ↗ opens this segment
+  // in its own Source view (an A segment lives in the source covering) — it
+  // does not jump to the linked B counterpart.
+  const openIcon = inCompare
+    ? ` <span class="tt-open" title="open this segment in the Source view" data-open-view="source" data-segid="${data.hash}">↗</span>`
+    : '';
+  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}${openIcon}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
+  if (data.message) {
+    html += `<div class="tt-note">${escHtml(data.message)}</div>`;
+  }
+  // Links: what this segment maps to, shown for reading. Outside Compare the
+  // link is clickable (jump to the target); in Compare, navigation is by
+  // clicking the segment in the panel, so the rows are informational.
   if (data.links && data.links.length) {
-    // Each row carries one secondary control, chosen by view:
-    //   - in Compare, plain click stays in-panel, so ↗ opens the Target view;
-    //   - elsewhere, plain click already opens Target, so ⇄ instead enters
-    //     Compare landing on the link (both endpoints highlighted).
-    const inCompare = currentView === 'compare';
+    html += '<div class="tt-meta" style="margin-top:0.35rem">links:</div>';
     html += '<ul class="tt-links">';
     for (const l of data.links) {
       const cls = l.resolved ? '' : ' broken';
       const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
-      const extra = inCompare
-        ? ` <span class="tt-open" title="open in Target view" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}" data-a-hash="${data.hash}" data-b-hash="${l.target_hash}">↗</span>`
-        : ` <span class="tt-cmp" title="show this link in Compare" data-a-hash="${data.hash}" data-b-hash="${l.target_hash}">⇄</span>`;
-      html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${extra}${note}</li>`;
+      if (inCompare) {
+        html += `<li><code class="${cls.trim()}">${escHtml(l.conn)}</code> → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code>${note}</li>`;
+      } else {
+        html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
+      }
     }
     html += '</ul>';
-    const hint = inCompare
-      ? 'click → highlights B here · ↗ opens Target view'
-      : 'click → to jump to target · ⇄ shows the link in Compare';
-    html += `<div class="tt-meta" style="margin-top:0.35rem">${hint}</div>`;
+    if (!inCompare) {
+      html += '<div class="tt-meta" style="margin-top:0.35rem">click → to jump to target</div>';
+    }
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no outgoing links</div>';
   }
   return html;
 }
-// Reverse tooltip for a B (target) segment: the A segments pointing at it.
+// Tooltip for a B (target) segment: describes THIS segment, then lists the
+// A segments pointing at it (informational). The header ↗ opens this B
+// segment in its own Target view — not the counterpart A segment.
 function renderBackTip(data) {
-  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
+  const openIcon = ` <span class="tt-open" title="open this segment in the Target view" data-open-view="target" data-target-file-key="${escHtml(data.target_file_key||'')}" data-target-hash="${data.hash}">↗</span>`;
+  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}${openIcon}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
+  if (data.message) {
+    html += `<div class="tt-note">${escHtml(data.message)}</div>`;
+  }
   if (data.links && data.links.length) {
-    html += `<div class="tt-meta">← ${data.links.length} incoming from A</div>`;
+    html += `<div class="tt-meta" style="margin-top:0.35rem">links: ← ${data.links.length} incoming from A</div>`;
     html += '<ul class="tt-links">';
     for (const l of data.links) {
       const cls = l.resolved ? '' : ' broken';
       const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
       const name = l.source_label || l.source_loc || l.source_hash.slice(0,12);
-      const open = `<span class="tt-open" title="open in Source view" data-cmp-back-hash="${l.source_hash}" data-a-hash="${l.source_hash}" data-b-hash="${data.hash}">↗</span>`;
-      html += `<li><span class="tt-link${cls}" data-cmp-back-hash="${l.source_hash}"><code>${escHtml(name)}</code></span> ${open} via ${escHtml(l.conn)}${note}</li>`;
+      html += `<li><code class="${cls.trim()}">${escHtml(name)}</code> via ${escHtml(l.conn)}${note}</li>`;
     }
     html += '</ul>';
-    html += '<div class="tt-meta" style="margin-top:0.35rem">click ← highlights A here · ↗ opens Source view</div>';
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no incoming links</div>';
   }

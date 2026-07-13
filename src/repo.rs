@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 /// the segment hash, object encoding, covering refs, or connection
 /// refs. covmap refuses to operate on a `.covmap/` whose version
 /// disagrees.
-pub const FORMAT_VERSION: &str = "1";
+pub const FORMAT_VERSION: &str = "2";
 
 pub struct Repo {
     pub root: PathBuf,
@@ -30,12 +30,19 @@ impl Repo {
     /// Walk up from `start` looking for a `.covmap` directory, then
     /// verify its format version.
     pub fn discover(start: &Path) -> io::Result<Repo> {
+        let repo = Repo::discover_unchecked(start)?;
+        repo.check_format_version()?;
+        Ok(repo)
+    }
+
+    /// Like `discover`, but without the format-version check. Used by
+    /// `covmap migrate`, which must open a repo of an *older* format in
+    /// order to upgrade it.
+    pub fn discover_unchecked(start: &Path) -> io::Result<Repo> {
         let mut p = fs::canonicalize(start)?;
         loop {
             if p.join(".covmap").is_dir() {
-                let repo = Repo { root: p };
-                repo.check_format_version()?;
-                return Ok(repo);
+                return Ok(Repo { root: p });
             }
             match p.parent() {
                 Some(parent) => p = parent.to_path_buf(),
@@ -47,6 +54,13 @@ impl Repo {
                 }
             }
         }
+    }
+
+    /// The repo's on-disk format version string (trimmed), or an error if
+    /// the `version` file is missing/unreadable.
+    pub fn read_version(&self) -> io::Result<String> {
+        let p = self.dot().join("version");
+        Ok(fs::read_to_string(p)?.trim().to_string())
     }
 
     pub fn init(root: &Path) -> io::Result<Repo> {
@@ -93,11 +107,17 @@ impl Repo {
         };
         let on_disk = raw.trim();
         if on_disk != FORMAT_VERSION {
+            let hint = if on_disk == "1" {
+                " Run `covmap migrate` to upgrade it (format 1 → 2 makes the \
+                 segment hash content-only; labels move out of the hash)."
+            } else {
+                ""
+            };
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "covmap on-disk format version mismatch: \
-                     repo has '{on_disk}', this binary supports '{FORMAT_VERSION}'."
+                     repo has '{on_disk}', this binary supports '{FORMAT_VERSION}'.{hint}"
                 ),
             ));
         }

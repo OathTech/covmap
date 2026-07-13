@@ -10,17 +10,64 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 
-pub fn render(repo: &Repo) -> io::Result<String> {
+/// Render the static HTML report.
+///
+/// `sel_covering` / `sel_connection`, when given, select what the report
+/// shows instead of defaulting to HEAD + every connection:
+/// - `sel_connection` limits the report to that one connection and, unless
+///   `sel_covering` overrides, fixes the source covering to the connection's
+///   own source covering — so pointing the report at a specific map does not
+///   depend on the current working directory or `.covmap/HEAD`.
+/// - `sel_covering` sets the source-side covering explicitly.
+///
+/// An unknown covering or connection name is an error.
+pub fn render(
+    repo: &Repo,
+    sel_covering: Option<&str>,
+    sel_connection: Option<&str>,
+) -> io::Result<String> {
     let coverings = Covering::list(repo)?;
-    let connections = Connection::list(repo)?;
 
-    // Pick HEAD's covering as the source view (or the first covering).
+    // Which connections to show: one selected connection, or all of them.
+    let connections = match sel_connection {
+        Some(k) => {
+            if !repo.connections_dir().join(k).is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("connection '{k}' not found in {}", repo.root.display()),
+                ));
+            }
+            vec![k.to_string()]
+        }
+        None => Connection::list(repo)?,
+    };
+
+    // Choose the source-side covering. Precedence: --covering, else the
+    // selected connection's source covering, else HEAD, else the first
+    // covering present.
     let head_name = repo.read_head().unwrap_or_else(|_| "main".to_string());
-    let source_covering = coverings
-        .iter()
-        .find(|n| n == &&head_name)
-        .or_else(|| coverings.first())
-        .cloned();
+    let conn_source = match sel_connection {
+        Some(k) => Some(Connection::read(repo, k)?.source_covering),
+        None => None,
+    };
+    let source_covering = match sel_covering {
+        Some(c) => {
+            if !repo.coverings_dir().join(c).is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("covering '{c}' not found in {}", repo.root.display()),
+                ));
+            }
+            Some(c.to_string())
+        }
+        None => conn_source.or_else(|| {
+            coverings
+                .iter()
+                .find(|n| n == &&head_name)
+                .or_else(|| coverings.first())
+                .cloned()
+        }),
+    };
 
     let src_cov = match source_covering {
         Some(n) => Some(Covering::read(repo, &n)?),
@@ -351,12 +398,18 @@ fn render_list_view(
             } else {
                 &e.label
             };
+            // A segment message (if any) renders as its own detail line under
+            // the meta, newlines preserved.
+            let message_block = match &e.message {
+                Some(m) => format!("<div class=\"seg-message\">{}</div>", esc(m)),
+                None => String::new(),
+            };
             s.push_str(&format!(
                 "<div class=\"segment clickable status-{} zebra-{}\" data-status=\"{}\" \
                        data-file=\"{}\" data-hash=\"{}\" data-tip='{}'>\
                    <h3>{} <span class=\"badge {}\">{}</span></h3>\
                    <div class=\"meta\"><code>{}</code> · {} · {} lines · label {}</div>\
-                   {}\
+                   {}{}\
                  </div>\n",
                 status,
                 i % 2,
@@ -371,6 +424,7 @@ fn render_list_view(
                 esc(&e.loc()),
                 e.b - e.a + 1,
                 label_html(label),
+                message_block,
                 links_block(&links)
             ));
         }
@@ -447,8 +501,8 @@ fn render_source_view(
             esc(fname)
         ));
         for (i, e) in entries.iter().enumerate() {
-            let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
-                .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+            let content = segment::read_object(&repo.objects_dir(), &e.hash)
+                .unwrap_or_else(|_| String::from("(missing)\n"));
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
             let inline = if e.is_line_aligned() { "" } else { " inline" };
@@ -528,8 +582,8 @@ fn render_target_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))
                     .cloned()
@@ -562,11 +616,15 @@ fn render_target_view(
                         s.push_str(&format!(
                             "<span class=\"{} tgt-to-src\" data-segid=\"{}\">\
                                 ← <code>{}</code> ({})\
-                             </span>",
+                             </span>\
+                             <span class=\"tgt-to-cmp\" title=\"show this link in Compare\" \
+                                   data-a-hash=\"{}\" data-b-hash=\"{}\">⇄</span>",
                             cls,
                             &l.source_hash,
                             &l.source_hash,
-                            esc(&l.conn_name)
+                            esc(&l.conn_name),
+                            &l.source_hash,
+                            &e.hash
                         ));
                         if !l.note.is_empty() {
                             s.push_str(&format!(" <span class=\"note\">{}</span>", esc(&l.note)));
@@ -607,6 +665,14 @@ fn render_compare_view(
 ) -> io::Result<String> {
     let mut s = String::from("<div class=\"cmp-grid\">\n");
 
+    // Hash -> source entry lookup, so the B-side reverse tooltip can name the
+    // A segments (loc / label / file) that point at a target segment.
+    let src_by_hash: BTreeMap<&str, &CoveringEntry> = by_file
+        .values()
+        .flatten()
+        .map(|e| (e.hash.as_str(), *e))
+        .collect();
+
     // --- panel 1: file list for A ------------------------------------------
     s.push_str(
         "<aside class=\"cmp-files cmp-files-a\"><div class=\"cmp-files-head\">A · source</div>",
@@ -640,8 +706,8 @@ fn render_compare_view(
                 esc(fname)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let status = seg_status(outgoing, &e.hash);
                 let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
                 let link_hashes: Vec<String> =
@@ -695,8 +761,8 @@ fn render_compare_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let (_lbl, content) = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
-                    .unwrap_or_else(|_| (String::new(), String::from("(missing)\n")));
+                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                    .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))
                     .cloned()
@@ -712,13 +778,20 @@ fn render_compare_view(
                 let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
                     "<span class=\"cmp-seg cmp-seg-b status-{}{} zebra-{}\" data-status=\"{}\" \
-                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\">",
+                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\" data-tip='{}'>",
                     status,
                     inline,
                     i % 2,
                     status,
                     &e.hash,
-                    esc(&back_hashes.join(" "))
+                    esc(&back_hashes.join(" ")),
+                    esc(&back_tip_json(
+                        e,
+                        status,
+                        &inc,
+                        &src_by_hash,
+                        &format!("{}::{}::", cv.k.target_repo, cv.k.target_covering),
+                    ))
                 ));
                 s.push_str(&esc(&content));
                 s.push_str("</span>");
@@ -825,6 +898,9 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
     s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
     s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
     s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
+    if let Some(m) = &e.message {
+        s.push_str(&format!("\"message\":\"{}\",", json_escape(m)));
+    }
     let status = if links.is_empty() {
         "unlinked"
     } else if links.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
@@ -846,6 +922,54 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
             &l.target_hash,
             json_escape(&l.note),
             json_escape(&format!("{}::{}::", l.target_repo, l.target_covering)),
+            l.src_resolved && l.tgt_resolved
+        ));
+    }
+    s.push_str("]}");
+    s
+}
+
+/// Reverse tooltip for a B (target) segment: the A (source) segments that
+/// point at it. Mirrors `tip_json` but lists incoming links instead of
+/// outgoing ones. `dir:"back"` lets the shared JS pick the right renderer.
+fn back_tip_json(
+    e: &CoveringEntry,
+    status: &str,
+    incoming: &[IncomingLink],
+    src_by_hash: &BTreeMap<&str, &CoveringEntry>,
+    tgt_file_key: &str,
+) -> String {
+    let mut s = String::from("{\"dir\":\"back\",");
+    s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
+    s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
+    s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
+    // The B segment's own file key, so its header ↗ opens the Target view
+    // (this segment), not the counterpart A segment.
+    s.push_str(&format!(
+        "\"target_file_key\":\"{}\",",
+        json_escape(tgt_file_key)
+    ));
+    if let Some(m) = &e.message {
+        s.push_str(&format!("\"message\":\"{}\",", json_escape(m)));
+    }
+    s.push_str(&format!("\"status\":\"{}\",", status));
+    s.push_str("\"links\":[");
+    for (i, l) in incoming.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let src = src_by_hash.get(l.source_hash.as_str());
+        let src_loc = src.map(|e| e.loc()).unwrap_or_default();
+        let src_label = src.map(|e| e.label.clone()).unwrap_or_default();
+        let src_file = src.map(|e| e.file.clone()).unwrap_or_default();
+        s.push_str(&format!(
+            "{{\"conn\":\"{}\",\"source_hash\":\"{}\",\"source_loc\":\"{}\",\"source_label\":\"{}\",\"source_file\":\"{}\",\"note\":\"{}\",\"resolved\":{}}}",
+            json_escape(&l.conn_name),
+            &l.source_hash,
+            json_escape(&src_loc),
+            json_escape(&src_label),
+            json_escape(&src_file),
+            json_escape(&l.note),
             l.src_resolved && l.tgt_resolved
         ));
     }
@@ -923,6 +1047,7 @@ section { padding: 1.5rem; overflow-y: auto; }
 .segment.clickable:hover { border-color: #94a3b8; }
 .segment h3 { margin: 0 0 0.25rem 0; font-size: 1rem; }
 .segment .meta { font-size: 0.75rem; color: #64748b; margin-bottom: 0.5rem; font-family: ui-monospace, monospace; }
+.segment .seg-message { font-size: 0.8rem; color: #475569; margin-bottom: 0.5rem; white-space: pre-wrap; border-left: 3px solid #cbd5e1; padding-left: 0.6rem; }
 .segment .links { margin-top: 0.5rem; font-size: 0.82rem; }
 .segment .links code { background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 3px; }
 .segment .note { font-style: italic; color: #4b5563; }
@@ -983,6 +1108,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 #tooltip code { background: rgba(148,163,184,0.2); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.72rem; }
 #tooltip .tt-link { pointer-events: auto; cursor: pointer; color: #93c5fd; text-decoration: underline; }
 #tooltip .tt-link:hover { color: #bfdbfe; }
+#tooltip .tt-open { pointer-events: auto; cursor: pointer; color: #94a3b8; margin-left: 0.15rem; text-decoration: none; }
+#tooltip .tt-open:hover { color: #f1f5f9; }
 
 @keyframes flash {
   0%, 30%  { box-shadow: 0 0 0 3px rgba(59,130,246,0.55); }
@@ -1010,6 +1137,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 .tgt-marker:hover { background: #dbeafe; }
 .tgt-marker.tgt-broken { background: #fee2e2; color: #991b1b; }
 .tgt-to-src { color: #1d4ed8; }
+.tgt-to-cmp { display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.4rem; border-radius: 3px; background: #f1f5f9; color: #475569; cursor: pointer; }
+.tgt-to-cmp:hover { background: #e0e7ff; color: #1e293b; }
 
 code { background: #f1f5f9; padding: 0 .25em; border-radius: 3px;
        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
@@ -1064,7 +1193,23 @@ main.compare-active { grid-template-columns: 1fr; }
 .cmp-seg.status-broken   { background: rgba(239, 68, 68, 0.14); border-left-color: var(--c-broken); }
 .cmp-seg.dimmed { opacity: 0.28; }
 .cmp-seg.cmp-hot { box-shadow: 0 0 0 2px #3b82f6 inset; }
+/* The one counterpart the cycle pointer is currently on: a stronger,
+   filled-edge ring so it stands out among the other highlighted (cmp-hot)
+   counterparts as you click through them. */
+.cmp-seg.cmp-current { box-shadow: 0 0 0 2px #3b82f6 inset, -4px 0 0 0 #3b82f6; }
 .cmp-seg.flash  { animation: flash 1.6s ease-out; }
+/* Persistent "you came from Compare" ring on the segment a ↗ landed on, so
+   it stays marked while you read the Source / Target view. */
+.src-seg.cmp-origin, .tgt-block.cmp-origin { box-shadow: 0 0 0 2px #3b82f6 inset; }
+/* Floating "↩ Back to Compare" pill. */
+#cmp-return {
+  position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 120;
+  background: #3b82f6; color: white; padding: 0.5rem 0.9rem; border-radius: 999px;
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+  opacity: 0; transform: translateY(6px); transition: opacity 0.12s, transform 0.12s; pointer-events: none;
+}
+#cmp-return.visible { opacity: 1; transform: none; pointer-events: auto; }
+#cmp-return:hover { background: #2563eb; }
 
 /* Zebra shading: alternate chunks get a faint neutral darken, so two
    contiguous chunks of the same status still show a visible seam. The
@@ -1089,6 +1234,11 @@ const TAIL_TEMPLATE: &str = "</body></html>\n";
 const SCRIPT: &str = r#"<script>
 let activeFile = '__all__';
 let currentView = 'list';
+// Compare click-to-cycle state: repeated clicks on the same segment step
+// through its counterparts one at a time (origin element + current index).
+let cmpCycle = { origin: null, els: [], idx: 0 };
+// The link a ↗ left Compare on, so "↩ Back to Compare" can restore it exactly.
+let cmpReturn = null;
 
 document.querySelectorAll('#sidebar-source .file').forEach(f => {
   f.addEventListener('click', () => {
@@ -1133,7 +1283,13 @@ document.querySelectorAll('.view-toggle button').forEach(b => b.addEventListener
   applyAll();
 }));
 
-function jumpToSource(segid, file) {
+// Drop any persistent "came from Compare" marker before setting a new one.
+function clearOrigin() {
+  document.querySelectorAll('.cmp-origin').forEach(x => x.classList.remove('cmp-origin'));
+}
+// `origin` (set when arriving via ↗) leaves a persistent blue ring on the
+// landed segment, so it stays marked as "where you came from" while you read.
+function jumpToSource(segid, file, origin) {
   document.querySelector('.view-toggle button[data-view="source"]').click();
   if (file) {
     const sf = document.querySelector(`.src-file[data-file="${CSS.escape(file)}"]`);
@@ -1143,10 +1299,12 @@ function jumpToSource(segid, file) {
   if (el) {
     el.scrollIntoView({behavior: 'smooth', block: 'center'});
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    clearOrigin();
+    if (origin) el.classList.add('cmp-origin');
   }
 }
 
-function jumpToTarget(targetFileKey, targetHash) {
+function jumpToTarget(targetFileKey, targetHash, origin) {
   document.querySelector('.view-toggle button[data-view="target"]').click();
   const fileEl = document.querySelector(`.tgt-file[data-target-file^="${CSS.escape(targetFileKey)}"]`);
   if (fileEl) fileEl.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -1155,24 +1313,98 @@ function jumpToTarget(targetFileKey, targetHash) {
     if (block) {
       block.scrollIntoView({behavior: 'smooth', block: 'center'});
       block.classList.remove('flash'); void block.offsetWidth; block.classList.add('flash');
+      clearOrigin();
+      if (origin) block.classList.add('cmp-origin');
     }
   }
 }
 
+// Floating "↩ Back to Compare" pill, shown after a ↗ leaves Compare.
+function showReturnPill() {
+  let pill = document.getElementById('cmp-return');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.id = 'cmp-return';
+    pill.innerHTML = '↩ Back to Compare';
+    document.body.appendChild(pill);
+  }
+  pill.classList.add('visible');
+}
+function hideReturnPill() {
+  const pill = document.getElementById('cmp-return');
+  if (pill) pill.classList.remove('visible');
+}
+// Leaving for Compare by any route (view toggle, ⇄) clears the origin marker
+// and the pill, so they only mark a genuine ↗ round-trip.
+document.querySelector('.view-toggle button[data-view="compare"]').addEventListener('click', () => {
+  clearOrigin();
+  hideReturnPill();
+});
+
 document.addEventListener('click', ev => {
+  // "show link in Compare" (⇄): enter Compare and land on the link, both
+  // endpoints highlighted. Offered by the Target-view markers and the
+  // Source / List tooltip, so each single-segment view has a way back into
+  // the side-by-side. Checked before the plainer jumps that share their row.
+  const toCmp = ev.target.closest('.tgt-to-cmp');
+  if (toCmp) {
+    tooltip.classList.remove('visible');
+    cmpJumpToLink(toCmp.dataset.aHash, toCmp.dataset.bHash);
+    return;
+  }
   // target → source jumps
   const back = ev.target.closest('.tgt-to-src');
   if (back) {
     jumpToSource(back.dataset.segid, '');
     return;
   }
-  // tooltip → target jumps (forward)
-  const fwd = ev.target.closest('.tt-link');
+  // "open in full view" (↗): open THIS segment in its own dedicated view —
+  // an A segment in the Source view, a B segment in the Target view. It does
+  // not jump to the linked counterpart. Dismiss the tooltip so it doesn't
+  // linger over the view we just switched to, and remember this segment so
+  // "↩ Back to Compare" can bring it back highlighted in the Compare panel.
+  const open = ev.target.closest('.tt-open');
+  if (open) {
+    tooltip.classList.remove('visible');
+    if (open.dataset.openView === 'source') {
+      cmpReturn = { a: open.dataset.segid, b: null };
+      jumpToSource(open.dataset.segid, '', true);
+    } else {
+      cmpReturn = { a: null, b: open.dataset.targetHash };
+      jumpToTarget(open.dataset.targetFileKey, open.dataset.targetHash, true);
+    }
+    showReturnPill();
+    return;
+  }
+  // "↩ Back to Compare": return to the segment a ↗ left on, highlighted.
+  const ret = ev.target.closest('#cmp-return');
+  if (ret) {
+    hideReturnPill();
+    if (cmpReturn) cmpJumpToLink(cmpReturn.a, cmpReturn.b);
+    return;
+  }
+  // Forward tooltip link (List / Source views only): jump to the target.
+  // In Compare the tooltip link rows are informational (navigation is by
+  // clicking the segment in the panel), so they carry no jump target.
+  const fwd = ev.target.closest('.tt-link[data-target-hash]');
   if (fwd) {
     jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
     return;
   }
 });
+
+// Enter Compare and land on a single link: highlight + scroll BOTH endpoints
+// (the A segment in its panel, the B segment in its). Used by the reciprocal
+// control in the Source / Target views. A missing endpoint (broken link) is
+// simply skipped, so a half-resolved link still shows the side that exists.
+function cmpJumpToLink(aHash, bHash) {
+  document.querySelector('.view-toggle button[data-view="compare"]').click();
+  cmpClearHot();
+  const a = aHash ? document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(aHash)}"]`) : null;
+  const b = bHash ? document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(bHash)}"]`) : null;
+  if (a) { a.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(a); }
+  if (b) { b.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(b); }
+}
 
 document.querySelectorAll('.segment.clickable').forEach(card => {
   card.addEventListener('click', () => {
@@ -1207,39 +1439,47 @@ applyAll();
 // ---- compare view: bidirectional A <-> B highlighting ----
 function cmpClearHot() {
   document.querySelectorAll('.cmp-seg.cmp-hot').forEach(x => x.classList.remove('cmp-hot'));
+  document.querySelectorAll('.cmp-seg.cmp-current').forEach(x => x.classList.remove('cmp-current'));
+  // Any programmatic (re)highlight ends the click-to-cycle run, so the next
+  // click on a segment starts a fresh cycle rather than advancing a stale one.
+  cmpCycle = { origin: null, els: [], idx: 0 };
 }
 function cmpFlash(el) {
   el.classList.add('cmp-hot');
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
 }
-// Click an A segment -> highlight + scroll its linked B segments.
-document.querySelectorAll('.cmp-seg-a').forEach(seg => {
+// Click a Compare segment -> highlight ALL its counterparts on the other
+// side; repeated clicks on the SAME segment cycle through them one at a
+// time (wrapping), scrolling each into view. `sideSel` picks the panel and
+// `attr` the hash attribute of the counterparts; `linksAttr` is the clicked
+// segment's list of counterpart hashes.
+function cmpWire(seg, linksAttr, sideSel, attr) {
   seg.addEventListener('click', () => {
-    cmpClearHot();
-    cmpFlash(seg);
-    const targets = (seg.dataset.cmpLinks || '').split(/\s+/).filter(Boolean);
-    let first = null;
-    targets.forEach(h => {
-      const t = document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(h)}"]`);
-      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
-    });
-    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
+    const hashes = (seg.dataset[linksAttr] || '').split(/\s+/).filter(Boolean);
+    const els = hashes
+      .map(h => document.querySelector(`${sideSel}[${attr}="${CSS.escape(h)}"]`))
+      .filter(Boolean);
+    if (cmpCycle.origin === seg && cmpCycle.els.length) {
+      // Same segment clicked again: advance to the next counterpart.
+      cmpCycle.idx = (cmpCycle.idx + 1) % cmpCycle.els.length;
+    } else {
+      cmpClearHot();
+      cmpFlash(seg);
+      els.forEach(t => t.classList.add('cmp-hot'));
+      cmpCycle = { origin: seg, els, idx: 0 };
+    }
+    const cur = cmpCycle.els[cmpCycle.idx];
+    if (cur) {
+      document.querySelectorAll('.cmp-seg.cmp-current').forEach(x => x.classList.remove('cmp-current'));
+      cur.classList.add('cmp-current');
+      cur.scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
   });
-});
-// Click a B segment -> highlight + scroll the A segments that point at it.
-document.querySelectorAll('.cmp-seg-b').forEach(seg => {
-  seg.addEventListener('click', () => {
-    cmpClearHot();
-    cmpFlash(seg);
-    const backs = (seg.dataset.cmpBack || '').split(/\s+/).filter(Boolean);
-    let first = null;
-    backs.forEach(h => {
-      const t = document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(h)}"]`);
-      if (t) { t.classList.add('cmp-hot'); if (!first) first = t; }
-    });
-    if (first) first.scrollIntoView({behavior: 'smooth', block: 'center'});
-  });
-});
+}
+document.querySelectorAll('.cmp-seg-a').forEach(seg =>
+  cmpWire(seg, 'cmpLinks', '.cmp-seg-b', 'data-cmp-b-hash'));
+document.querySelectorAll('.cmp-seg-b').forEach(seg =>
+  cmpWire(seg, 'cmpBack', '.cmp-seg-a', 'data-cmp-a-hash'));
 // Compare file lists scroll their panel to the chosen file.
 document.querySelectorAll('.cmp-files-a .file').forEach(f => {
   f.addEventListener('click', () => {
@@ -1261,19 +1501,65 @@ function escHtml(s) {
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function renderTip(data) {
-  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}</div>`;
+  if (data.dir === 'back') return renderBackTip(data);
+  const inCompare = currentView === 'compare';
+  // Header describes THIS segment. In Compare a single ↗ opens this segment
+  // in its own Source view (an A segment lives in the source covering) — it
+  // does not jump to the linked B counterpart.
+  const openIcon = inCompare
+    ? ` <span class="tt-open" title="open this segment in the Source view" data-open-view="source" data-segid="${data.hash}">↗</span>`
+    : '';
+  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}${openIcon}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
+  if (data.message) {
+    html += `<div class="tt-note">${escHtml(data.message)}</div>`;
+  }
+  // Links: what this segment maps to, shown for reading. Outside Compare the
+  // link is clickable (jump to the target); in Compare, navigation is by
+  // clicking the segment in the panel, so the rows are informational.
   if (data.links && data.links.length) {
+    html += '<div class="tt-meta" style="margin-top:0.35rem">links:</div>';
     html += '<ul class="tt-links">';
     for (const l of data.links) {
       const cls = l.resolved ? '' : ' broken';
       const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
-      html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
+      if (inCompare) {
+        html += `<li><code class="${cls.trim()}">${escHtml(l.conn)}</code> → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code>${note}</li>`;
+      } else {
+        html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
+      }
     }
     html += '</ul>';
-    html += '<div class="tt-meta" style="margin-top:0.35rem">click → to jump to target</div>';
+    if (!inCompare) {
+      html += '<div class="tt-meta" style="margin-top:0.35rem">click → to jump to target</div>';
+    }
   } else {
     html += '<div class="tt-note" style="color:#94a3b8">no outgoing links</div>';
+  }
+  return html;
+}
+// Tooltip for a B (target) segment: describes THIS segment, then lists the
+// A segments pointing at it (informational). The header ↗ opens this B
+// segment in its own Target view — not the counterpart A segment.
+function renderBackTip(data) {
+  const openIcon = ` <span class="tt-open" title="open this segment in the Target view" data-open-view="target" data-target-file-key="${escHtml(data.target_file_key||'')}" data-target-hash="${data.hash}">↗</span>`;
+  let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}${openIcon}</div>`;
+  html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
+  if (data.message) {
+    html += `<div class="tt-note">${escHtml(data.message)}</div>`;
+  }
+  if (data.links && data.links.length) {
+    html += `<div class="tt-meta" style="margin-top:0.35rem">links: ← ${data.links.length} incoming from A</div>`;
+    html += '<ul class="tt-links">';
+    for (const l of data.links) {
+      const cls = l.resolved ? '' : ' broken';
+      const note = l.note ? ` <span class="note">— ${escHtml(l.note)}</span>` : '';
+      const name = l.source_label || l.source_loc || l.source_hash.slice(0,12);
+      html += `<li><code class="${cls.trim()}">${escHtml(name)}</code> via ${escHtml(l.conn)}${note}</li>`;
+    }
+    html += '</ul>';
+  } else {
+    html += '<div class="tt-note" style="color:#94a3b8">no incoming links</div>';
   }
   return html;
 }
@@ -1301,16 +1587,16 @@ function hideTipSoon() {
 }
 function cancelHide() { if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; } }
 document.addEventListener('mouseover', ev => {
-  const seg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
+  const seg = ev.target.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   if (seg && seg.dataset.tip) { cancelHide(); showTip(seg, ev); return; }
   if (ev.target.closest('#tooltip')) { cancelHide(); return; }
 });
 document.addEventListener('mouseout', ev => {
-  const leftSeg = ev.target.closest('.src-seg, .segment, .cmp-seg-a');
+  const leftSeg = ev.target.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   const wentToTooltip = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('#tooltip');
-  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a');
+  const stillOnSeg = ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b');
   if (leftSeg && !wentToTooltip && !stillOnSeg) hideTipSoon();
-  if (ev.target.closest('#tooltip') && (!ev.relatedTarget || (!ev.relatedTarget.closest('#tooltip') && !ev.relatedTarget.closest('.src-seg, .segment')))) {
+  if (ev.target.closest('#tooltip') && (!ev.relatedTarget || (!ev.relatedTarget.closest('#tooltip') && !ev.relatedTarget.closest('.src-seg, .segment, .cmp-seg-a, .cmp-seg-b')))) {
     hideTipSoon();
   }
 });

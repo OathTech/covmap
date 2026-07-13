@@ -1,9 +1,12 @@
 //! Segments and their content-addressed storage.
 //!
-//! A segment is a quadruple (file, a, b, label). Its hash is the first
-//! 16 hex chars (64 bits) of sha256(label || NUL || content). With a
-//! few thousand segments the collision probability is around 2^-44,
-//! and the shorter hash is what every command prints and accepts.
+//! A segment is a range (file, a, b) with a covering-local `label`. Its
+//! hash is the first 16 hex chars (64 bits) of sha256(content) — content
+//! only: the label is *not* an input to the hash (it is ref-local status
+//! metadata, like the segment name and message), so re-labelling a segment
+//! never changes its identity. With a few thousand segments the collision
+//! probability is around 2^-44, and the shorter hash is what every command
+//! prints and accepts. The object body is the raw content bytes.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -22,7 +25,7 @@ pub struct Segment {
 
 impl Segment {
     pub fn hash(&self) -> String {
-        hash_of(&self.label, &self.content)
+        hash_of(&self.content)
     }
 }
 
@@ -90,10 +93,11 @@ pub fn extract_content(
     Some(out)
 }
 
-pub fn hash_of(label: &str, content: &str) -> String {
+/// The segment hash: `trunc16(sha256(content))`. Content only — the label
+/// is deliberately excluded (see the module docs), so identical content is
+/// always one shared object regardless of label.
+pub fn hash_of(content: &str) -> String {
     let mut h = Sha256::new();
-    h.update(label.as_bytes());
-    h.update([0u8]);
     h.update(content.as_bytes());
     let out = h.finalize();
     let mut s = String::with_capacity(HASH_LEN);
@@ -118,23 +122,20 @@ pub fn write_object(objects_dir: &std::path::Path, seg: &Segment) -> std::io::Re
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let body = format!("{}\0{}", seg.label, seg.content);
-    fs::write(path, body)?;
+    // Object body is the raw content — the label is ref-local metadata and
+    // is not stored in (or hashed into) the object.
+    fs::write(path, &seg.content)?;
     Ok(h)
 }
 
-/// Read raw object content (label, content) from the store.
-pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> std::io::Result<(String, String)> {
+/// Read an object's content from the store. The object body is exactly the
+/// segment's content (the label lives in the covering ref, not here).
+pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> std::io::Result<String> {
     let path = object_path(objects_dir, hash);
     let mut f = fs::File::open(path)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
-    let nul = buf.iter().position(|&b| b == 0).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed object: no NUL")
-    })?;
-    let label = String::from_utf8_lossy(&buf[..nul]).to_string();
-    let content = String::from_utf8_lossy(&buf[nul + 1..]).to_string();
-    Ok((label, content))
+    Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
 /// Resolve a hash prefix to a unique full hash. Errors on ambiguity / no match.
@@ -197,22 +198,36 @@ mod tests {
 
     #[test]
     fn hash_is_deterministic_and_truncated() {
-        let h = hash_of("Intro", "hello\n");
+        let h = hash_of("hello\n");
         assert_eq!(h.len(), HASH_LEN);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_eq!(h, hash_of("Intro", "hello\n"));
+        assert_eq!(h, hash_of("hello\n"));
     }
 
     #[test]
-    fn label_is_part_of_identity() {
-        // Same content, different label → different hash.
-        assert_ne!(hash_of("a", "x"), hash_of("b", "x"));
+    fn hash_excludes_label() {
+        // Same content, any label → same hash. The label is not an input.
+        let a = Segment {
+            file: "x".into(),
+            a: 1,
+            b: 1,
+            label: "unknown".into(),
+            content: "x\n".into(),
+        };
+        let b = Segment {
+            file: "x".into(),
+            a: 1,
+            b: 1,
+            label: "mapped".into(),
+            content: "x\n".into(),
+        };
+        assert_eq!(a.hash(), b.hash());
+        assert_eq!(a.hash(), hash_of("x\n"));
     }
 
     #[test]
-    fn nul_separator_prevents_label_content_overlap() {
-        // Without the NUL, "ab" + "" and "a" + "b" would collide.
-        assert_ne!(hash_of("ab", ""), hash_of("a", "b"));
+    fn different_content_differs() {
+        assert_ne!(hash_of("a"), hash_of("b"));
     }
 
     #[test]
@@ -233,9 +248,10 @@ mod tests {
             content: "line one\nline two\n".into(),
         };
         let h = write_object(&dir, &seg).unwrap();
-        let (lbl, content) = read_object(&dir, &h).unwrap();
-        assert_eq!(lbl, "Intro");
+        let content = read_object(&dir, &h).unwrap();
         assert_eq!(content, "line one\nline two\n");
+        // The object body is content only; the hash is content only.
+        assert_eq!(h, hash_of("line one\nline two\n"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

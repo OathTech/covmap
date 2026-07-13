@@ -4,9 +4,9 @@ High-level requirements for covmap. Each captures a capability the tool
 provides, derived from the formal model (`theory/main.tex`) and the
 command interface (`covmap --help`). Intentionally coarse: the list stayed
 at 20 for a long time, and the count is a deliberate ceiling, lifted only
-when a genuinely new capability lands — req21 (iterators) is the first such
-lift. All are realized today except req11 (connection algebra), which is
-explicitly kept as a recommended future direction.
+when a genuinely new capability lands — req21 (iterators) and req22 (segment
+messages) are such lifts. All are realized today except req11 (connection
+algebra), which is explicitly kept as a recommended future direction.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -25,17 +25,20 @@ docs-to-code links within one tree.
 
 ## req3 — Two-level segment identity
 Every segment shall have a hash identity: the 64-bit truncated hash
-of its labelled content, so identical labelled content yields a single
-shared object. A segment may additionally carry a stable, covering-local
-*name*, unique within its covering, giving it a name identity that is
-independent of its bytes. The name is not part of the segment hash, so
-naming, relabelling, or recutting a segment leaves the shared object
-store untouched.
+of its content, so identical content yields a single shared object. A
+segment may additionally carry a stable, covering-local *name*, unique
+within its covering, giving it a name identity that is independent of its
+bytes. The name is not part of the segment hash, so naming, relabelling,
+or recutting a segment leaves the shared object store untouched.
 
-## req4 — Labels as part of content identity
-A segment's label shall participate in its segment hash, letting
-per-segment status (unknown, ignored, reviewed, mapped) coexist with
-content sharing. (Names, by contrast, are not hashed — see req3.)
+## req4 — Labels as ref-local status metadata
+A segment's label shall be covering-local metadata that records
+per-segment status (unknown, ignored, reviewed, mapped) and shall **not**
+participate in the segment hash. Identity is a pure function of content,
+so identical content is one shared object regardless of label, a segment
+may carry different labels in different coverings, and re-labelling never
+changes a hash or breaks a hash-addressed connection endpoint. Labels thus
+join names (req3) and messages (req22) as non-hashed annotations.
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
@@ -133,6 +136,10 @@ convenience commands built over them.)
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
 connections (status, show, ls, grep, diff, and a static HTML browser).
+Inspection output shall resolve link endpoints to their covering, label,
+and location — not leave them as bare hashes — and `status` shall report
+per-connection source/target coverage (req12), so a reader sees a mapping's
+completeness and its relations without hand-joining separate outputs.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -148,3 +155,30 @@ refused while the current task is still pending, so no task is stepped over
 unresolved and iteration is exhausted exactly when every task is `done` or
 `skipped`. Iterators live under `.covmap/iterators/`, a purely additive
 directory that needs no format-version bump.
+
+## req22 — Segment messages (annotation)
+covmap shall let a segment carry an optional, free-form *message*: durable,
+possibly multi-line text recording why the segment was cut, what it
+represents, or why it is (not) mapped. A message is covering-local metadata,
+distinct from the segment's `label` (a status category) and its
+`name` (a slug identity, req3): like both of those it is **not** part of the
+segment hash, so
+setting, changing, or clearing it leaves the shared object store untouched
+and never causes or repairs drift. It travels with its segment across
+`split`/`merge`/`recut`/diff-remap the way a name does, is set and cleared
+with `covmap annotate` and surfaced by `show`/`ls`/`html`, and is stored
+additively in the covering ref with no format-version bump.
+
+## req23 — Bounded drill-down to understanding
+covmap shall let a reader reach *understanding of one region of a mapping*
+— a set of source segments together with the segments they map to — in a
+short, bounded sequence of inspection commands, without unbounded dumps or
+manual cross-referencing. Concretely: inspection shall support restricting a
+listing to a **region** (a covered file, or a line range within it) and to a
+**label**; a `show` of a region or label shall present each selected segment
+with its resolved image (req20), realizing κ(S) (the image of a subset under
+a connection); and a `show` of a single segment or link shall resolve its
+links in both directions. A large connection shall summarize (coverage plus
+the highest fan-in targets) rather than dump every link unless `--all` is
+given. This is output/query behavior over existing state; it needs no
+format-version bump.

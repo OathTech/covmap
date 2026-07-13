@@ -56,6 +56,13 @@ pub struct CoveringEntry {
     /// edits to the segment's content; an anonymous segment can only be
     /// referenced by its segment hash.
     pub name: Option<String>,
+    /// Optional free-form *message*: durable, possibly multi-line text
+    /// recording why the segment was cut / what it represents / why it is
+    /// (not) mapped. Covering-local metadata like `name`: it is **not** part
+    /// of the segment hash, so editing it never touches the object store or
+    /// causes drift, and it travels with the segment across split/merge/
+    /// recut/remap. Serialized as a `# message` stanza (see `write`).
+    pub message: Option<String>,
 }
 
 /// Validate a proposed name. Names must be non-empty and avoid the
@@ -95,6 +102,14 @@ fn fmt_pos_field(line: usize, col: Option<usize>) -> String {
 /// Render a `Pos` for diagnostics.
 pub fn fmt_pos(p: Pos) -> String {
     fmt_pos_field(p.line, p.col)
+}
+
+/// Error for a `# message <index> <line-count>` header that does not parse.
+fn bad_message_header(line: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("malformed message stanza header: {line}"),
+    )
 }
 
 /// First `HASH_LEN` chars of a (possibly already short) hash, for
@@ -296,6 +311,24 @@ impl Covering {
                 )),
             }
         }
+        // Segment messages, appended after all segment lines as
+        // length-prefixed stanzas. `<index>` is the 0-based position of the
+        // segment among the lines just written (i.e. in `self.entries`
+        // order); `<line-count>` fixes exactly how many following lines form
+        // the message, so a body containing blank lines — or lines starting
+        // with '#' — is read back verbatim. A segment with no message emits
+        // nothing, so a message-free covering is byte-identical to an older
+        // covmap's ref (backward compatible, no FORMAT_VERSION bump).
+        for (i, e) in self.entries.iter().enumerate() {
+            if let Some(msg) = &e.message {
+                let lines: Vec<&str> = msg.split('\n').collect();
+                buf.push_str(&format!("# message {} {}\n", i, lines.len()));
+                for l in lines {
+                    buf.push_str(l);
+                    buf.push('\n');
+                }
+            }
+        }
         atomic_write(&path, &buf)
     }
 
@@ -308,8 +341,48 @@ impl Covering {
             )
         })?;
         let mut entries = Vec::new();
-        for line in raw.lines() {
+        // Scan line by line. Segment lines come first; `# message` stanzas
+        // (each a header plus a fixed number of body lines) come after, and
+        // are attached to the segment at the stanza's index. We consume the
+        // body lines explicitly so a body containing blank or `#`-prefixed
+        // lines is read verbatim rather than skipped as a comment.
+        let all: Vec<&str> = raw.lines().collect();
+        let mut i = 0;
+        while i < all.len() {
+            let line = all[i];
+            if let Some(rest) = line.strip_prefix("# message ") {
+                let mut it = rest.split_whitespace();
+                let idx: usize = it
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| bad_message_header(line))?;
+                let count: usize = it
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| bad_message_header(line))?;
+                let body_start = i + 1;
+                let body_end = body_start + count;
+                if body_end > all.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("message stanza claims {count} lines past end of ref"),
+                    ));
+                }
+                let msg = all[body_start..body_end].join("\n");
+                if let Some(e) = entries.get_mut(idx) {
+                    let e: &mut CoveringEntry = e;
+                    e.message = Some(msg);
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("message stanza index {idx} has no segment"),
+                    ));
+                }
+                i = body_end;
+                continue;
+            }
             if line.is_empty() || line.starts_with('#') {
+                i += 1;
                 continue;
             }
             let parts: Vec<&str> = line.splitn(6, '\t').collect();
@@ -336,7 +409,9 @@ impl Covering {
                 b_col,
                 label: parts[4].to_string(),
                 name,
+                message: None,
             });
+            i += 1;
         }
         Ok(Covering {
             name: name.to_string(),
@@ -432,11 +507,13 @@ pub fn entry_by_hash<'a>(c: &'a Covering, hash: &str) -> Option<&'a CoveringEntr
     c.entries.iter().find(|e| e.hash == hash)
 }
 
-/// Replace an entry's label, writing a new object. The old hash is
-/// preserved in the object store so any connection that referenced it
-/// keeps resolving.
+/// Replace an entry's label. The label is ref-local metadata and not a
+/// hash input, so this updates only the covering row: the segment's hash
+/// (its content identity) is unchanged, the object store is untouched, and
+/// every connection endpoint that referenced the segment — by hash or by
+/// name — keeps resolving. Returns the (unchanged) hash.
 pub fn relabel(
-    repo: &Repo,
+    _repo: &Repo,
     c: &mut Covering,
     old_hash: &str,
     new_label: &str,
@@ -451,22 +528,8 @@ pub fn relabel(
                 format!("hash '{old_hash}' not in covering '{}'", c.name),
             )
         })?;
-    let (_label_old, content) = segment::read_object(&repo.objects_dir(), old_hash)?;
-    let new_hash = segment::hash_of(new_label, &content);
-    let new_seg = Segment {
-        file: c.entries[idx].file.clone(),
-        a: c.entries[idx].a,
-        b: c.entries[idx].b,
-        label: new_label.to_string(),
-        content,
-    };
-    segment::write_object(&repo.objects_dir(), &new_seg)?;
-    c.entries[idx].hash = new_hash.clone();
     c.entries[idx].label = new_label.to_string();
-    // The name is segment identity, independent of label/content, so it
-    // is preserved — any connection referencing the segment by name is
-    // unaffected by a relabel.
-    Ok(new_hash)
+    Ok(c.entries[idx].hash.clone())
 }
 
 /// Refresh a segment's content from current disk bytes. Keeps the
@@ -554,7 +617,7 @@ pub fn split(
     if cut_line < entry.a || cut_line > entry.b {
         return Err(oob());
     }
-    let (_label_old, content) = segment::read_object(&repo.objects_dir(), old_hash)?;
+    let content = segment::read_object(&repo.objects_dir(), old_hash)?;
     let clines: Vec<&str> = content.split_inclusive('\n').collect();
     let li = cut_line - entry.a; // index of the cut line within content
     if li >= clines.len() {
@@ -620,9 +683,9 @@ pub fn split(
     };
     let top_hash = segment::write_object(&repo.objects_dir(), &top)?;
     let bot_hash = segment::write_object(&repo.objects_dir(), &bot)?;
-    // Name propagation: the top keeps the original segment's name; the
-    // bottom is a fresh anonymous segment. (A connection to the named segment
-    // therefore follows the top half.)
+    // Name/message propagation: the top keeps the original segment's name
+    // and message; the bottom is a fresh anonymous, un-messaged segment. (A
+    // connection to the named segment therefore follows the top half.)
     c.entries[idx] = CoveringEntry {
         hash: top_hash.clone(),
         file: top.file,
@@ -632,6 +695,7 @@ pub fn split(
         b_col: top_b_col,
         label: top.label,
         name: entry.name.clone(),
+        message: entry.message.clone(),
     };
     c.entries.insert(
         idx + 1,
@@ -644,6 +708,7 @@ pub fn split(
             b_col: entry.b_col,
             label: bot.label,
             name: None,
+            message: None,
         },
     );
     Ok((top_hash, bot_hash))
@@ -679,8 +744,8 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
             format!("segments are not adjacent: {} and {}", e1.loc(), e2.loc()),
         ));
     }
-    let (_l1, c1) = segment::read_object(&repo.objects_dir(), &e1.hash)?;
-    let (_l2, c2) = segment::read_object(&repo.objects_dir(), &e2.hash)?;
+    let c1 = segment::read_object(&repo.objects_dir(), &e1.hash)?;
+    let c2 = segment::read_object(&repo.objects_dir(), &e2.hash)?;
     let merged_content = format!("{c1}{c2}");
     let merged = Segment {
         file: e1.file.clone(),
@@ -709,6 +774,19 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
         (None, Some(n2)) => Some(n2.clone()),
         (None, None) => None,
     };
+    // Message propagation mirrors the name rule: the merged segment keeps the
+    // surviving side's message (the earlier/left side's if both have one).
+    // Warn on a dropped message so it can be re-recorded if that was not
+    // intended.
+    let merged_message = match (&e1.message, &e2.message) {
+        (Some(m1), Some(_)) => {
+            eprintln!("(merge: both segments have a message; keeping the earlier one)");
+            Some(m1.clone())
+        }
+        (Some(m1), None) => Some(m1.clone()),
+        (None, Some(m2)) => Some(m2.clone()),
+        (None, None) => None,
+    };
     c.entries[keep] = CoveringEntry {
         hash: h.clone(),
         file: merged.file,
@@ -718,6 +796,7 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
         b_col: e2.b_col,
         label: merged.label,
         name: merged_name,
+        message: merged_message,
     };
     c.entries.remove(drop);
     Ok(h)
@@ -849,7 +928,7 @@ pub fn remap_file(
             Some(c) => c,
             None => return Err(bail()),
         };
-        let new_hash = segment::hash_of(&e.label, &content);
+        let new_hash = segment::hash_of(&content);
         if new_hash == e.hash {
             unchanged += 1;
         } else {
@@ -865,6 +944,7 @@ pub fn remap_file(
                 b_col: None,
                 label: e.label.clone(),
                 name: e.name.clone(),
+                message: e.message.clone(),
             },
             content,
         ));
@@ -1022,6 +1102,19 @@ pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Res
     Ok(())
 }
 
+/// Set, change, or clear a segment's free-form message. `new_message =
+/// None` (or an empty string) clears it. The message is covering-local
+/// metadata that is not part of the segment hash, so this never touches the
+/// object store or any connection. Unlike a name it has no uniqueness or
+/// character constraints — it is arbitrary (possibly multi-line) text; only
+/// a trailing newline is trimmed so the stored form is canonical.
+pub fn set_message(c: &mut Covering, idx: usize, new_message: Option<&str>) {
+    let normalized = new_message
+        .map(|m| m.strip_suffix('\n').unwrap_or(m).to_string())
+        .filter(|m| !m.is_empty());
+    c.entries[idx].message = normalized;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,6 +1153,7 @@ mod tests {
             b_col: None,
             label: "unknown".into(),
             name: None,
+            message: None,
         }
     }
 
@@ -1083,8 +1177,8 @@ mod tests {
         assert_eq!(c.entries.len(), 2);
         assert_eq!(c.entries[0].range(), "1..1");
         assert_eq!(c.entries[1].range(), "2..3");
-        let (_, top) = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
-        let (_, bot) = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
+        let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
+        let bot = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
         assert_eq!(top, "a\n");
         assert_eq!(bot, "b\nc\n");
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1102,8 +1196,8 @@ mod tests {
         split(&repo, &mut c, &old, 1, Some(7), "top", "bot").unwrap();
         assert_eq!(c.entries[0].range(), "1..1:6");
         assert_eq!(c.entries[1].range(), "1:7..1");
-        let (_, top) = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
-        let (_, bot) = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
+        let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
+        let bot = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
         assert_eq!(top, "hello ");
         assert_eq!(bot, "world\n");
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1152,6 +1246,7 @@ mod tests {
             b_col: None,
             label: "unknown".into(),
             name: name.map(|s| s.to_string()),
+            message: None,
         }
     }
 
@@ -1286,6 +1381,114 @@ mod tests {
     }
 
     #[test]
+    fn message_roundtrips_through_ref_with_tricky_body() {
+        let repo = tmp_repo();
+        std::fs::create_dir_all(repo.coverings_dir()).unwrap();
+        let mut a = whole(&repo, "a.txt", "x\n", 1);
+        a.name = Some("seg-a".into());
+        let b = whole(&repo, "b.txt", "y\n", 1);
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![a, b],
+        };
+        // A multi-line body containing a blank line AND a line that begins
+        // with '#' — both must survive verbatim thanks to the line-count.
+        set_message(&mut c, 0, Some("first line\n\n# looks like a comment"));
+        // The second segment stays un-messaged.
+        c.write(&repo).unwrap();
+        let raw = std::fs::read_to_string(repo.coverings_dir().join("main")).unwrap();
+        assert!(raw.contains("# message 0 3"));
+        assert!(!raw.contains("# message 1"));
+        let back = Covering::read(&repo, "main").unwrap();
+        assert_eq!(
+            back.entries[0].message.as_deref(),
+            Some("first line\n\n# looks like a comment")
+        );
+        assert_eq!(back.entries[1].message, None);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn legacy_ref_parses_with_no_messages() {
+        let repo = tmp_repo();
+        std::fs::create_dir_all(repo.coverings_dir()).unwrap();
+        // A ref written by older covmap: only segment lines, no stanzas.
+        let legacy = "abc123\tf.txt\t1\t2\tunknown\n";
+        std::fs::write(repo.coverings_dir().join("old"), legacy).unwrap();
+        let c = Covering::read(&repo, "old").unwrap();
+        assert_eq!(c.entries.len(), 1);
+        assert_eq!(c.entries[0].message, None);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn set_message_normalizes_and_clears() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "x\n", 1)],
+        };
+        // A trailing newline is trimmed to a canonical form.
+        set_message(&mut c, 0, Some("why\n"));
+        assert_eq!(c.entries[0].message.as_deref(), Some("why"));
+        // Empty string clears (treated as None).
+        set_message(&mut c, 0, Some(""));
+        assert_eq!(c.entries[0].message, None);
+        // Explicit None clears.
+        set_message(&mut c, 0, Some("again"));
+        set_message(&mut c, 0, None);
+        assert_eq!(c.entries[0].message, None);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn split_keeps_message_on_top_and_merge_keeps_earlier() {
+        let repo = tmp_repo();
+        let mut e = whole(&repo, "f.txt", "a\nb\nc\nd\n", 4);
+        e.message = Some("whole-file rationale".into());
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![e],
+        };
+        let old = c.entries[0].hash.clone();
+        // Split: the top keeps the message; the bottom is un-messaged.
+        split(&repo, &mut c, &old, 3, None, "top", "bot").unwrap();
+        assert_eq!(
+            c.entries[0].message.as_deref(),
+            Some("whole-file rationale")
+        );
+        assert_eq!(c.entries[1].message, None);
+        // Give the bottom a message, then merge: the earlier (top) wins.
+        set_message(&mut c, 1, Some("bottom rationale"));
+        let (h1, h2) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
+        merge(&repo, &mut c, &h1, &h2, "merged").unwrap();
+        assert_eq!(c.entries.len(), 1);
+        assert_eq!(
+            c.entries[0].message.as_deref(),
+            Some("whole-file rationale")
+        );
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn remap_preserves_message() {
+        // Insert two lines above a messaged segment; diff-remap must carry
+        // the message through the boundary shift (like it carries the name).
+        let o = slines("a\nb\nc\nd\n");
+        let n = slines("a\nb\nX\nY\nc\nd\n");
+        let mut s1 = entry("f.txt", 1, 2, Some("top"));
+        s1.message = Some("keep me".into());
+        let s2 = entry("f.txt", 3, 4, Some("bot"));
+        let fr = match remap_file(&[s1, s2], &o, &n) {
+            Ok(fr) => fr,
+            Err(_) => panic!("expected a successful remap"),
+        };
+        assert_eq!(fr.entries[0].0.message.as_deref(), Some("keep me"));
+        assert_eq!(fr.entries[1].0.message, None);
+        std::fs::remove_dir_all("/tmp/nonexistent-covmap-noop").ok();
+    }
+
+    #[test]
     fn endpoint_and_resolution_semantics() {
         let repo = tmp_repo();
         let mut named = whole(&repo, "f.txt", "hi\n", 1);
@@ -1347,6 +1550,7 @@ mod tests {
             b_col: bc,
             label: "x".into(),
             name: None,
+            message: None,
         };
         let c = Covering {
             name: "main".into(),

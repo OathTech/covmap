@@ -39,6 +39,14 @@ segments can be merged.
 Referable only by its segment hash, so any content edit invalidates
 references to it. Contrast **named segment**.
 
+**Bounded drill-down** **[T][R][S]** — the intended inspection access
+pattern (req23): understanding one **region** of a mapping takes a short,
+bounded sequence of commands (orient → narrow → understand) whose final step
+resolves the relation fully, so no follow-up lookup is forced. Listing
+commands print one condensed line per item; a command naming one item prints
+everything about it. Realized by `status` coverage, region/label selectors,
+and **resolved link** output; see also the **HTML report / Compare view**.
+
 **Cardinality** **[T][S]** — `|C|`, the number of segments in a covering.
 A complexity measure reported by `status`.
 
@@ -189,10 +197,18 @@ so `finished` is true exactly when no `pending` task remains. It is to a
 worklist what the **covering invariants** (C1–C3) are to a covering.
 Sub-concept of **iterator**.
 
-**Label** **[T][R][S]** — a per-segment status string, part of the
-segment hash. `cover` assigns `unknown`; typical relabels are `ignored`,
-`reviewed`, and `mapped`. Two segments with equal content but different
-labels are distinct.
+**Label** **[T][R][S]** — a per-segment status string, covering-local
+metadata that is *not* part of the segment hash (like the segment's name
+and message). `cover` assigns `unknown`; typical relabels are `ignored`,
+`reviewed`, and `mapped`. Two segments with equal content share one object
+regardless of label, and re-labelling never changes a hash.
+
+**Label lens** **[T][R][S]** — an inspection query (`covmap show --label
+<l>`) returning every segment of a covering carrying label `<l>` together
+with the segments each maps to. Formally the image `κ(S)` of the
+label-selected subset `S = C ↾ l` under a connection; the way covmap turns a
+cross-cutting concern spread across files into one call. See **Region** for
+the file/range-selected analogue.
 
 **Line map** **[T][S]** — a monotone partial injection from old to new
 line indices (line `i` maps to `j` only if the lines are equal),
@@ -212,6 +228,24 @@ repairable precursor. A name endpoint breaks only when the named segment
 is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
 whose identity *is* the content, breaks on any content edit, having no
 drift state to pass through first. Sub-concept of **link**.
+
+**Resolved link** **[R][S]** — a link presented with its far endpoint
+expanded from a bare endpoint (hash or `@name`) to its covering, label, and
+location — the form inspection output uses so a reader sees *what* a segment
+maps to without joining separate listings by hand. Emitted by
+`show`/`ls-links --resolve` and computed by the shared `resolve` module that
+also feeds the **HTML report / Compare view**. Sub-concept of **link**.
+
+**Segment message** **[R][S]** — an optional, free-form, possibly
+multi-line text recording *why a segment was cut, what it represents, or
+why it is (not) mapped* (`req22`). Set with `covmap annotate … -m`, shown by
+`show`/`ls -l`/`html`. Like a **segment name** it is covering-local metadata
+and **not** part of the **segment hash**, so editing it never touches the
+object store or causes **drift**, and it travels with the segment across
+**split** (top keeps it) / **merge** (surviving side) / **recut** /
+**diff-remap**. Distinct from the two **note** senses: a segment message is
+about *the segment itself*, a **link**'s note is about a *mapping*, and an
+iterator **task**'s note is about *one sweep step*.
 
 **Segment name** **[T][R][S]** — an optional, stable, human-meaningful
 string attached to a segment (e.g. `intro`, `req-1`), unique within its
@@ -250,6 +284,12 @@ hashes as the glue. This is git's name for the same split: the primitives
 are *plumbing*, the convenience commands *porcelain*. (An aspiration, not
 a fully-enforced invariant: covmap's porcelain is compiled Rust, and the
 plumbing set is thin.)
+
+**Region** **[R][S]** — an inspection selector naming a slice of a covering:
+a covered file, or a line range within it (`<C>:<file>[:a..b]`). Not stored —
+just a filter over the covering's entries. `covmap show <region>` presents
+each segment in the slice with the segments it maps to (the image `κ(S)` for
+`S` = the region's segments). The file/range analogue of the **label lens**.
 
 **Position** **[T][S]** — a `(line, optional column)` point in a file. An
 absent column (`⊥` / `None`) means the first character of the line for a
@@ -317,12 +357,12 @@ only when set, so line-only coverings are unaffected. Diff-remap does not
 handle char-level segments and falls back to split/merge. Sub-concept of
 **segment**.
 
-**Segment hash** *(also: object identity, truncated hash)* **[T][R][S]** —
-the first 64 bits (16 hex chars) of `SHA-256(label ‖ NUL ‖ content)`. It
-*is* a segment's identity, so identical labelled content shares one
-stored object and any edit changes it. It hashes the label together with
-the content, not the content alone — which is why *segment hash* is the
-right name for it (covmap no longer calls this a *content hash*).
+**Segment hash** *(also: object identity, content hash)* **[T][R][S]** —
+the first 64 bits (16 hex chars) of `SHA-256(content)`. It *is* a
+segment's identity, so identical content shares one stored object and any
+content edit changes it. The label is *not* an input to the hash (it is
+ref-local metadata; see **Label**), so re-labelling leaves the hash
+unchanged and identical content is one object regardless of label.
 
 **Sharing** **[T][R]** — automatic reuse of a segment across coverings:
 two coverings share a segment exactly when its **segment hash** coincides

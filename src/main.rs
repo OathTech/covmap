@@ -14,6 +14,7 @@ mod fingerprint;
 mod html;
 mod iterator;
 mod repo;
+mod resolve;
 mod segment;
 mod store;
 mod walk;

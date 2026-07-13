@@ -163,7 +163,7 @@ PORCELAIN
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
-  <name> next | current                               advance to / reprint the current task
+  <name> next [--content] | current [--content]       advance to / reprint the current task
   <name> done [-m <msg>] | skip [-m <msg>]            resolve the current task (does not advance)
   <name> choose <addr> | rewind [<addr>]              jump the cursor / reset a task to pending
   <name> peek [--all] [--content] | status | finished  look ahead / summarize / test exhaustion
@@ -2034,8 +2034,8 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
 
     match verb {
         "new" => cmd_iter_new(name, rest),
-        "next" => no_args(verb, rest).and_then(|_| cmd_iter_next(name)),
-        "current" => no_args(verb, rest).and_then(|_| cmd_iter_current(name)),
+        "next" => cmd_iter_next(name, rest),
+        "current" => cmd_iter_current(name, rest),
         "done" => cmd_iter_resolve(name, rest, TaskState::Done),
         "skip" => cmd_iter_resolve(name, rest, TaskState::Skipped),
         "choose" => cmd_iter_choose(name, rest),
@@ -2161,7 +2161,26 @@ fn cmd_iter_new(name: &str, args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-fn cmd_iter_next(name: &str) -> io::Result<u8> {
+/// Parse the optional `--content` flag accepted by `next`/`current`/`peek`.
+/// (`peek` also takes `--all`, so it parses its own args.)
+fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<bool> {
+    let mut content = false;
+    for a in args {
+        match a.as_str() {
+            "--content" => content = true,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("iter {verb}: unexpected arg '{other}' (only --content is accepted)"),
+                ));
+            }
+        }
+    }
+    Ok(content)
+}
+
+fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
+    let content = parse_content_flag("next", args)?;
     let repo = current_repo()?;
     let mut it = Iter::read(&repo, name)?;
     // Enumeration guarantee: refuse to advance off a still-pending task.
@@ -2179,6 +2198,9 @@ fn cmd_iter_next(name: &str) -> io::Result<u8> {
             it.cursor = Some(idx);
             it.write(&repo)?;
             println!("{}", it.tasks[idx].print_line());
+            if content {
+                print_task_content(&repo, &it.tasks[idx])?;
+            }
             Ok(0)
         }
         None => {
@@ -2188,12 +2210,16 @@ fn cmd_iter_next(name: &str) -> io::Result<u8> {
     }
 }
 
-fn cmd_iter_current(name: &str) -> io::Result<u8> {
+fn cmd_iter_current(name: &str, args: &[String]) -> io::Result<u8> {
+    let content = parse_content_flag("current", args)?;
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
     match it.cursor {
         Some(idx) => {
             println!("{}", it.tasks[idx].print_line());
+            if content {
+                print_task_content(&repo, &it.tasks[idx])?;
+            }
             Ok(0)
         }
         None => {

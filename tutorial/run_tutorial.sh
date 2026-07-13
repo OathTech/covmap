@@ -252,6 +252,19 @@ hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
 assert "peek lists all 7 pending tasks (the choosable set)" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter review peek | wc -l ) ) -eq 7 ]]"
 
+# `next --content` advances AND dumps the frozen bytes in one call — the
+# review affordance (documented on next/current/peek alike). Regression
+# guard: this must be accepted, not rejected as an unexpected argument.
+assert "next --content advances and emits frozen content" \
+  bash -c "
+    out=\$( cd '$WORK/spec' && '$COVMAP' iter review next --content )
+    # more than one line = handle line + at least one content line
+    [[ \$(printf '%s\n' \"\$out\" | wc -l) -gt 1 ]]
+  "
+# That advanced onto (and printed) the first task; resolve it so the
+# canonical loop below picks up cleanly from the next pending task.
+( cd "$WORK/spec" && "$COVMAP" iter review done -m "audited (with content)" >/dev/null )
+
 # The manual controls — shown on a throwaway `plan` iterator so the `review`
 # sweep below stays pristine (iterators are cheap, independent overlays).
 # `choose` jumps the cursor to any task by @name, out of file order; `skip`

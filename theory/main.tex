@@ -759,14 +759,15 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       (Definition~\ref{def:iterator}). \texttt{--order} defaults to
       \texttt{file}; \texttt{--label $\ell$} restricts $\tau$ to the
       segments labelled $\ell$. The cursor starts at $\bot$.
-\item \texttt{covmap iter $I$ next}\\
+\item \texttt{covmap iter $I$ next [--content]}\\
       \emph{Advance} (Definition~\ref{def:advance}): move the cursor to
       the $<$-least \textsc{pending} task and print it. Refused while the
       current task is still \textsc{pending}; exits non-zero when none
-      remains.
-\item \texttt{covmap iter $I$ current}\\
+      remains. \texttt{--content} also prints the task's frozen bytes.
+\item \texttt{covmap iter $I$ current [--content]}\\
       Reprint the cursor's task in any state --- the resume affordance
-      after a crash or context loss.
+      after a crash or context loss. \texttt{--content} also prints the
+      task's frozen bytes.
 \item \texttt{covmap iter $I$ done [-m <msg>]} / \texttt{skip [-m <msg>]}\\
       Set $\mathrm{st}(\gamma)$ to \textsc{done} / \textsc{skipped},
       optionally recording a note. Neither advances.

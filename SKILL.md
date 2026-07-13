@@ -429,15 +429,18 @@ between `next` and `done`:
 ```sh
 covmap iter sweep new main --order file
 until covmap iter sweep finished; do
-  covmap iter sweep next
+  covmap iter sweep next --content    # advance + read the task's frozen bytes
   covmap iter sweep done -m "verdict"
 done
 ```
 
-Between `next` and `done`, work on the current task: read its content with
-`covmap iter sweep peek --content` (or `covmap cat-segment <hash>`), edit
-code, run tests — whatever the job is. Use `covmap iter sweep skip -m "why"`
-instead of `done` to pass on a task deliberately.
+Between `next` and `done`, work on the current task: `next --content`
+already handed you its frozen bytes (or fetch them any time with `covmap
+iter sweep current --content` / `covmap cat-segment <hash>`), edit code, run
+tests — whatever the job is. Use `covmap iter sweep skip -m "why"` instead of
+`done` to pass on a task deliberately. If you are auditing a *connection*,
+`covmap show <C>:@name` is often better than raw content — it shows the
+segment together with its resolved links.
 
 Each `next` / `current` / `peek` prints one parseable line per task:
 

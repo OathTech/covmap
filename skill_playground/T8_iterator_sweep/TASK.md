@@ -35,8 +35,7 @@
 
    ```sh
    until covmap iter review finished; do
-     covmap iter review next               # first pending task, printed
-     # read its content (covmap iter review peek --content, or cat-segment)
+     covmap iter review next --content     # first pending task + its frozen bytes
      covmap iter review done -m "<verdict>"  # or: skip -m "<why>"
    done
    ```

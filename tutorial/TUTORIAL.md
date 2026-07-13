@@ -428,8 +428,10 @@ covmap iter review current               # the resume affordance: reprint the cu
 ```
 
 (Between `next` and `done` you would inspect the task — `covmap iter review
-peek --content`, or `covmap cat-segment <hash>` — and do the actual work;
-use `skip -m "why"` in place of `done` to pass on one deliberately.)
+next --content` hands you the frozen bytes as you advance, or fetch them any
+time with `covmap iter review current --content` / `covmap cat-segment
+<hash>` — and do the actual work; use `skip -m "why"` in place of `done` to
+pass on one deliberately.)
 
 Each `next` / `current` / `peek` prints one parseable line per task —
 `<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally

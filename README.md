@@ -176,6 +176,19 @@ Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
 `fsck [--broken-links]`.
 
+`covmap html` renders the whole map as a static, self-contained page:
+
+![covmap's HTML report in Compare mode — side A on the left and side B on
+the right, linked segments highlighted, with a hovered segment showing its
+annotation and its resolved links to the other side](docs/screenshot.png)
+
+*The Compare view puts the two sides of a connection side by side — side A
+(source) on the left, side B (target) on the right. Each side's file list
+shows how many of its segments are linked; linked segments are highlighted
+in the panels; and hovering a segment reveals its annotation and the
+segments it maps to on the other side. (List, Source, and Target views
+offer other ways in.)*
+
 ## Address forms
 
 - `<hash>` — full or short hex prefix (≥2 chars). Resolved against

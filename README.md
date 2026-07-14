@@ -1,14 +1,19 @@
 # covmap
 
-**Track which parts of a spec are realized by which parts of an
-implementation — content-addressed and drift-aware.**
+**A tool to add a layer of understanding over software systems —
+coverings of annotated segments, and mappings between them, kept
+explicit, persistent, and traceable.**
 
-covmap is a small CLI for cross-referencing two repositories at the
-granularity of arbitrary line — or character — ranges. Typical use: a Markdown
-specification and the code that implements it; or a paper and a
-mechanized proof. You partition each side into named **coverings**
-and record **connections** between them. When either side is edited,
-covmap tells you which links survived and which need re-checking.
+covmap is a small CLI that lays this layer beside a repository — in
+`.covmap/`, never touching the files themselves — by partitioning each
+side into **coverings** of content-addressed **segments** and recording
+**connections** (the mappings) between them, in one repository or across
+two. Typical use: a Markdown spec and the code that implements it,
+requirements and the formal model that justifies them, a paper and its
+mechanized proof, or a duplication audit within one tree. The layer is
+meant to be read, audited, and navigated by a person or an agent alike —
+tracking both sides as they evolve, so the correspondence stays
+trustworthy rather than going quietly stale.
 
 Coverings and connections live on disk under `.covmap/`, organized
 like `git`: there is an object store, refs, and a `HEAD`.
@@ -27,10 +32,14 @@ detecting when either side has changed underneath the mapping.
 
 ## Status
 
-**v0.1 — experimental.** The CLI surface and on-disk format are
+**v0.3 — experimental.** The CLI surface and on-disk format are
 stable enough to use day-to-day but may change before 1.0. Cooperative
 single-writer assumed; concurrent writers from multiple processes are
 not supported.
+
+The on-disk format is **version 2**. A `.covmap/` created by an older
+covmap (format 1) is upgraded with `covmap migrate`, which re-keys every
+object under the content-only segment hash (see *Layout on disk*).
 
 ## Install
 
@@ -101,36 +110,38 @@ covmap status
 # covering main: segments=1 lines=42
 #   drift: clean
 
-# 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+).
+# 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+),
+#    then name the Body segment so links to it survive content edits.
 covmap ls -l                          # find the spec.md hash
 # 7f0a8e83a07ef76d  unknown  spec.md:1..42  42
 covmap split main:7f0a8e83 10 "Intro" "Body"
 # split 7f0a8e83a07ef76d -> 838a4a248219f38c + 8c39d43caabe6fc6
 # A cut can also fall mid-line: `covmap split main:<h> 10:5` begins the
 # bottom segment at character 5 of line 10 (1-indexed, inclusive).
+covmap name main:8c39d43c body        # a stable @name handle for the Body
 
 # 3. Cover the implementation side.
 cd ../impl/
 covmap init
 covmap cover
 
-# 4. Open a connection from spec → impl and link the Body segment.
+# 4. Open a connection from spec → impl and link the Body segment by name.
 cd ../spec/
 covmap connect main ../impl:main spec_to_impl
-covmap link spec_to_impl 8c39d43c <impl_hash> "fn body"
+covmap link spec_to_impl @body <impl_hash> "fn body"
 
-# 5. Edit spec.md. Status now reports drift.
+# 5. Edit spec.md's Body. Status reports drift, but the link is intact —
+#    it references @body, not the (now-changed) content hash.
 covmap status
 # covering main: segments=2 lines=42
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
-#   spec_to_impl -> .../impl/main : 1 links, 0 broken
+# connections:
+#   spec_to_impl -> .../impl/main : 1 links, 0 broken · coverage source 1/2, target 1/1
 
-# 6. Refresh the changed segment in place. The link tied to its old
-#    hash becomes broken; relink it to the new hash.
-covmap recut main:8c39d43c            # recompute hash from disk bytes
-covmap fsck --broken-links
-covmap unlink spec_to_impl 8c39d43c <impl_hash>
-covmap link   spec_to_impl <new_hash> <impl_hash> "fn body"
+# 6. Refresh the changed segment in place. Because the link is by @name,
+#    it follows the new content automatically — no relinking needed.
+covmap recut main:@body               # recompute hash from disk bytes
+covmap fsck                           # fsck: ok
 ```
 
 ## Commands
@@ -148,6 +159,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
 | `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. |
+| `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
 | `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
@@ -156,11 +168,26 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `link <K> <h_A> <h_B> [<note>]` | Add a link. |
 | `unlink <K> <h_A> <h_B>` | Remove a link. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |
-| `html [-o <path>]` | Render a static HTML browser. |
+| `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; pull tasks one at a time (`next`/`done`/`skip`). Bare `iter` lists all. |
+| `html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser (one connection; auto-selected when only one exists). |
+| `migrate` | Upgrade `.covmap/` on-disk format (1 → 2: content-only segment hash). |
 
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
 `fsck [--broken-links]`.
+
+`covmap html` renders the whole map as a static, self-contained page:
+
+![covmap's HTML report in Compare mode — side A on the left and side B on
+the right, linked segments highlighted, with a hovered segment showing its
+annotation and its resolved links to the other side](docs/screenshot.png)
+
+*The Compare view puts the two sides of a connection side by side — side A
+(source) on the left, side B (target) on the right. Each side's file list
+shows how many of its segments are linked; linked segments are highlighted
+in the panels; and hovering a segment reveals its annotation and the
+segments it maps to on the other side. (List, Source, and Target views
+offer other ways in.)*
 
 ## Address forms
 
@@ -190,7 +217,7 @@ one per line. Supported syntax:
   version              # on-disk format version (currently "2")
   HEAD                 # default covering name (one line)
   ignore               # optional gitignore-lite patterns
-  objects/<hh>/<rest>  # segment objects: "<label>\0<content>"
+  objects/<hh>/<rest>  # segment objects: raw <content> (hash = sha256(content))
   coverings/<name>     # covered files + one segment hash per line
   connections/<name>   # connection metadata + links
   iterators/<name>     # a covering frozen into an ordered, stateful worklist

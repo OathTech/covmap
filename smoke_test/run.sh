@@ -123,6 +123,21 @@ hr "fsck (clean)"
 hr "label the Increment segment as 'mapped'"
 ( cd "$WORK/spec" && "$COVMAP_BIN" label "main:$INC" mapped )
 
+INC_AFTER=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "main:$INC" )
+[[ "$INC_AFTER" == "$INC" ]] \
+  && echo "  hash unchanged after relabel" \
+  || { echo "  FAIL: relabel changed $INC to $INC_AFTER"; exit 1; }
+
+if BROKEN_AFTER_LABEL=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  [[ -z "$BROKEN_AFTER_LABEL" ]] \
+    && echo "  existing hash-addressed link still resolves" \
+    || { echo "  FAIL: fsck succeeded but reported a broken link"; printf '%s\n' "$BROKEN_AFTER_LABEL"; exit 1; }
+else
+  echo "  FAIL: relabel broke a link"
+  printf '%s\n' "$BROKEN_AFTER_LABEL"
+  exit 1
+fi
+
 hr "rev-parse <hash-prefix>"
 SHORT="${INC:0:8}"
 ( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "$SHORT" || true )
@@ -142,11 +157,44 @@ PY
 hr "status (should report drift: 1 file edited)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
-hr "fsck --broken-links (one broken: the Increment hash moved when we relabeled to 'mapped')"
-( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ) || true
+hr "fsck --broken-links (none: relabeling preserved Increment, Decrement is only drifted)"
+if BROKEN_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  [[ -z "$BROKEN_AFTER_EDIT" ]] \
+    && echo "  no broken links" \
+    || { echo "  FAIL: fsck succeeded but reported a broken link"; printf '%s\n' "$BROKEN_AFTER_EDIT"; exit 1; }
+else
+  echo "  FAIL: drift alone broke a link"
+  printf '%s\n' "$BROKEN_AFTER_EDIT"
+  exit 1
+fi
 
-hr "prune widget_links (drops links whose endpoints disappeared from a covering)"
-( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
+hr "recut Decrement (the old hash-addressed endpoint now breaks)"
+RECUT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" recut "main:$DEC" )
+printf '  %s\n' "$RECUT_OUT"
+DEC_AFTER="${RECUT_OUT##* -> }"
+[[ "$DEC_AFTER" != "$DEC" ]] \
+  || { echo "  FAIL: content-changing recut preserved $DEC"; exit 1; }
+
+EXPECTED_BROKEN=$(printf 'widget_links\t%s\t%s' "$DEC" "$RS")
+if BROKEN_AFTER_RECUT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  echo "  FAIL: expected the stale Decrement hash endpoint to be broken"
+  exit 1
+else
+  [[ "$BROKEN_AFTER_RECUT" == "$EXPECTED_BROKEN" ]] \
+    && echo "  exactly one expected broken link reported" \
+    || { echo "  FAIL: unexpected broken-link report"; printf '%s\n' "$BROKEN_AFTER_RECUT"; exit 1; }
+fi
+
+hr "prune widget_links (drops the stale Decrement link)"
+PRUNE_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
+printf '%s\n' "$PRUNE_OUT"
+printf '%s\n' "$PRUNE_OUT" | grep -qF "prune: 1 link(s) dropped, 1 kept" \
+  || { echo "  FAIL: prune did not report one dropped and one kept link"; exit 1; }
+
+LINK_COUNT=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | wc -l | tr -d ' ' )
+[[ "$LINK_COUNT" == "1" ]] \
+  && echo "  one live link remains" \
+  || { echo "  FAIL: expected one live link after prune, found $LINK_COUNT"; exit 1; }
 
 hr "final fsck"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

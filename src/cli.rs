@@ -112,9 +112,15 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
-        "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a link to connection K",
-        "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
-        "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
+        "link" => {
+            "covmap link <K> <A> <B> [<note>]            add a link to connection K\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
+        }
+        "unlink" => {
+            "covmap unlink <K> <A> <B>                   remove a link\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
+        }
+        "connect" => {
+            "covmap connect <C_A> [<repo>:]<C_B> [<K>]   create an empty connection; omit <repo>: for a same-repository target"
+        }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
@@ -153,9 +159,9 @@ PORCELAIN
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
-  link <K> <h_A> <h_B> [<note>]       add a link to connection K
-  unlink <K> <h_A> <h_B>              remove a link
-  connect <C_A> <repoB:C_B> [<K>]     create empty connection
+  link <K> <A> <B> [<note>]           add a link; endpoints accept @name, hash prefix, or position
+  unlink <K> <A> <B>                  remove a link by @name, hash prefix, or position
+  connect <C_A> [<repo>:]<C_B> [<K>]  create empty connection; omit <repo>: for same-repo
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
@@ -349,6 +355,19 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
 
 // ---- status ---------------------------------------------------------------
 
+/// Render a connection's two coverings without exposing the repository's
+/// absolute path for a same-repository target.
+fn connection_route(repo: &Repo, k: &Connection) -> String {
+    if k.target_repo == repo.root.to_string_lossy() {
+        format!("{} -> {} (self-map)", k.source_covering, k.target_covering)
+    } else {
+        format!(
+            "{} -> {}/{}",
+            k.source_covering, k.target_repo, k.target_covering
+        )
+    }
+}
+
 /// "Drift" for a hand-curated covering means: a file the covering
 /// claims to partition has been edited so that the recorded segments
 /// no longer match its current bytes. We detect this without needing
@@ -441,10 +460,9 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
                 None => format!("source {src_cov}/{src_tot}, target (covering unavailable)"),
             };
             println!(
-                "  {} -> {}/{} : {} links, {} broken · coverage {}",
+                "  {}: {} : {} links, {} broken · coverage {}",
                 cn,
-                k.target_repo,
-                k.target_covering,
+                connection_route(&repo, &k),
                 k.links.len(),
                 broken,
                 cov_note
@@ -774,7 +792,6 @@ fn resolved_loc(l: &crate::resolve::ResolvedEnd) -> String {
 const CONN_LIST_THRESHOLD: usize = 30;
 
 fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
-    let self_map = k.target_repo == repo.root.to_string_lossy();
     let src = Covering::read(repo, &k.source_covering)?;
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
@@ -788,13 +805,7 @@ fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
         None => (0, 0),
     };
 
-    println!(
-        "connection {}   {} -> {}{}",
-        k.name,
-        k.source_covering,
-        k.target_covering,
-        if self_map { "   (self-map)" } else { "" }
-    );
+    println!("connection {}   {}", k.name, connection_route(repo, k));
     println!(
         "  {} links · source {}/{} segments · target {}/{} segments",
         k.links.len(),
@@ -1731,7 +1742,7 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "link <connection> <hash_A> <hash_B> [<note>]",
+            "link <connection> <A> <B> [<note>]",
         ));
     }
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
@@ -1784,7 +1795,7 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "unlink <connection> <hash_A> <hash_B>",
+            "unlink <connection> <A> <B>",
         ));
     }
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
@@ -1889,7 +1900,7 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "connect <C_A> <repoB:C_B> [<connection-name>]",
+            "connect <C_A> [<repo>:]<C_B> [<connection-name>]",
         ));
     }
     let src_cov = args[0].clone();
@@ -1935,10 +1946,7 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
         ));
     }
     k.write(&repo)?;
-    println!(
-        "Created connection '{}' from {} to {}/{}",
-        kname, k.source_covering, k.target_repo, k.target_covering
-    );
+    println!("created connection '{kname}': {}", connection_route(&repo, &k));
     Ok(0)
 }
 
@@ -2841,4 +2849,38 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
         }
     }
     Ok(if errs > 0 { 1 } else { 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(tag: &str) -> Repo {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("covmap-cli-{tag}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.join(".covmap")).unwrap();
+        Repo { root }
+    }
+
+    #[test]
+    fn connection_route_marks_same_repository_targets() {
+        let repo = temp_repo("route");
+        let mut k = Connection {
+            name: "map".to_string(),
+            source_covering: "left".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "right".to_string(),
+            links: Vec::new(),
+        };
+
+        assert_eq!(connection_route(&repo, &k), "left -> right (self-map)");
+        k.target_repo = "/tmp/elsewhere".to_string();
+        assert_eq!(connection_route(&repo, &k), "left -> /tmp/elsewhere/right");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
 }

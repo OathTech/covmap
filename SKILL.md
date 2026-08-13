@@ -43,9 +43,10 @@ binary path is `covmap/target/release/covmap`.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
-  and references the target repo by absolute path. Each endpoint is
-  either a segment name (`@name`, resilient to content edits) or a segment
-  hash (legacy / anonymous).
+  and references the target repo by absolute path, including for a
+  same-repository self-map. Each endpoint is either a segment name
+  (`@name`, resilient to content edits) or a segment hash (legacy /
+  anonymous).
 - **Segment hash identity is content-only.** Equal content has the same hash
   regardless of label. Labels and names are covering-local metadata and do
   not affect the segment hash.
@@ -120,9 +121,9 @@ are unique.
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
-| `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
-| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
-| `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
+| `covmap connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection. Omit `<repo>:` for a same-repository target (`connect main main audit`). | yes |
+| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
+| `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
@@ -133,11 +134,11 @@ are unique.
 | Command | Purpose |
 | ------- | ------- |
 | `covmap ls-segments [-l] <C>` | One hash per line; `-l` = full record `hash⇥file⇥a⇥b⇥label⇥name⇥message` (TAB, empty fields for absent name/message). |
-| `covmap ls-links [--resolve] <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
+| `covmap ls-links [--resolve] <K>` | `<endpoint_A>\t<endpoint_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
 | `covmap hash-segment <file> <a> <b> [-w]` | Hash a candidate segment (content only) without registering it (or with `-w`). |
-| `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<hash_A>\t<hash_B>`. |
+| `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<endpoint_A>\t<endpoint_B>`. |
 
 ### Address forms
 
@@ -229,7 +230,7 @@ that first.
    `<line>:<col>` instead; the bottom segment then begins at character
    `<col>` (1-indexed, inclusive) of that line.
 5. Run `covmap status` and report cardinality back.
-6. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
+6. Optionally `covmap connect <C_A> [<repo>:]<C_B> <K>` to create the
    empty connection — but do not start linking yet.
 
 ### A2. Understand how a part of the software maps (bounded drill-down)
@@ -379,7 +380,7 @@ connection endpoint — by hash or by name — keeps resolving.
 covering main: segments=7 lines=29
   drift: 1 file(s) edited, 0 file(s) missing/binary
 connections:
-  widget_links -> /tmp/impl/main : 2 links, 1 broken
+  widget_links: main -> /tmp/impl/main : 2 links, 1 broken
 ```
 
 - `drift: clean` — every covered file's bytes still match the
@@ -387,7 +388,8 @@ connections:
 - `drift: N file(s) edited` — N files have been modified since their
   segments were recorded. Use `recut` (or merge+split if boundaries
   moved) to refresh.
-- `<conn> -> <repo>/<C> : N links, M broken` — relink or `prune` if `M > 0`.
+- `<conn>: <source-C> -> <repo>/<target-C> : N links, M broken` — relink
+  or `prune` if `M > 0`. Same-repository targets display `(self-map)`.
 
 ### F. Work a covering as a worklist (iterators)
 

@@ -135,7 +135,7 @@ covmap status
 # covering main: segments=2 lines=42
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
 # connections:
-#   spec_to_impl -> .../impl/main : 1 links, 0 broken · coverage source 1/2, target 1/1
+#   spec_to_impl: main -> .../impl/main : 1 links, 0 broken · coverage source 1/2, target 1/1
 
 # 6. Refresh the changed segment in place. Because the link is by @name,
 #    it follows the new content automatically — no relinking needed.
@@ -163,9 +163,9 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
-| `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
-| `link <K> <h_A> <h_B> [<note>]` | Add a link. |
-| `unlink <K> <h_A> <h_B>` | Remove a link. |
+| `connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection; omit `<repo>:` for another covering in the same repository. |
+| `link <K> <A> <B> [<note>]` | Add a link; each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. |
+| `unlink <K> <A> <B>` | Remove a link using the same endpoint forms. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |
 | `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; pull tasks one at a time (`next`/`done`/`skip`). Bare `iter` lists all. |
 | `html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser (one connection; auto-selected when only one exists). |

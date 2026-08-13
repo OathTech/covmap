@@ -115,7 +115,8 @@ covering-qualified segment name (`<C>:@<name>`), by covering-qualified
 position (`<C>:<file>:<line>[:<col>]`, resolving to the unique segment
 containing that position — a stable, hash-free handle), or by connection
 name, with HEAD resolving the default covering and unique hash prefixes
-accepted.
+accepted. Within `link` and `unlink`, each endpoint operand shall accept a
+name, hash prefix, or position resolved against that side's covering.
 
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
@@ -140,6 +141,8 @@ Inspection output shall resolve link endpoints to their covering, label,
 and location — not leave them as bare hashes — and `status` shall report
 per-connection source/target coverage (req12), so a reader sees a mapping's
 completeness and its relations without hand-joining separate outputs.
+Connections whose source and target repositories are the same shall be
+displayed explicitly as self-maps rather than as an absolute-path target.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —

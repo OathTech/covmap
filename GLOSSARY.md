@@ -352,7 +352,9 @@ left to the user or agent. Sub-concept of **repair**.
 **reqmap / self-map** **[R][S]** — named connections in this repo's own
 `.covmap/`. `reqmap` links each requirement to the theory block that
 justifies it; a self-map connects a covering to another covering of the
-*same* repository (e.g. duplication audits, docs-to-code links).
+*same* repository (e.g. duplication audits, docs-to-code links). The ref
+still stores the target repository's canonical absolute path; `status` and
+`show` render the relationship as `<source> -> <target> (self-map)`.
 
 **Segment** **[T][R][S]** — a contiguous, labelled range of characters
 within a single file: `(file, a, a_col, b, b_col, label)`. The atom of a

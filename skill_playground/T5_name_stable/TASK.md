@@ -50,7 +50,7 @@ refresh the segment hash is needed, and the connection never breaks.
 - `auth_links` has exactly one link, referencing `@login-contract` (by
   name, not a bare hash).
 - After the recut, `covmap status` shows `drift: clean` and
-  `auth_links … 1 links, 0 broken`.
+  `auth_links: main -> <target> : 1 links, 0 broken`.
 - `covmap fsck` reports no broken links and passes.
 
 ## Grading

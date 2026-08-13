@@ -28,7 +28,7 @@ check "fsck passes (spec)"       bash -c "cd spec && \"$COVMAP_BIN\" fsck"
 # The named segments survived: still present and still linked, 0 broken.
 check "Read segment still @read-ep"     bash -c "cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@read-ep'"
 check "Delete segment still @delete-ep" bash -c "cd spec && \"$COVMAP_BIN\" ls -l main | grep -qF '@delete-ep'"
-check "api_links 2 links, 0 broken"  bash -c "cd spec && \"$COVMAP_BIN\" status | grep -qE 'api_links .*: 2 links, 0 broken'"
+check "api_links 2 links, 0 broken"  bash -c "cd spec && \"$COVMAP_BIN\" status | grep -qE 'api_links: .*: 2 links, 0 broken'"
 check "no broken links from fsck"    bash -c "[[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-links ) )\" ]]"
 
 # The remap must have re-fit boundaries: the @read-ep segment's content is

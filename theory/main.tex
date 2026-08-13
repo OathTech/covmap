@@ -739,12 +739,15 @@ image.
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
       Segments only in $C_1$, only in $C_2$, and shared.
-\item \texttt{covmap connect $C_A$ $\langle\text{repo}_B\rangle$:$C_B$ [$K$]}\\
-      Create an empty connection between two coverings.
-\item \texttt{covmap link $K$ $h_A$ $h_B$ [$\nu$]}\\
-      \texttt{covmap unlink $K$ $h_A$ $h_B$}\\
-      Add or remove a single link, optionally annotated with note
-      $\nu$.
+\item \texttt{covmap connect $C_A$ [repo$_B$:]$C_B$ [$K$]}\\
+      Create an empty connection between two coverings. Omitting repo$_B$
+      selects another covering in the source repository, including $C_A$
+      itself; inspection marks this case as a self-map.
+\item \texttt{covmap link $K$ $A$ $B$ [$\nu$]}\\
+      \texttt{covmap unlink $K$ $A$ $B$}\\
+      Add or remove a single link, optionally annotated with note $\nu$.
+      Each endpoint operand $A$ or $B$ may be a segment name, hash prefix,
+      or position resolved against that side's covering.
 \item \texttt{covmap prune $K$}\\
       Drop every link of $K$ whose endpoint is no longer in its
       covering.

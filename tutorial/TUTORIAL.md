@@ -88,7 +88,7 @@ formal model but has no CLI surface yet. Each step is annotated with the
 requirements it exercises. For the agent-facing reference, see
 [`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
 [`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T8).
+in the scenarios from tasks T1–T9).
 
 ---
 

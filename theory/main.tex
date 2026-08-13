@@ -606,13 +606,17 @@ A repository under \texttt{covmap} acquires a \texttt{.covmap/}
 directory:
 \begin{verbatim}
 .covmap/
+  version             on-disk format version (currently 2)
   HEAD                default covering name
   ignore              optional gitignore-lite patterns
-  objects/<hh>/<rest> segments, addressed by hash
+  objects/<hh>/<rest> raw content, addressed by truncated SHA-256(content)
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
   iterators/<name>    one file per iterator (frozen worklist + cursor)
 \end{verbatim}
+The format-2 object body is exactly the segment content. Labels, names,
+and messages live in covering refs and are not stored in or hashed into
+objects.
 The \texttt{iterators/} directory is purely additive: an older
 \texttt{covmap} simply never reads it, so introducing it needs no
 format-version change, mirroring how the character column and segment name

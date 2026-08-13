@@ -134,7 +134,7 @@ segment now carries); a hash endpoint resolves iff that content still
 appears in the covering.
 
 **Format version** **[R][S]** — the string in `.covmap/version`
-(currently `1`) recording the on-disk format. covmap refuses to operate
+(currently `2`) recording the on-disk format. covmap refuses to operate
 on a repository whose version disagrees.
 
 **fsck** **[R][S]** — integrity verification: checks that every covering
@@ -221,6 +221,12 @@ connection, optionally annotated with a note; added by `link`, removed by
 `unlink`. A connection is a set of links (the theory: the elements of the
 relation `κ ⊆ C_A × C_B`).
 
+**Migrate** **[R][S]** — the one-time `covmap migrate` upgrade from
+on-disk format 1 to format 2. It re-keys stored segments by raw content,
+rewrites affected covering hashes, connection endpoints, and frozen iterator
+tasks, then records format 2. Running it on an already-format-2 repository is
+a no-op.
+
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
 state, healable only by relinking or dropping (`covmap prune` drops
@@ -259,8 +265,9 @@ without is **anonymous**.
 
 **Object store** **[T][R][S]** — the content-addressed store at
 `.covmap/objects/<hh>/<rest>`, mapping each **segment hash** to
-`label\0content`. Segments are shared across coverings automatically by
-that address.
+the segment's raw content. Labels, names, and messages live in covering
+refs and are not stored in the object. Segments are shared across
+coverings automatically by that address.
 
 **Partition** **[T][R]** — the decomposition a covering imposes on each
 covered file: disjoint, complete, contiguous, file-confined segments.

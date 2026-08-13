@@ -46,10 +46,9 @@ binary path is `covmap/target/release/covmap`.
   and references the target repo by absolute path. Each endpoint is
   either a segment name (`@name`, resilient to content edits) or a segment
   hash (legacy / anonymous).
-- **Sharing** is automatic: any two coverings (in any repo) that
-  produce a segment with the same content+label end up referencing
-  the same object. Names are per-covering segment metadata and are not
-  part of the shared segment hash.
+- **Segment hash identity is content-only.** Equal content has the same hash
+  regardless of label. Labels and names are covering-local metadata and do
+  not affect the segment hash.
 - **There are no segmentation rules.** `covmap cover` walks the repo
   and adds a single whole-file segment labelled `unknown` for every
   readable UTF-8 file it has not yet covered. The user / agent then

@@ -154,8 +154,14 @@ assert "a character-level segment exists on errors.md line 3" \
 #############################################################################
 hr "6. label a segment  (REQ4)"
 #############################################################################
-# Size is the segment covering queue.md line 14.
+# Size is the segment covering queue.md line 14. A label is ref-local
+# metadata, so changing it must preserve the content hash.
+SIZE_BEFORE=$( cd "$WORK/spec" && "$COVMAP" rev-parse main:queue.md:14 )
 ( cd "$WORK/spec" && run label main:queue.md:14 reviewed )
+SIZE_AFTER=$( cd "$WORK/spec" && "$COVMAP" rev-parse main:queue.md:14 )
+
+assert "relabeling preserves the segment hash" \
+  test "$SIZE_BEFORE" = "$SIZE_AFTER"
 
 #############################################################################
 hr "7. name the segments we intend to map  (REQ3, REQ8)"

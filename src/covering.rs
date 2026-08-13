@@ -1185,6 +1185,25 @@ mod tests {
     }
 
     #[test]
+    fn relabel_preserves_hash_and_object() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "content\n", 1)],
+        };
+        let old = c.entries[0].hash.clone();
+        let object = segment::object_path(&repo.objects_dir(), &old);
+
+        let new = relabel(&repo, &mut c, &old, "reviewed").unwrap();
+
+        assert_eq!(new, old);
+        assert_eq!(c.entries[0].hash, old);
+        assert_eq!(c.entries[0].label, "reviewed");
+        assert_eq!(std::fs::read_to_string(object).unwrap(), "content\n");
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
     fn split_mid_line_by_column() {
         let repo = tmp_repo();
         let mut c = Covering {
@@ -1214,8 +1233,8 @@ mod tests {
         let (top, bot) = split(&repo, &mut c, &old, 1, Some(7), "t", "b").unwrap();
         let merged = merge(&repo, &mut c, &top, &bot, "unknown").unwrap();
         assert_eq!(c.entries.len(), 1);
-        // Merging the two halves with the original label restores the
-        // original content+label hash.
+        // Merging the two halves restores the original content hash,
+        // regardless of the labels used while they were split.
         assert_eq!(merged, old);
         assert_eq!(c.entries[0].range(), "1..1");
         std::fs::remove_dir_all(&repo.root).ok();

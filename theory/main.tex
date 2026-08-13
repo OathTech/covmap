@@ -397,9 +397,10 @@ endpoint it means no segment carries that name any longer.
 \end{definition}
 
 The two identity axes give two breakage regimes. A link recorded by
-hash breaks as soon as its endpoint is rewritten (\texttt{recut},
-\texttt{label}, \texttt{split}, \texttt{merge}) or removed — i.e. on
-any content edit to the endpoint. A link recorded by name breaks
+hash breaks as soon as its endpoint's content identity is rewritten
+(\texttt{recut}, \texttt{split}, \texttt{merge}) or removed. Relabelling
+does not break it because the label is not part of the hash. A link
+recorded by name breaks
 \emph{only} when the named segment is deleted; an edit that changes the
 segment's bytes (followed by \texttt{recut}) leaves the name, hence
 the link, intact. Naming the segments one intends to map therefore
@@ -688,10 +689,10 @@ There is no segmentation rule. The interface gives the user one
       boundary drift automatically for localized edits, so connections
       by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
 \item \texttt{covmap label $C$:$h$ $\lambda$}\\
-      Replace the label of one segment. Because labels are part of
-      identity, this rewrites the entry in $C$; old hashes remain in
-      the object store so any connection that referenced them keeps
-      resolving. The segment's name, if any, is preserved.
+      Replace the label of one segment in the covering ref. Because labels
+      are not part of identity, the segment hash and object store are
+      unchanged, so connections referencing the segment by hash or name
+      keep resolving. The segment's name and message, if any, are preserved.
 \item \texttt{covmap name $C$:$h$ $\nu$} (or \texttt{@$\nu'$}; \texttt{-} to clear)\\
       Set, rename, or clear the name of one segment
       (Definition~\ref{def:segment-name}). Names are unique within $C$ and are

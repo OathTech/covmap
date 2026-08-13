@@ -305,7 +305,7 @@ straight by *what the text is about*:
 
 | Channel | About | Hashed? |
 | ------- | ----- | ------- |
-| **label** | a coarse status category of a segment | yes |
+| **label** | a coarse status category of a segment | no |
 | **name** | a stable slug identity of a segment | no |
 | **message** | why *this segment* (rationale/provenance) | no |
 | link note | why *this mapping* (A↔B) | n/a |

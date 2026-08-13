@@ -377,6 +377,3 @@ artifact order:
   state.
 - **Self-map:** remap every amended requirement and run `covmap status` plus
   `covmap fsck`.
-
-Before this proposal advances beyond Draft, satisfy the
-[baseline prerequisite](README.md#baseline-prerequisite-for-current-drafts).

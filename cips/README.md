@@ -45,7 +45,6 @@ number is an identifier, not a priority.
 | [0007](0007-connection-lifecycle-workflows.md) | connection-lifecycle-workflows | Draft | Complete connection deletion, formalize self-map syntax, align endpoint help, and improve iterator help. |
 | [0009](0009-atomic-multi-cut.md) | atomic-multi-cut | Draft | Keep complete coverings and generalize `split` to label-free atomic cut-set insertion with one ref write. |
 
-
 ## Writing a cip
 
 Aim for clear and concise; a cip is a spec, not an essay. A good one covers:

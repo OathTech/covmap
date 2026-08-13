@@ -170,7 +170,4 @@ reused rather than duplicated.
 - **Self-map:** remap amended requirements and run `covmap status` plus
   `covmap fsck`.
 
-Before this proposal advances beyond Draft, satisfy the
-[baseline prerequisite](README.md#baseline-prerequisite-for-current-drafts).
-
 No format-version bump is required.

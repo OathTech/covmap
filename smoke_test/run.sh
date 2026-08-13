@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
 #   init -> cover -> split -> merge -> connect -> link -> fsck
-#   -> label -> drift after edit -> prune
+#   -> label -> drift after edit -> prune -> rename repair -> disconnect
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
 # Set KEEP=1 to preserve the workdir for inspection.
@@ -195,6 +195,102 @@ LINK_COUNT=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | wc -l | t
 [[ "$LINK_COUNT" == "1" ]] \
   && echo "  one live link remains" \
   || { echo "  FAIL: expected one live link after prune, found $LINK_COUNT"; exit 1; }
+
+hr "same-repository connection lifecycle and rename repair"
+ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'errors.md' | cut -f1 )
+IDENTITY_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:22 )
+RESET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:18 )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$ERROR_HASH" audit-source )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$IDENTITY_HASH" audit-target )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$RESET_HASH" audit-target-two )
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main main self_audit )
+
+STATUS_SELF=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+SHOW_SELF=$( cd "$WORK/spec" && "$COVMAP_BIN" show self_audit )
+printf '%s\n' "$STATUS_SELF" | grep -qF "self_audit: main -> main (self-map)" \
+  || { echo "  FAIL: status did not identify the same-repository connection"; exit 1; }
+printf '%s\n' "$SHOW_SELF" | grep -qF "main -> main (self-map)" \
+  || { echo "  FAIL: show did not identify the same-repository connection"; exit 1; }
+
+REPAIR_NOTE='literal $HOME, apostrophe '"'"', and `touch SHOULD_NOT_EXIST`'
+SECOND_REPAIR_NOTE='fan-out second link'
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two "$SECOND_REPAIR_NOTE" )
+
+run_repair_block() {
+  local output="$1"
+  local script
+  [[ $(printf '%s\n' "$output" | grep -c '^--- covmap repair begin ---$') == "1" \
+    && $(printf '%s\n' "$output" | grep -c '^--- covmap repair end ---$') == "1" ]] \
+    || { echo "  FAIL: rename did not emit exactly one repair block"; printf '%s\n' "$output"; exit 1; }
+  script=$(printf '%s\n' "$output" \
+    | sed -n '/^--- covmap repair begin ---$/,/^--- covmap repair end ---$/p' \
+    | sed '1d;$d')
+  [[ -n "$script" ]] \
+    || { echo "  FAIL: rename emitted no repair block"; printf '%s\n' "$output"; exit 1; }
+  ( cd "$WORK/spec" && PATH="$(dirname "$COVMAP_BIN"):$PATH" sh -eu -c "$script" )
+}
+
+SOURCE_RENAME=$( cd "$WORK/spec" && "$COVMAP_BIN" name main:@audit-source audit-source-next )
+printf '%s\n' "$SOURCE_RENAME"
+printf '%s\n' "$SOURCE_RENAME" | grep -qF "stored source endpoint '@audit-source' is now broken" \
+  || { echo "  FAIL: source-side rename impact was not reported"; exit 1; }
+run_repair_block "$SOURCE_RENAME"
+
+TARGET_RENAME=$( cd "$WORK/spec" && "$COVMAP_BIN" name main:@audit-target audit-target-next )
+printf '%s\n' "$TARGET_RENAME"
+printf '%s\n' "$TARGET_RENAME" | grep -qF "stored target endpoint '@audit-target' is now broken" \
+  || { echo "  FAIL: target-side rename impact was not reported"; exit 1; }
+run_repair_block "$TARGET_RENAME"
+
+[[ ! -e "$WORK/spec/SHOULD_NOT_EXIST" ]] \
+  || { echo "  FAIL: repair note syntax was executed by the shell"; exit 1; }
+ACTUAL_REPAIR_NOTE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit \
+  | grep $'^@audit-source-next\\t@audit-target-next\\t' | cut -f3- )
+[[ "$ACTUAL_REPAIR_NOTE" == "$REPAIR_NOTE" ]] \
+  || { echo "  FAIL: repair changed the link note"; exit 1; }
+ACTUAL_SECOND_NOTE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit \
+  | grep $'^@audit-source-next\\t@audit-target-two\\t' | cut -f3- )
+[[ "$ACTUAL_SECOND_NOTE" == "$SECOND_REPAIR_NOTE" ]] \
+  || { echo "  FAIL: fan-out repair changed the second link note"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
+
+hr "unlink accepts exact @name endpoints"
+( cd "$WORK/spec" && "$COVMAP_BIN" unlink self_audit @audit-source-next @audit-target-next )
+[[ $( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit | wc -l | tr -d ' ' ) == "1" ]] \
+  || { echo "  FAIL: name-addressed unlink did not remove the link"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next "$REPAIR_NOTE" )
+
+hr "disconnect removes only the connection ref and warns about the default report"
+( cd "$WORK/spec" && "$COVMAP_BIN" html --connection self_audit )
+OBJECTS_BEFORE_DISCONNECT=$(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ')
+COVERINGS_BEFORE_DISCONNECT=$(find "$WORK/spec/.covmap/coverings" -type f | wc -l | tr -d ' ')
+DISCONNECT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" disconnect self_audit 2>&1 )
+printf '%s\n' "$DISCONNECT_OUT"
+printf '%s\n' "$DISCONNECT_OUT" | grep -qF "removed 2 link(s) from main -> main (self-map)" \
+  || { echo "  FAIL: disconnect summary omitted link count or coverings"; exit 1; }
+printf '%s\n' "$DISCONNECT_OUT" | grep -qF ".covmap/report.html may be stale" \
+  || { echo "  FAIL: disconnect did not warn about the default report"; exit 1; }
+[[ ! -e "$WORK/spec/.covmap/connections/self_audit" ]] \
+  || { echo "  FAIL: disconnect left the connection ref behind"; exit 1; }
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "$OBJECTS_BEFORE_DISCONNECT" ]] \
+  || { echo "  FAIL: disconnect changed the object store"; exit 1; }
+[[ $(find "$WORK/spec/.covmap/coverings" -type f | wc -l | tr -d ' ') == "$COVERINGS_BEFORE_DISCONNECT" ]] \
+  || { echo "  FAIL: disconnect changed a covering"; exit 1; }
+if ( cd "$WORK/spec" && "$COVMAP_BIN" show self_audit >/dev/null 2>&1 ); then
+  echo "  FAIL: disconnected connection is still showable"
+  exit 1
+fi
+
+hr "disconnect refuses to delete a malformed connection ref"
+printf '# source_covering=main\nmalformed-link\n' > "$WORK/spec/.covmap/connections/malformed"
+if ( cd "$WORK/spec" && "$COVMAP_BIN" disconnect malformed >/dev/null 2>&1 ); then
+  echo "  FAIL: malformed connection was silently deleted"
+  exit 1
+fi
+[[ -e "$WORK/spec/.covmap/connections/malformed" ]] \
+  || { echo "  FAIL: malformed connection ref was deleted"; exit 1; }
+rm "$WORK/spec/.covmap/connections/malformed"
 
 hr "final fsck"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

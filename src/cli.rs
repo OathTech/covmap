@@ -1289,6 +1289,257 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
 
 // ---- name -----------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NameImpactSide {
+    Source,
+    Target,
+    Both,
+}
+
+impl NameImpactSide {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Target => "target",
+            Self::Both => "source and target",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NameImpact {
+    connection: String,
+    side: NameImpactSide,
+    old_a: String,
+    old_b: String,
+    note: String,
+    repair: NameRepair,
+}
+
+#[derive(Clone, Debug)]
+enum NameRepair {
+    Ready { a: String, b: String },
+    BrokenFar,
+    Collision { a: String, b: String },
+    NoReplacement,
+}
+
+/// Find exact `@old` endpoints in connections stored in this repository.
+/// A connection stored elsewhere and pointing into this covering is
+/// intentionally undiscoverable from local state.
+fn discover_name_impacts(
+    repo: &Repo,
+    covering: &Covering,
+    old_name: &str,
+    new_name: Option<&str>,
+) -> io::Result<Vec<NameImpact>> {
+    let old_endpoint = format!("@{old_name}");
+    let new_endpoint = new_name.map(|n| format!("@{n}"));
+    let repo_root = repo.root.to_string_lossy();
+    let mut impacts = Vec::new();
+
+    for connection_name in Connection::list(repo)? {
+        let k = Connection::read(repo, &connection_name)?;
+        let source_is_covering = k.source_covering == covering.name;
+        let target_is_covering = k.target_repo == repo_root && k.target_covering == covering.name;
+
+        let affected: Vec<_> = k
+            .links
+            .iter()
+            .filter_map(|link| {
+                let source_affected = source_is_covering && link.a == old_endpoint;
+                let target_affected = target_is_covering && link.b == old_endpoint;
+                (source_affected || target_affected).then_some((
+                    link,
+                    source_affected,
+                    target_affected,
+                ))
+            })
+            .collect();
+        if affected.is_empty() {
+            continue;
+        }
+
+        // Load each covering at most once for this connection. The covering
+        // being renamed is already available in its pre-rename state.
+        let source_covering = if affected.iter().any(|(_, source, _)| !source) {
+            if source_is_covering {
+                Some(covering.clone())
+            } else {
+                Covering::read(repo, &k.source_covering).ok()
+            }
+        } else {
+            None
+        };
+        let target_covering = if affected.iter().any(|(_, _, target)| !target) {
+            if target_is_covering {
+                Some(covering.clone())
+            } else {
+                let target_repo = Repo {
+                    root: PathBuf::from(&k.target_repo),
+                };
+                Covering::read(&target_repo, &k.target_covering).ok()
+            }
+        } else {
+            None
+        };
+
+        for (link, source_affected, target_affected) in affected {
+            let side = if source_affected {
+                if target_affected {
+                    NameImpactSide::Both
+                } else {
+                    NameImpactSide::Source
+                }
+            } else {
+                NameImpactSide::Target
+            };
+            let repair = match &new_endpoint {
+                None => NameRepair::NoReplacement,
+                Some(endpoint) => {
+                    let a = if source_affected {
+                        endpoint.clone()
+                    } else {
+                        link.a.clone()
+                    };
+                    let b = if target_affected {
+                        endpoint.clone()
+                    } else {
+                        link.b.clone()
+                    };
+                    let source_resolves = source_affected
+                        || source_covering
+                            .as_ref()
+                            .is_some_and(|c| covering::endpoint_resolves(c, &link.a));
+                    let target_resolves = target_affected
+                        || target_covering
+                            .as_ref()
+                            .is_some_and(|c| covering::endpoint_resolves(c, &link.b));
+
+                    if !source_resolves || !target_resolves {
+                        NameRepair::BrokenFar
+                    } else if k
+                        .links
+                        .iter()
+                        .any(|existing| existing.a == a && existing.b == b)
+                    {
+                        NameRepair::Collision { a, b }
+                    } else {
+                        NameRepair::Ready { a, b }
+                    }
+                }
+            };
+
+            impacts.push(NameImpact {
+                connection: k.name.clone(),
+                side,
+                old_a: link.a.clone(),
+                old_b: link.b.clone(),
+                note: link.note.clone(),
+                repair,
+            });
+        }
+    }
+    Ok(impacts)
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn link_command(connection: &str, a: &str, b: &str, note: &str) -> String {
+    let mut command = format!(
+        "covmap link {} {} {}",
+        posix_shell_quote(connection),
+        posix_shell_quote(a),
+        posix_shell_quote(b)
+    );
+    if !note.is_empty() {
+        command.push(' ');
+        command.push_str(&posix_shell_quote(note));
+    }
+    command
+}
+
+fn unlink_command(connection: &str, a: &str, b: &str) -> String {
+    format!(
+        "covmap unlink {} {} {}",
+        posix_shell_quote(connection),
+        posix_shell_quote(a),
+        posix_shell_quote(b)
+    )
+}
+
+fn render_name_impacts(impacts: &[NameImpact], old_name: &str) -> String {
+    if impacts.is_empty() {
+        return format!(
+            "no connection refs stored in this repository use exact endpoint '@{old_name}'"
+        );
+    }
+    let mut lines = Vec::new();
+    let mut link_commands = Vec::new();
+    let mut unlink_commands = Vec::new();
+    let mut reported_ready = Vec::new();
+
+    for impact in impacts {
+        let ready_key = (impact.connection.as_str(), impact.side);
+        if !matches!(impact.repair, NameRepair::Ready { .. })
+            || !reported_ready.contains(&ready_key)
+        {
+            lines.push(format!(
+                "connection '{}': stored {} endpoint '@{}' is now broken",
+                impact.connection,
+                impact.side.description(),
+                old_name
+            ));
+        }
+        match &impact.repair {
+            NameRepair::Ready { a, b } => {
+                reported_ready.push(ready_key);
+                link_commands.push(link_command(&impact.connection, a, b, &impact.note));
+                unlink_commands.push(unlink_command(
+                    &impact.connection,
+                    &impact.old_a,
+                    &impact.old_b,
+                ));
+            }
+            NameRepair::BrokenFar => {
+                lines.push(
+                    "  no repair block: the unchanged far endpoint is already broken".to_string(),
+                );
+            }
+            NameRepair::Collision { a, b } => {
+                lines.push(format!(
+                    "  no repair block: replacement pair {} -> {} already exists",
+                    a, b
+                ));
+            }
+            NameRepair::NoReplacement => {
+                lines.push(format!(
+                    "  remove the stale link with: {}",
+                    unlink_command(&impact.connection, &impact.old_a, &impact.old_b)
+                ));
+            }
+        }
+    }
+
+    if !link_commands.is_empty() {
+        lines.push("--- covmap repair begin ---".to_string());
+        lines.extend(link_commands);
+        lines.extend(unlink_commands);
+        lines.push("--- covmap repair end ---".to_string());
+    }
+    lines.push(
+        "note: inbound connections stored in another repository cannot be discovered here"
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn print_name_impacts(impacts: &[NameImpact], old_name: &str) {
+    println!("{}", render_name_impacts(impacts, old_name));
+}
+
 /// `name <C>:<h|@name> <name|->` — set, rename, or clear a segment's
 /// name. The address may itself be a hash prefix or an existing
 /// `@name`. A `<name>` of `-` clears it (segment becomes anonymous).
@@ -1306,18 +1557,27 @@ fn cmd_name(args: &[String]) -> io::Result<u8> {
     let mut c = resolve_covering(&repo, &covname)?;
     let idx = covering::resolve_segment(&c, &addr)?;
     let old = c.entries[idx].name.clone();
+    let before = c.clone();
     let new_name = if tag == "-" { None } else { Some(tag) };
     covering::set_name(&mut c, idx, new_name)?;
+    let impacts = match old.as_deref() {
+        Some(old_name) if new_name != Some(old_name) => {
+            discover_name_impacts(&repo, &before, old_name, new_name)?
+        }
+        _ => Vec::new(),
+    };
     c.write(&repo)?;
     let h = covering::short_hash(&c.entries[idx].hash);
-    match (old, new_name) {
+    match (old.as_deref(), new_name) {
         (None, Some(n)) => println!("named {h} -> @{n}"),
         (Some(o), Some(n)) if o != n => {
-            println!("renamed @{o} -> @{n}  (re-point connections that used '@{o}')")
+            println!("renamed @{o} -> @{n} in covering '{}'", c.name);
+            print_name_impacts(&impacts, o);
         }
         (Some(o), Some(_)) => println!("@{o} (unchanged)"),
         (Some(o), None) => {
-            println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)")
+            println!("cleared @{o} from {h} in covering '{}'", c.name);
+            print_name_impacts(&impacts, o);
         }
         (None, None) => println!("{h} (already anonymous)"),
     }
@@ -2885,6 +3145,7 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_repo(tag: &str) -> Repo {
@@ -2896,6 +3157,20 @@ mod tests {
             std::env::temp_dir().join(format!("covmap-cli-{tag}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(root.join(".covmap")).unwrap();
         Repo { root }
+    }
+
+    fn named_entry(hash: &str, line: usize, name: &str) -> CoveringEntry {
+        CoveringEntry {
+            hash: hash.to_string(),
+            file: "file.txt".to_string(),
+            a: line,
+            a_col: None,
+            b: line,
+            b_col: None,
+            label: "mapped".to_string(),
+            name: Some(name.to_string()),
+            message: None,
+        }
     }
 
     #[test]
@@ -2913,5 +3188,174 @@ mod tests {
         k.target_repo = "/tmp/elsewhere".to_string();
         assert_eq!(connection_route(&repo, &k), "left -> /tmp/elsewhere/right");
         fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn shell_quote_round_trips_without_evaluating_note_syntax() {
+        let value = "spaces ' \"$HOME\" `printf executed` $(printf executed) ; * ? !";
+        let script = format!("printf '%s' {}", posix_shell_quote(value));
+        let output = Command::new("sh").args(["-c", &script]).output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
+    }
+
+    #[test]
+    fn rename_discovery_handles_source_target_and_both_sides() {
+        let repo = temp_repo("rename-sides");
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "old"),
+                named_entry("2222222222222222", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".to_string(),
+            links: vec![
+                Link {
+                    a: "@old".to_string(),
+                    b: "@other".to_string(),
+                    note: "source".to_string(),
+                },
+                Link {
+                    a: "@other".to_string(),
+                    b: "@old".to_string(),
+                    note: "target".to_string(),
+                },
+                Link {
+                    a: "@old".to_string(),
+                    b: "@old".to_string(),
+                    note: "both".to_string(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let impacts = discover_name_impacts(&repo, &covering, "old", Some("new")).unwrap();
+
+        assert_eq!(impacts.len(), 3);
+        assert_eq!(impacts[0].side, NameImpactSide::Source);
+        assert_eq!(impacts[1].side, NameImpactSide::Target);
+        assert_eq!(impacts[2].side, NameImpactSide::Both);
+        assert!(matches!(
+            &impacts[2].repair,
+            NameRepair::Ready { a, b } if a == "@new" && b == "@new"
+        ));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn rename_discovery_blocks_collisions_and_broken_far_endpoints() {
+        let repo = temp_repo("rename-conflicts");
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "old"),
+                named_entry("2222222222222222", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".to_string(),
+            links: vec![
+                Link {
+                    a: "@old".to_string(),
+                    b: "@other".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@new".to_string(),
+                    b: "@other".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@old".to_string(),
+                    b: "@missing".to_string(),
+                    note: String::new(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let impacts = discover_name_impacts(&repo, &covering, "old", Some("new")).unwrap();
+
+        assert_eq!(impacts.len(), 2);
+        assert!(matches!(impacts[0].repair, NameRepair::Collision { .. }));
+        assert!(matches!(impacts[1].repair, NameRepair::BrokenFar));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn rename_rendering_groups_fanout_into_one_executable_block() {
+        let no_impacts = render_name_impacts(&[], "unused");
+        assert!(!no_impacts.contains("inbound connections"));
+
+        let impacts = vec![
+            NameImpact {
+                connection: "map".to_string(),
+                side: NameImpactSide::Source,
+                old_a: "@old".to_string(),
+                old_b: "@one".to_string(),
+                note: "first".to_string(),
+                repair: NameRepair::Ready {
+                    a: "@new".to_string(),
+                    b: "@one".to_string(),
+                },
+            },
+            NameImpact {
+                connection: "map".to_string(),
+                side: NameImpactSide::Source,
+                old_a: "@old".to_string(),
+                old_b: "@two".to_string(),
+                note: "second".to_string(),
+                repair: NameRepair::Ready {
+                    a: "@new".to_string(),
+                    b: "@two".to_string(),
+                },
+            },
+        ];
+
+        let rendered = render_name_impacts(&impacts, "old");
+        assert_eq!(rendered.matches("--- covmap repair begin ---").count(), 1);
+        assert_eq!(rendered.matches("--- covmap repair end ---").count(), 1);
+        assert_eq!(
+            rendered
+                .matches("stored source endpoint '@old' is now broken")
+                .count(),
+            1
+        );
+
+        let script = rendered
+            .lines()
+            .skip_while(|line| *line != "--- covmap repair begin ---")
+            .skip(1)
+            .take_while(|line| *line != "--- covmap repair end ---")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let commands: Vec<_> = script.lines().collect();
+        assert_eq!(commands.len(), 4);
+        assert!(commands[..2]
+            .iter()
+            .all(|line| line.starts_with("covmap link ")));
+        assert!(commands[2..]
+            .iter()
+            .all(|line| line.starts_with("covmap unlink ")));
+
+        let shell = format!("covmap() {{ :; }}\n{script}");
+        let status = Command::new("sh")
+            .args(["-eu", "-c", &shell])
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 }

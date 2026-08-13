@@ -115,7 +115,7 @@ are unique.
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
-| `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. Name the segments you intend to map. | no |
+| `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. A rename does not rewrite connections: read its affected-endpoint diagnostics and execute an emitted repair block when present. | **yes when renaming/clearing** |
 | `covmap annotate <C>:<addr> [-m <msg>]...` | Set/replace a segment's free-form **message** (why it was cut / what it is / why it is or isn't mapped). Repeatable `-m` = paragraphs; `-` clears; no `-m` prints it. Not hashed — editing it never causes drift. | yes (read) |
 | `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name; the bottom is anonymous. | yes |
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
@@ -302,6 +302,30 @@ Steps:
 `@name` and survives later content edits, so drift repair collapses to a
 single `recut`. This is the difference between task T3 (hash link, must
 relink) and T5 (named link, recut only).
+
+### B2. Rename or clear a linked segment name
+
+`name` changes one covering only. If a connection ref stored in the current
+repository contains exact endpoint `@old`, renaming it makes that stored
+endpoint broken; covmap lists the affected connection and side. It never
+rewrites the connection behind your back.
+
+For a safe rename, execute the commands between the single repair block's
+delimiters exactly as printed. For fan-out, the block adds every replacement
+before removing any stale pair, preserving each link note:
+
+```text
+--- covmap repair begin ---
+covmap link 'K' '@new' '@target' 'existing note'
+covmap unlink 'K' '@old' '@target'
+--- covmap repair end ---
+```
+
+Do not invent a repair when no block is emitted: the far endpoint may already
+be broken or the replacement pair may exist. Clearing a name has no generic
+replacement, so use the printed `unlink` command if the stale link should be
+removed. Connections stored in another repository and pointing inbound cannot
+be discovered locally; inspect those source repositories separately.
 
 ### E. Absorb boundary drift with diff-remap
 

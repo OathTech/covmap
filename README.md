@@ -159,7 +159,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
-| `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. |
+| `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. A rename lists exact local `@old` endpoints and emits a safe link-then-unlink repair when possible; it never rewrites connections implicitly. |
 | `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
 | `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
@@ -256,7 +256,8 @@ covmap/
 ```
 
 Goes through init → cover → split → merge → connect → link → fsck →
-label → drift → prune on a small fixture in a temporary directory.
+label → drift → prune → rename repair → disconnect on a small fixture
+in a temporary directory.
 
 ## For agents
 

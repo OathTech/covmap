@@ -45,6 +45,19 @@ assert() { # <description> <command...>
   else printf '  \033[31mFAIL\033[0m  %s\n' "$msg"; exit 1; fi
 }
 
+run_repair_block() { # <cwd> <captured name output>
+  local cwd="$1" output="$2" script
+  script=$(printf '%s\n' "$output" \
+    | sed -n '/^--- covmap repair begin ---$/,/^--- covmap repair end ---$/p' \
+    | sed '1d;$d')
+  if [[ -z "$script" ]]; then
+    printf '  \033[31mFAIL\033[0m  rename emitted no repair block\n'
+    exit 1
+  fi
+  printf '%s\n' "$script" | sed 's/^/$ /'
+  ( cd "$cwd" && PATH="$(dirname "$COVMAP"):$PATH" sh -eu -c "$script" )
+}
+
 # ---- 0. fresh workspace ----------------------------------------------------
 # The spec/impl source files are kept as fixtures under tutorial/files/,
 # so the tutorial never edits a file "in place" with an opaque sed/perl
@@ -206,6 +219,26 @@ IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
 assert "connection has 3 links, all by @name" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-links queue_links | grep -c '^@' ) ) -eq 3 ]]"
 
+echo "  same-repository shorthand and lifecycle:"
+( cd "$WORK/spec" && run connect main main local_preview )
+( cd "$WORK/spec" && run show local_preview )
+assert "status identifies the temporary connection as a self-map" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status ) | grep -qF 'local_preview: main -> main (self-map)'"
+( cd "$WORK/spec" && run disconnect local_preview )
+assert "disconnect removed only the temporary connection ref" \
+  test ! -e "$WORK/spec/.covmap/connections/local_preview"
+
+echo "  covering-local rename and explicit connection repair:"
+printf '\033[2m$ covmap name main:@queuefull-meaning queuefull-clause\033[0m\n'
+RENAME_OUT=$( cd "$WORK/spec" && "$COVMAP" name main:@queuefull-meaning queuefull-clause )
+printf '%s\n' "$RENAME_OUT"
+run_repair_block "$WORK/spec" "$RENAME_OUT"
+
+assert "rename repair preserved the link and its note" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' ls-links queue_links ) | grep -qF \$'@queuefull-clause\\t$IMPL\\tQueueFull guard'"
+assert "rename repair restored connection integrity" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
+
 #############################################################################
 hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 #############################################################################
@@ -343,7 +376,7 @@ DEQ=$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@dequeue-op"{p
 assert "after recut: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
 assert "queue_links still 3 links, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links: .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "13. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
@@ -361,7 +394,7 @@ diff "$FILES/queue.reworded.md" "$FILES/queue.inserted.md" | sed 's/^/    /' || 
 assert "after remap: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
 assert "after remap: still 3 links, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links: .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "14. T7-style drift: move a section, fingerprint proposes its new home"
@@ -388,7 +421,7 @@ hr "15. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate prune on a deliberately broken link: clear a segment's name,
 # which deletes that segment identity, breaking its link. Then prune drops it.
-( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-meaning"{print $1}' )" - )
+( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-clause"{print $1}' )" - )
 ( cd "$WORK/spec" && run fsck --broken-links || true )
 ( cd "$WORK/spec" && run prune queue_links )
 ( cd "$WORK/spec" && run status main )

@@ -1,6 +1,6 @@
 # Connection lifecycle and workflows
 
-Stage: **Draft**
+Stage: **Accepted**
 
 ## Relationship to CIP 0009
 
@@ -118,12 +118,13 @@ is exactly `@old`. After the covering write:
 
 1. list each affected connection and side;
 2. state that the stored endpoint is now broken;
-3. state that inbound connections stored in another repository cannot be
-   discovered; and
+3. when at least one affected local endpoint exists, state that inbound
+   connections stored in another repository cannot be discovered; and
 4. when safe, print the exact existing-command composition that repairs it.
 
 For a rename whose far endpoint still resolves and whose replacement pair does
-not already exist, print a delimited executable shell block:
+not already exist, print one delimited executable shell block for the whole
+rename:
 
 ```text
 --- covmap repair begin ---
@@ -133,9 +134,10 @@ covmap unlink 'K' '@old' '@target'
 ```
 
 Use symmetric operand order for a target-side rename. Add the replacement
-before removing the stale pair so a failed `link` leaves the old record intact.
-Preserve the existing valid single-line note byte-for-byte, omit the note
-argument when empty, and POSIX-shell-quote every dynamic argument.
+before removing the stale pair: emit every safe `link` command before any
+`unlink`, so a failed `link` leaves all old records intact. Preserve each
+existing valid single-line note byte-for-byte, omit the note argument when
+empty, and POSIX-shell-quote every dynamic argument.
 
 If the far endpoint is broken or the replacement pair collides, report the
 conflict without repair delimiters. Clearing a name has no generic replacement
@@ -193,6 +195,8 @@ peek --all    list the complete frozen worklist with state and notes
   stale endpoints, and never says it re-pointed a connection.
 - Executing emitted repair blocks restores resolution and preserves notes
   byte-for-byte.
+- A fan-out rename emits one repair block with all `link` commands before all
+  `unlink` commands, and that rendered block executes successfully.
 - Shell quoting round-trips spaces, apostrophes, dollar signs, backticks, and
   other valid note characters without executing them.
 - Broken far endpoints, replacement collisions, and name clearing produce no

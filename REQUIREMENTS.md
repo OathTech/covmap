@@ -72,7 +72,11 @@ Connections shall be many-to-many relations between coverings, with
 optional per-link notes, supporting fan-out and fan-in between segments.
 Each endpoint shall reference its segment either by name (preferred
 for mapped segments, so the link is resilient to content edits) or by
-segment hash.
+segment hash. Renaming or clearing a segment name shall remain a
+covering-local operation: covmap shall not rewrite connection refs
+implicitly, and shall instead diagnose discoverable exact `@old` endpoints
+and offer an explicit repair using ordinary link and unlink operations when
+that repair is safe.
 
 ## req11 — Connection algebra (recommended future direction)
 The model equips connections with inverse, composition, and union
@@ -104,9 +108,11 @@ own. merge then split remains available as the manual fallback.
 ## req14 — Broken-link detection and pruning
 covmap shall identify connection links whose endpoints no longer
 resolve in their coverings and offer to drop (prune) them. An endpoint resolves
-by name (broken only when the named segment is deleted) or by hash
+by name (broken when the name is deleted, cleared, or renamed) or by hash
 (broken when that content no longer appears), so a content edit to a
-named segment does not, by itself, break a link.
+named segment does not, by itself, break a link. Rename diagnostics shall
+report affected connection refs stored in the current repository without
+claiming to discover inbound refs stored elsewhere.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition

@@ -237,7 +237,10 @@ Operations propagate names as follows: \texttt{split} keeps the name on
 the top segment and leaves the bottom anonymous; \texttt{merge} keeps
 the single surviving name (the earlier segment's if both are named);
 \texttt{recut} and \texttt{label} preserve the name. A first-class
-\texttt{name} operation sets, renames, or clears a name.
+\texttt{name} operation sets, renames, or clears a name. This operation
+changes only the covering: it never rewrites a stored connection. Therefore
+renaming or clearing $\nu$ makes every stored endpoint that is exactly $\nu$
+fail to resolve until that endpoint is explicitly relinked or removed.
 
 \section{Connections}\label{sec:conn}
 
@@ -410,11 +413,12 @@ hash breaks as soon as its endpoint's content identity is rewritten
 (\texttt{recut}, \texttt{split}, \texttt{merge}) or removed. Relabelling
 does not break it because the label is not part of the hash. A link
 recorded by name breaks
-\emph{only} when the named segment is deleted; an edit that changes the
-segment's bytes (followed by \texttt{recut}) leaves the name, hence
-the link, intact. Naming the segments one intends to map therefore
-shrinks ``broken'' from the routine outcome of any edit to the rare
-outcome of a genuine structural deletion.
+when the named segment is deleted or when that covering-local name is
+cleared or changed; an edit that changes the segment's bytes (followed by
+\texttt{recut}) leaves the name, hence the link, intact. Naming the segments
+one intends to map therefore shrinks ``broken'' from the routine outcome of
+any content edit to the explicit removal or reassignment of the name
+identity.
 
 \begin{definition}[Link drift]\label{def:link-drift}
 A link is \emph{drifted} when it still resolves
@@ -426,8 +430,8 @@ diff-remap) carries the drifted link forward untouched.
 
 A named link therefore passes through a repairable middle state:
 $\textsc{in-sync} \to \textsc{drifted} \to \textsc{broken}$, drifting when
-its segment's bytes change and breaking only if that segment is later
-deleted. A hash-recorded link has no such middle state — its identity
+its segment's bytes change and breaking only if its name identity is later
+deleted, cleared, or changed. A hash-recorded link has no such middle state — its identity
 \emph{is} the content, so a content edit takes it straight
 $\textsc{in-sync} \to \textsc{broken}$. Drift is thus the repairable
 precursor of breakage, available precisely to links carried by name.
@@ -706,9 +710,12 @@ There is no segmentation rule. The interface gives the user one
       Set, rename, or clear the name of one segment
       (Definition~\ref{def:segment-name}). Names are unique within $C$ and are
       covering-local metadata, so this does not touch the object store
-      and shares nothing across coverings. Connections referencing the
-      segment by \texttt{@$\nu$} are unaffected unless the name string
-      itself changes.
+      and shares nothing across coverings. When the name string changes,
+      stored \texttt{@$\nu$} endpoints are not mutated implicitly: the
+      command lists discoverable affected connections and, when safe,
+      presents an explicit \texttt{link}-then-\texttt{unlink} repair.
+      Inbound connections stored in another repository are not discoverable
+      from $C$'s repository.
 \end{itemize}
 
 These operations are the only way to change a covering after

@@ -239,9 +239,10 @@ or target endpoint no longer resolves in its covering: the *terminal*
 state, healable only by relinking or dropping (`covmap prune` drops
 broken links; `fsck` reports them). Contrast **link drift**, its
 repairable precursor. A name endpoint breaks only when the named segment
-is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
-whose identity *is* the content, breaks on any content edit, having no
-drift state to pass through first. Sub-concept of **link**.
+is deleted or its covering-local name is cleared or changed — a content edit
+merely drifts it — whereas a hash endpoint, whose identity *is* the content,
+breaks on any content edit, having no drift state to pass through first.
+Sub-concept of **link**.
 
 **Resolved link** **[R][S]** — a link presented with its far endpoint
 expanded from a bare endpoint (hash or `@name`) to its covering, label, and

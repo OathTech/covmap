@@ -200,7 +200,8 @@ pub fn parse_endpoint(s: &str) -> Endpoint {
 
 /// Does endpoint `ep` still resolve against covering `c`? A name
 /// endpoint resolves iff a segment with that name still exists (it is
-/// broken only when the segment is *deleted*, not when its bytes change).
+/// broken when the name is deleted, cleared, or changed, but not when the
+/// segment's bytes change).
 /// A hash endpoint resolves iff some segment still carries that hash
 /// (legacy behaviour: byte changes break it).
 pub fn endpoint_resolves(c: &Covering, ep: &str) -> bool {
@@ -1070,9 +1071,8 @@ fn pos_in_segment(p: Pos, e: &CoveringEntry) -> bool {
 /// Set, change, or clear a segment's name. `new_name = None` clears it
 /// (the segment becomes anonymous). Names are unique within the covering.
 /// Renaming is a first-class operation: it does not touch content or
-/// hash, so a connection that references the segment by `@name` must be
-/// re-pointed with `link`/`unlink` only if the name string itself
-/// changes — which is exactly what this records.
+/// hash. When the name string changes, connections that store the old
+/// `@name` endpoint require an explicit `link`/`unlink` repair.
 pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Result<()> {
     if let Some(n) = new_name {
         if !valid_name(n) {

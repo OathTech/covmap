@@ -88,7 +88,7 @@ formal model but has no CLI surface yet. Each step is annotated with the
 requirements it exercises. For the agent-facing reference, see
 [`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
 [`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T9).
+in the scenarios from tasks T1–T10).
 
 ---
 
@@ -311,7 +311,7 @@ straight by *what the text is about*:
 | link note | why *this mapping* (A↔B) | n/a |
 | iterator task note | *this sweep's* verdict on a segment | n/a |
 
-## 9. Connect and link by name  (req2, req10, req16)
+## 9. Connect, repair a rename, and disconnect  (req2, req10, req14, req16)
 
 A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
@@ -332,13 +332,52 @@ covmap ls-links queue_links
 ```
 
 ```
-@enqueue-op	75db7ddb38ccc701	fn enqueue
-@dequeue-op	75db7ddb38ccc701	fn dequeue
-@queuefull-meaning	75db7ddb38ccc701	QueueFull guard
+@enqueue-op	b5368af9628e9079	fn enqueue
+@dequeue-op	b5368af9628e9079	fn dequeue
+@queuefull-meaning	b5368af9628e9079	QueueFull guard
 ```
 
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
+
+The target may also be another covering in the current repository. Omit the
+`<repo>:` prefix to create a same-repository connection; `status` and `show`
+mark it as a self-map. This temporary connection has no links, and
+`disconnect` removes only its ref:
+
+```sh
+covmap connect main main local_preview
+covmap show local_preview
+# connection local_preview   main -> main (self-map)
+covmap disconnect local_preview
+# disconnected 'local_preview': removed 0 link(s) from main -> main (self-map)
+```
+
+Names are covering-local. Renaming `@queuefull-meaning` does not silently
+rewrite `queue_links`; the command reports the exact stored endpoint that is
+now broken and prints an explicit repair:
+
+```sh
+covmap name main:@queuefull-meaning queuefull-clause
+```
+
+```text
+renamed @queuefull-meaning -> @queuefull-clause in covering 'main'
+connection 'queue_links': stored source endpoint '@queuefull-meaning' is now broken
+--- covmap repair begin ---
+covmap link 'queue_links' '@queuefull-clause' 'b5368af9628e9079' 'QueueFull guard'
+covmap unlink 'queue_links' '@queuefull-meaning' 'b5368af9628e9079'
+--- covmap repair end ---
+note: inbound connections stored in another repository cannot be discovered here
+```
+
+Execute the commands between the delimiters. They add the replacement before
+removing the stale pair, so a failed `link` leaves the old record available,
+and they preserve the existing note byte-for-byte. The tutorial script runs
+this block and asserts that `QueueFull guard` is unchanged. If covmap reports
+a broken far endpoint or a replacement collision, it emits no repair block;
+do not invent one. A fan-out rename still emits one block, with every safe
+`link` before any `unlink`.
 
 ## 10. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
 
@@ -359,7 +398,7 @@ connection endpoint resolves. `status` now shows the connection with its
 covering main: segments=7 lines=21
   drift: clean
 connections:
-  queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 2/7, target 1/3
+  queue_links: main -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 3/7, target 1/1
 ```
 
 ## 10b. Bounded drill-down: understand a region  (req23)
@@ -509,7 +548,7 @@ covmap status
 
 ```
   drift: 1 file(s) edited, 0 file(s) missing/binary
-  queue_links -> …/main : 3 links, 0 broken
+  queue_links: main -> …/main : 3 links, 0 broken
 ```
 
 Note the connection is **already 0 broken**: the link is by
@@ -585,17 +624,17 @@ for whatever remains.
 ## 15. Drop a genuinely broken link: `prune`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
-named segment, when that segment is **deleted**. Clear a segment's name to
-simulate that, then prune:
+named segment, when that segment is deleted or its covering-local name is
+cleared or changed. Clear a segment's name to simulate that, then prune:
 
 ```sh
-covmap name main:@queuefull-meaning -            # clears the name
-covmap fsck --broken-links                       # queue_links  @queuefull-meaning  …
+covmap name main:@queuefull-clause -             # clears the name
+covmap fsck --broken-links                       # queue_links  @queuefull-clause  …
 covmap prune queue_links                         # drops the dead link
 ```
 
 ```
-broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
+broken: @queuefull-clause (missing in source covering) -> … (ok): dropped
 prune: 1 link(s) dropped, 2 kept
 ```
 
@@ -648,7 +687,7 @@ the List / Source views of HEAD's covering.
 | merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |
 | annotate (segment message) | 8 | req22 |
-| connect / link / addressing | 9 | req2, req10, req16 |
+| connect / link / addressing / rename repair / disconnect | 9 | req2, req10, req14, req16 |
 | show / grep / diff / fsck | 10 | req15, req19, req20 |
 | iterator: freeze + sweep a worklist | 11 | req21 |
 | drift: recut (named link survives) | 12 | req13, req14 |

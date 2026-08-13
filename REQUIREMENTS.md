@@ -21,7 +21,10 @@ covmap shall link two coverings by recording connections between their
 segments. The two coverings may belong to different repositories or to
 the same repository — even the same covering — enabling both cross-repo
 mapping and intra-project cross-references such as duplication audits or
-docs-to-code links within one tree.
+docs-to-code links within one tree. A connection shall have an explicit
+lifecycle: creating it records an initially empty relation, while deleting it
+removes only that connection ref and leaves coverings, segment objects, and
+derived reports untouched.
 
 ## req3 — Two-level segment identity
 Every segment shall have a hash identity: the 64-bit truncated hash

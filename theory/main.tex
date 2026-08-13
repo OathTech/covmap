@@ -262,6 +262,14 @@ $\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
 also relate a repository to itself (e.g. a docs-to-code map, or a
 duplication audit within one tree).
 
+A stored connection has a lifecycle independent of either covering.
+\texttt{connect} creates a named connection ref containing an initially empty
+relation, and \texttt{disconnect} deletes that ref. Deleting a connection
+does not delete either covering, any segment object, or a derived report; it
+removes only the selected stored relation. This lifecycle operation is
+distinct from the relational operations below, which derive relations from
+relations without changing their inputs.
+
 \begin{definition}[Image of a subset]\label{def:image}
 For a subset $S \subseteq \Cov^A$, the \emph{image} of $S$ under $\kappa$
 is
@@ -743,6 +751,9 @@ image.
       Create an empty connection between two coverings. Omitting repo$_B$
       selects another covering in the source repository, including $C_A$
       itself; inspection marks this case as a self-map.
+\item \texttt{covmap disconnect $K$}\\
+      Delete the stored connection ref $K$ without deleting either covering,
+      any segment object, or a derived report.
 \item \texttt{covmap link $K$ $A$ $B$ [$\nu$]}\\
       \texttt{covmap unlink $K$ $A$ $B$}\\
       Add or remove a single link, optionally annotated with note $\nu$.

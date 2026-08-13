@@ -54,6 +54,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "link" => cmd_link(&rest),
         "unlink" => cmd_unlink(&rest),
         "connect" => cmd_connect(&rest),
+        "disconnect" => cmd_disconnect(&rest),
         "prune" => cmd_prune(&rest),
         "iter" => cmd_iter(&rest),
         "html" => cmd_html(&rest),
@@ -121,6 +122,9 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "connect" => {
             "covmap connect <C_A> [<repo>:]<C_B> [<K>]   create an empty connection; omit <repo>: for a same-repository target"
         }
+        "disconnect" => {
+            "covmap disconnect <K>                       delete only the named connection ref"
+        }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
@@ -162,6 +166,7 @@ PORCELAIN
   link <K> <A> <B> [<note>]           add a link; endpoints accept @name, hash prefix, or position
   unlink <K> <A> <B>                  remove a link by @name, hash prefix, or position
   connect <C_A> [<repo>:]<C_B> [<K>]  create empty connection; omit <repo>: for same-repo
+  disconnect <K>                      delete only the named connection ref
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
@@ -1946,7 +1951,33 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
         ));
     }
     k.write(&repo)?;
-    println!("created connection '{kname}': {}", connection_route(&repo, &k));
+    println!(
+        "created connection '{kname}': {}",
+        connection_route(&repo, &k)
+    );
+    Ok(0)
+}
+
+// ---- disconnect -----------------------------------------------------------
+
+fn cmd_disconnect(args: &[String]) -> io::Result<u8> {
+    if args.len() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "disconnect <connection>",
+        ));
+    }
+    let repo = current_repo()?;
+    let k = Connection::remove(&repo, &args[0])?;
+    println!(
+        "disconnected '{}': removed {} link(s) from {}",
+        k.name,
+        k.links.len(),
+        connection_route(&repo, &k)
+    );
+    if repo.dot().join("report.html").is_file() {
+        eprintln!("warning: .covmap/report.html may be stale; regenerate it with `covmap html`");
+    }
     Ok(0)
 }
 

@@ -55,7 +55,9 @@ A complexity measure reported by `status`.
 coverings, stored as a set of links with optional per-link notes. This
 is the "map" covmap produces. Stored separately from coverings, in the
 source repo's `.covmap/connections/<name>`. The two coverings may be in
-different repositories or the same one (even the same covering).
+different repositories or the same one (even the same covering). `connect`
+creates this ref; `disconnect` removes only this ref, not either covering,
+the segment objects, or a derived report.
 
 **Connection algebra** **[T][R]** — *(recommended future direction)* the
 derived operations the model gives connections: *inverse* (`κ⁻¹`),
@@ -132,6 +134,11 @@ segment hash.
 segment with that name still exists (following it to whatever hash the
 segment now carries); a hash endpoint resolves iff that content still
 appears in the covering.
+
+**Disconnect** **[T][R][S]** — delete one stored connection ref after
+successfully reading it. It is the lifecycle inverse of `connect`, not a
+relation-algebra operation: it leaves both coverings, every segment object,
+and derived HTML reports untouched.
 
 **Format version** **[R][S]** — the string in `.covmap/version`
 (currently `2`) recording the on-disk format. covmap refuses to operate

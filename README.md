@@ -77,7 +77,9 @@ There are no runtime dependencies beyond `sha2`.
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
-  endpoint is a segment name (`@name`) or a segment hash.
+  endpoint is a segment name (`@name`) or a segment hash. `connect`
+  creates the ref; `disconnect` removes only that ref, leaving coverings,
+  objects, and generated reports untouched.
 - A **label** is a per-segment status string (`unknown`, `reviewed`,
   `mapped`, …) set with `covmap label`. Like a name and a message it is
   covering-local and not part of the hash, so relabelling never changes a
@@ -164,6 +166,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
 | `connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection; omit `<repo>:` for another covering in the same repository. |
+| `disconnect <K>` | Delete only the named connection ref. |
 | `link <K> <A> <B> [<note>]` | Add a link; each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. |
 | `unlink <K> <A> <B>` | Remove a link using the same endpoint forms. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |

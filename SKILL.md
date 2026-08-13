@@ -46,7 +46,7 @@ binary path is `covmap/target/release/covmap`.
   and references the target repo by absolute path, including for a
   same-repository self-map. Each endpoint is either a segment name
   (`@name`, resilient to content edits) or a segment hash (legacy /
-  anonymous).
+  anonymous). `disconnect` deletes only the connection ref.
 - **Segment hash identity is content-only.** Equal content has the same hash
   regardless of label. Labels and names are covering-local metadata and do
   not affect the segment hash.
@@ -122,6 +122,7 @@ are unique.
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
 | `covmap connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection. Omit `<repo>:` for a same-repository target (`connect main main audit`). | yes |
+| `covmap disconnect <K>` | Delete only connection ref `K`; coverings and objects are untouched. Regenerate the default HTML report if warned that it may be stale. | yes |
 | `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |

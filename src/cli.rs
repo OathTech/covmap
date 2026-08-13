@@ -127,7 +127,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
-            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
+            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  peek          list pending tasks\n  peek --all    list the complete frozen worklist with state and notes"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
         "migrate" => "covmap migrate                              upgrade .covmap/ on-disk format (1 → 2: content-only segment hash)",
@@ -2324,7 +2324,9 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
         None => {
             eprintln!(
                 "covmap iter {name} <verb> — no verb given. Verbs: new, next, current, \
-                 done, skip, choose, rewind, peek, status, finished, rm"
+                 done, skip, choose, rewind, peek, status, finished, rm\n  \
+                 peek          list pending tasks\n  \
+                 peek --all    list the complete frozen worklist with state and notes"
             );
             return Ok(2);
         }

@@ -1,14 +1,13 @@
 # Connection lifecycle and workflows
 
-Stage: **Accepted**
+Stage: **Landed**
 
 ## Relationship to CIP 0009
 
-This proposal remains an active, independent implementation candidate and
-should land before [CIP 0009](0009-atomic-multi-cut.md). It changes connection
-refs, endpoint diagnostics, help, and presentation rather than covering
-storage. CIP 0009 reuses its endpoint-discovery rules when subdivision affects
-stored links.
+This proposal landed before [CIP 0009](0009-atomic-multi-cut.md). It changes
+connection refs, endpoint diagnostics, help, and presentation rather than
+covering storage. CIP 0009 reuses its endpoint-discovery rules when
+subdivision affects stored links.
 
 ## Idea
 

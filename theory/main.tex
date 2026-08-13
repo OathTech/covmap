@@ -255,7 +255,8 @@ otherwise a segment hash.
 
 A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
 to segment $t$ of $B$. Connections are stored separately from
-coverings and refer to their endpoints by hash. Note that nothing
+coverings and record each endpoint by name when the segment is named,
+otherwise by segment hash. Note that nothing
 requires $A$ and $B$ to be distinct: they may be the same repository, and
 $\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
 also relate a repository to itself (e.g. a docs-to-code map, or a
@@ -820,7 +821,8 @@ Lower-level commands meant for scripts.
 
 \begin{itemize}[leftmargin=2em]
 \item Coverings and connections are independent artifacts; a
-      connection refers to its coverings only by hash.
+      connection names its source and target coverings in metadata and
+      records each link using name or hash endpoints.
 \item Every state-changing operation is explicit. \texttt{cover} is
       additive only. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —

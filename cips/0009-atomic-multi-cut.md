@@ -1,6 +1,6 @@
 # Atomic multi-cut refinement
 
-Stage: **Accepted**
+Stage: **Landed**
 
 ## Relationship to other CIPs
 

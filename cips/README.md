@@ -47,7 +47,7 @@ number is an identifier, not a priority.
 | [0004](0004-content-only-hash.md) | content-only-hash | Landed | Drop the label from the segment hash so identity is a pure function of content; label joins name/message as ref-local metadata. Reverses req4; on-disk format change (v1→v2) with a `covmap migrate`. |
 | [0006](0006-mapping-review-surfaces.md) | mapping-review-surfaces | Draft | Support multi-region listings and improve existing connection output with degree hubs and wrapped notes. |
 | [0007](0007-connection-lifecycle-workflows.md) | connection-lifecycle-workflows | Landed | Complete connection deletion, formalize self-map syntax, align endpoint help, and improve iterator help. |
-| [0009](0009-atomic-multi-cut.md) | atomic-multi-cut | Accepted | Keep complete coverings and generalize `split` to label-free atomic cut-set insertion with one ref write. |
+| [0009](0009-atomic-multi-cut.md) | atomic-multi-cut | Landed | Keep complete coverings and generalize `split` to label-free atomic cut-set insertion with one ref write. |
 
 ## Writing a cip
 

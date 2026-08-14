@@ -179,10 +179,10 @@ non-content variable.
 - **Label lens (cip 0003) on hash-linked maps:** safe, because tagging no longer
   re-hashes.
 
-## Landing checklist (five-artifact consistency)
+## Landing checklist (six-artifact consistency)
 
 Per `DEVELOPER.md`, this is an **on-disk format change** *and* a **requirements
-reversal**, reconciled a→b→c→d→e, and it is the trigger case for the format-change
+reversal**, reconciled a→b→c→d→e→f, and it is the trigger case for the format-change
 protocol:
 
 - **Theory** (`theory/main.tex`): amend `def:segment` so the hash is

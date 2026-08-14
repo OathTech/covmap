@@ -94,8 +94,7 @@ repo and emits a single whole-file segment labelled `unknown` for
 every readable UTF-8 file it has not yet covered. You refine the
 covering with `covmap split`, `covmap merge`, and `covmap recut`.
 
-For the formal model, see [`theory/main.tex`](theory/main.tex)
-([rendered PDF](theory/main.pdf)).
+For the formal model, see [`theory/main.tex`](theory/main.tex).
 
 ## Worked example
 
@@ -237,9 +236,9 @@ covmap/
   Cargo.toml
   LICENSE
   README.md
-  DEVELOPER.md         # how to evolve covmap (five-artifact consistency contract)
+  DEVELOPER.md         # how to evolve covmap (six-artifact consistency contract)
   SKILL.md             # agent-facing workflow guide
-  GLOSSARY.md          # vocabulary across theory / requirements / source
+  GLOSSARY.md          # cross-cutting vocabulary index
   src/                 # Rust implementation (incl. unit tests)
   theory/main.tex      # mathematical foundation
   tutorial/            # guided end-to-end tour (run_tutorial.sh is an integration test)
@@ -266,9 +265,10 @@ fixture-based tasks for evaluating how well an agent drives covmap.
 
 ## Contributing / evolving covmap
 
-covmap is described by five artifacts that must be kept consistent with
+covmap is described by six artifacts that must be kept consistent with
 each other — theory, requirements, implementation + tests, skill, and
-tutorial. Any change to one must be reconciled across the rest.
+tutorial, plus the cross-cutting glossary. Any change to one must be
+reconciled across the rest.
 [`DEVELOPER.md`](DEVELOPER.md) is the contract: propagation rules by
 change type, the gates to run, and the definition of done. Agents should
 also read [`AGENT.md`](AGENT.md).

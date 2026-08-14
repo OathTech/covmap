@@ -1,12 +1,13 @@
 # covmap — Glossary
 
-Terms used across covmap's three descriptions of itself: the Rust
-implementation (`src/`), the requirements (`REQUIREMENTS.md`), and the
-formal model (`theory/main.tex`). Definitions are kept short and
-cross-referenced; where a term is defined precisely in the theory, the
-wording here is the informal gloss.
+This glossary serves covmap's six-artifact consistency contract by keeping
+terms aligned across theory, requirements, implementation, skill, and
+tutorial. Its entries are drawn from and tagged by the three primary
+technical sources. Definitions are kept short and cross-referenced; where
+a term is defined precisely in the theory, the wording here is the informal
+gloss.
 
-Each entry is tagged with where the term originates:
+The source tags are:
 **[T]** theory · **[R]** requirements · **[S]** source. Entries are
 alphabetical, except that a few umbrella concepts (**Drift**, **Repair**)
 are immediately followed by their sub-concepts, book-index style, rather

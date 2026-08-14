@@ -23,3 +23,5 @@ tutorial/_play/
 # Editor/OS detritus
 .DS_Store
 *.swp
+.codex/
+.envrc

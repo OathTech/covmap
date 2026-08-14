@@ -248,11 +248,11 @@ new one.
 - **Answer "is this mapped?"**: `covmap show <C>:@seg` → its links (both
   directions) without scanning any connection by hand.
 
-## Landing checklist (five-artifact consistency)
+## Landing checklist (six-artifact consistency)
 
 Per `DEVELOPER.md`, this is a **new capability with a behavior change** to
-`show`/`ls`/`status` output, not done until reconciled across all five artifacts
-(a→b→c→d→e):
+`show`/`ls`/`status` output, not done until reconciled across all six artifacts
+(a→b→c→d→e→f):
 
 - **Theory** (`theory/main.tex`): in §Connections, add the **image of a subset
   under a connection** (κ(S) for S ⊆ Cov^A) as the formal basis of the label lens

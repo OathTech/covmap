@@ -41,11 +41,16 @@ participate in the segment hash. Identity is a pure function of content,
 so identical content is one shared object regardless of label, a segment
 may carry different labels in different coverings, and re-labelling never
 changes a hash or breaks a hash-addressed connection endpoint. Labels thus
-join names (req3) and messages (req22) as non-hashed annotations.
+join names (req3) and messages (req22) as non-hashed annotations. Partition
+geometry and status metadata shall be composed explicitly: `split` accepts
+only cut positions, and every fragment created by subdivision starts
+`unknown` until separately relabelled.
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
 contiguous, file-confined segments, and this invariant shall be checkable.
+Inserting any finite set of valid interior cuts shall preserve the partition;
+the complete plan shall validate before the covering ref is replaced once.
 
 ## req6 — Partial, declared coverage
 A covering need not span the whole repository; it shall explicitly declare
@@ -58,7 +63,11 @@ never disturbing existing refinements.
 
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined
-solely by explicit split, merge, recut, label, and name operations.
+solely by explicit split, merge, recut, label, name, and annotate operations.
+`split` shall atomically insert one or more explicit line or character cut
+positions into one original segment or across one covered file, without
+accepting label, name, or message operands. `merge` remains the explicit
+operation that removes a cut.
 Names are assigned deliberately by the user or agent (never
 auto-generated), since their value is a stable, human-meaningful
 identity for the segments being mapped.
@@ -76,7 +85,10 @@ segment hash. Renaming or clearing a segment name shall remain a
 covering-local operation: covmap shall not rewrite connection refs
 implicitly, and shall instead diagnose discoverable exact `@old` endpoints
 and offer an explicit repair using ordinary link and unlink operations when
-that repair is safe.
+that repair is safe. Subdivision shall likewise diagnose discoverable local
+connection effects without rewriting refs: a name endpoint continues to
+resolve but narrows to the first fragment, while a hash endpoint to the
+original segment becomes broken.
 
 ## req11 — Connection algebra (recommended future direction)
 The model equips connections with inverse, composition, and union
@@ -112,11 +124,13 @@ by name (broken when the name is deleted, cleared, or renamed) or by hash
 (broken when that content no longer appears), so a content edit to a
 named segment does not, by itself, break a link. Rename diagnostics shall
 report affected connection refs stored in the current repository without
-claiming to discover inbound refs stored elsewhere.
+claiming to discover inbound refs stored elsewhere. Subdivision diagnostics
+shall make the same discovery limit explicit.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition
-and that every connection endpoint resolves.
+and that every connection endpoint resolves. The same partition validator
+shall reject an invalid multi-cut plan before its covering ref is replaced.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
@@ -126,6 +140,9 @@ containing that position — a stable, hash-free handle), or by connection
 name, with HEAD resolving the default covering and unique hash prefixes
 accepted. Within `link` and `unlink`, each endpoint operand shall accept a
 name, hash prefix, or position resolved against that side's covering.
+For `split`, an exact colon-free covered-file path shall outrank hash-prefix
+interpretation and permit cuts across that file; a selector containing `:`
+shall use positional-address syntax, and a bare file selector shall use HEAD.
 
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
@@ -141,7 +158,9 @@ covmap shall expose a small set of lower-level *plumbing* commands
 emitting machine-readable, line-oriented output, from which every
 higher-level *porcelain* command is intended to be expressible as a
 pipeline. (This is git's plumbing/porcelain split: primitives plus the
-convenience commands built over them.)
+convenience commands built over them.) Multi-cut split shall compose the
+existing position and object primitives while making one atomic covering-ref
+transition rather than exposing intermediate partitions.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
@@ -176,9 +195,10 @@ distinct from the segment's `label` (a status category) and its
 `name` (a slug identity, req3): like both of those it is **not** part of the
 segment hash, so
 setting, changing, or clearing it leaves the shared object store untouched
-and never causes or repairs drift. It travels with its segment across
-`split`/`merge`/`recut`/diff-remap the way a name does, is set and cleared
-with `covmap annotate` and surfaced by `show`/`ls`/`html`, and is stored
+and never causes or repairs drift. On subdivision, the first fragment keeps
+the original message and later fragments have none; merge/recut/diff-remap
+otherwise carry it with the segment the way a name does. It is set and
+cleared with `covmap annotate`, surfaced by `show`/`ls`/`html`, and stored
 additively in the covering ref with no format-version bump.
 
 ## req23 — Bounded drill-down to understanding

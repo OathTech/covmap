@@ -117,14 +117,15 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 hr "3. refine queue.md into one segment per section  (REQ5, REQ8)"
 #############################################################################
 # The `##` headings sit at lines 5, 10, 14 (the Enqueue body wraps onto
-# two lines, so the sections are not uniform). We address each segment
-# *positionally* — `main:queue.md:<line>` is "the segment of queue.md
-# that covers <line>" (unique by Segment Lookup), a stable handle that
-# never depends on a segment hash. Each split's SECOND argument is the
-# cut line.
-( cd "$WORK/spec" && run split main:queue.md:1  5 preamble Enqueue )
-( cd "$WORK/spec" && run split main:queue.md:5  10 Enqueue Dequeue )
-( cd "$WORK/spec" && run split main:queue.md:10 14 Dequeue Size )
+# two lines, so the sections are not uniform). A file selector applies every
+# cut against the covering state present when the command starts and writes
+# the covering ref once. Cuts may be unsorted; output is in file order.
+( cd "$WORK/spec" && run split main:queue.md 14 5 10 )
+# Split changes geometry only. Apply status metadata explicitly afterward.
+( cd "$WORK/spec" && run label main:queue.md:1  preamble )
+( cd "$WORK/spec" && run label main:queue.md:5  Enqueue )
+( cd "$WORK/spec" && run label main:queue.md:10 Dequeue )
+( cd "$WORK/spec" && run label main:queue.md:14 Size )
 ( cd "$WORK/spec" && run ls -l )
 
 assert "queue.md now has >=4 segments" \
@@ -137,7 +138,9 @@ hr "4. merge + re-split to show refinement is reversible  (REQ8)"
 # Dequeue covers line 10. After the merge, the combined segment covers
 # line 5; re-split it at line 10.
 ( cd "$WORK/spec" && run merge main:queue.md:5 main:queue.md:10 "Enq+Deq" )
-( cd "$WORK/spec" && run split main:queue.md:5 10 Enqueue Dequeue )
+( cd "$WORK/spec" && run split main:queue.md:5 10 )
+( cd "$WORK/spec" && run label main:queue.md:5  Enqueue )
+( cd "$WORK/spec" && run label main:queue.md:10 Dequeue )
 
 #############################################################################
 hr "5. character-level split: isolate a clause inside one line  (REQ5)"
@@ -154,11 +157,15 @@ echo "  clause begins at line 3, column $ECOL"
 # Split the segment covering errors.md line 3 first at line 3 (so the
 # QueueFull line is on its own). Name that line `qf-line`, then split it
 # BY NAME at the clause column — a name is a unique, readable handle for
-# the chunk you're working on. (On a split the name stays with the top
-# half; step 7 clears this temporary name.)
-( cd "$WORK/spec" && run split main:errors.md:3 3 head qf-line )
+# the chunk you're working on. (On a split the name stays with the first
+# fragment; step 7 clears this temporary name.)
+( cd "$WORK/spec" && run split main:errors.md 3 )
+( cd "$WORK/spec" && run label main:errors.md:1 head )
+( cd "$WORK/spec" && run label main:errors.md:3 qf-line )
 ( cd "$WORK/spec" && run name  main:errors.md:3 qf-line )
-( cd "$WORK/spec" && run split main:@qf-line "3:$ECOL" QueueFull-code QueueFull-meaning )
+( cd "$WORK/spec" && run split main:@qf-line "3:$ECOL" )
+( cd "$WORK/spec" && run label main:@qf-line QueueFull-code )
+( cd "$WORK/spec" && run label "main:errors.md:3:$ECOL" QueueFull-meaning )
 ( cd "$WORK/spec" && run ls -l )
 
 assert "a character-level segment exists on errors.md line 3" \

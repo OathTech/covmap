@@ -5,13 +5,12 @@ set -euo pipefail
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 
-# Refine spec/cache.md at lines 5, 10, 15.
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'cache.md' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  5 "preamble" "Get" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'cache.md:5' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 10 "Get" "Put" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'cache.md:10' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 15 "Put" "Size" ) >/dev/null
+# Refine spec/cache.md at lines 5, 10, 15, then compose labels explicitly.
+( cd spec && "$COVMAP_BIN" split main:cache.md 5 10 15 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:cache.md:1  preamble ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:cache.md:5  Get      ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:cache.md:10 Put      ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:cache.md:15 Size     ) >/dev/null
 
 ( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" cache_links ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )

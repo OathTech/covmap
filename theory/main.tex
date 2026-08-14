@@ -163,6 +163,19 @@ When every cut falls on a line boundary this is the line-level
 covering with cut points $1 = c_0 < \cdots < c_{k_f} = |f|_A + 1$ and
 segments $(f, c_{j-1}, c_j - 1, \lambda_j)$.
 
+Refinement inserts a finite set of interior positions into this cut
+sequence. For requested cuts $P_f$ in file $f$,
+\[
+  \mathrm{cuts}'(f) = \mathrm{cuts}(f) \cup P_f.
+\]
+Set insertion preserves disjointness, completeness, and confinement:
+each affected original segment is replaced by the non-empty consecutive
+fragments induced by the new cuts, whose concatenated content is exactly
+the original content. Removing a cut is the distinct coarsening operation
+\texttt{merge}. Partition geometry is independent of status metadata:
+\texttt{split} inserts cuts, while \texttt{label}, \texttt{name}, and
+\texttt{annotate} compose metadata afterward.
+
 \begin{proposition}[Segment lookup]\label{prop:lookup}
 For any covering $\Cov$ and any character of $A$ in a file
 $f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
@@ -234,7 +247,7 @@ does not.
 \end{definition}
 
 Operations propagate names as follows: \texttt{split} keeps the name on
-the top segment and leaves the bottom anonymous; \texttt{merge} keeps
+the first fragment and leaves later fragments anonymous; \texttt{merge} keeps
 the single surviving name (the earlier segment's if both are named);
 \texttt{recut} and \texttt{label} preserve the name. A first-class
 \texttt{name} operation sets, renames, or clears a name. This operation
@@ -646,6 +659,7 @@ throughout the interface and can be mixed freely.
 \texttt{<hash>}            \> a segment, by full or short hex prefix\\
 \texttt{$C$:$h$}           \> a segment $h$ in covering $C$\\
 \texttt{$C$:@$\nu$}        \> the segment named $\nu$ in covering $C$\\
+\texttt{$C$:file:$i$[:$c$]} \> the segment containing one file position\\
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
@@ -671,17 +685,31 @@ There is no segmentation rule. The interface gives the user one
       \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
       adds segments only for new files. Existing segments are never
       touched, so any user-driven refinement is preserved.
-\item \texttt{covmap split $C$:$h$ $\ell$\texttt{[:}$k$\texttt{]} [$\lambda_t$] [$\lambda_b$]}\\
-      Cut the segment with hash $h$ at the position $(\ell, k)$, which
-      becomes the first character of the bottom segment; the top segment
-      ends at the immediately preceding character. With the column
-      omitted, the cut is the line boundary $(\ell, \bot)$, recovering
-      the line-level split into $(f, a, \ell-1, \lambda_t)$ and
-      $(f, \ell, b, \lambda_b)$. The cut must leave both segments
-      non-empty. The split is computed on the stored content, so
-      $\mathrm{content}(\text{top}) \Vert \mathrm{content}(\text{bot})
-      = \mathrm{content}(s)$ exactly. Both new labels default to
-      \texttt{unknown}.
+\item \texttt{covmap split $C$:$a$ $p_1$ [$p_2$ \ldots]}\\
+      Atomically insert the finite set of cut positions $p_i$ into the
+      selected part of covering $C$. The selector $a$ is a segment address
+      (hash prefix, \texttt{@name}, or position), in which case every cut
+      must lie strictly inside that original segment, or an exact covered
+      file path, in which case cuts may affect several original segments.
+      A bare file path selects that file in \texttt{HEAD}. Exact covered
+      paths outrank hash prefixes; a selector containing \texttt{:} is
+      positional syntax.
+
+      Each $p_i=(\ell,k)$ denotes the first character below the cut; omitting
+      $k$ means the line start $(\ell,\bot)$. Duplicate operands and file
+      outer boundaries are errors. For file selection, an existing interior
+      cut is an already-satisfied no-op. All cuts are parsed and every
+      resulting fragment is validated before any covering-ref replacement;
+      the command writes the ref once.
+
+      Every fragment created from an actually subdivided segment receives
+      label \texttt{unknown}. The first fragment retains the original name
+      and message; later fragments are anonymous and un-messaged. Slicing
+      uses stored object content, and the fragments concatenate exactly to
+      the original. Discoverable local name endpoints keep resolving but
+      narrow to the first fragment; local hash endpoints to the original
+      become broken. The command reports both effects and the inability to
+      discover inbound refs stored in another repository.
 \item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
       $\lambda$ (default \texttt{unknown}).
@@ -720,9 +748,9 @@ There is no segmentation rule. The interface gives the user one
 
 These operations are the only way to change a covering after
 \texttt{cover}. Together they are complete: any covering reachable
-from the initial cover by repeated splits / merges / recuts / relabels /
-re-tags
-is the most general covering one can ask for.
+from the initial cover by repeated cut-set insertions, merges, recuts,
+relabels, renames, and annotations is the most general covering one can
+ask for.
 
 \subsection{Inspection, connections, prune}
 

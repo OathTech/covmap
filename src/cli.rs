@@ -110,7 +110,9 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
         "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
         "annotate" => "covmap annotate <C>:<addr> [-m <msg>...] | -   set, replace, clear (-), or print a segment's message",
-        "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
+        "split" => {
+            "covmap split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately"
+        }
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
         "link" => {
@@ -159,7 +161,7 @@ PORCELAIN
   label <C>:<h> <label>               relabel a segment
   name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
   annotate <C>:<addr> [-m <msg>...]   set/replace/clear (-)/print a segment's free-form message
-  split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
+  split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
@@ -1342,7 +1344,6 @@ fn discover_name_impacts(
         let k = Connection::read(repo, &connection_name)?;
         let source_is_covering = k.source_covering == covering.name;
         let target_is_covering = k.target_repo == repo_root && k.target_covering == covering.name;
-
         let affected: Vec<_> = k
             .links
             .iter()
@@ -1670,32 +1671,181 @@ fn cmd_annotate(args: &[String]) -> io::Result<u8> {
 
 // ---- split ----------------------------------------------------------------
 
+fn resolve_split_selector(repo: &Repo, raw: &str) -> io::Result<(Covering, covering::SplitScope)> {
+    let covering_names = Covering::list(repo)?;
+    let (covering_name, selector) = match raw.split_once(':') {
+        Some((candidate, rest))
+            if candidate == "HEAD" || covering_names.iter().any(|name| name == candidate) =>
+        {
+            (candidate.to_string(), rest.to_string())
+        }
+        _ => ("HEAD".to_string(), raw.to_string()),
+    };
+    let covering = resolve_covering(repo, &covering_name)?;
+    let scope = if selector.starts_with('@') || selector.contains(':') {
+        covering::SplitScope::Segment(covering::resolve_segment(&covering, &selector)?)
+    } else if covering.covered_files().contains(&selector) {
+        covering::SplitScope::File(selector)
+    } else {
+        covering::SplitScope::Segment(covering::resolve_segment(&covering, &selector)?)
+    };
+    Ok((covering, scope))
+}
+
+fn split_impact_warning(
+    connection: &str,
+    side: NameImpactSide,
+    endpoint: &str,
+    group: &covering::SplitGroup,
+) -> Option<String> {
+    if let Some(name) = &group.original.name {
+        let named = format!("@{name}");
+        if endpoint == named {
+            return Some(format!(
+                "warning: connection '{connection}': {} name endpoint '{named}' will narrow from {} to {}",
+                side.description(),
+                group.original.range(),
+                group.fragments[0].range()
+            ));
+        }
+    }
+    (endpoint == group.original.hash).then(|| {
+        format!(
+            "warning: connection '{connection}': {} hash endpoint '{}' will become broken after subdividing {}",
+            side.description(),
+            group.original.hash,
+            group.original.range()
+        )
+    })
+}
+
+fn discover_split_warnings(
+    repo: &Repo,
+    covering: &Covering,
+    plan: &covering::SplitPlan,
+) -> io::Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    let repo_root = repo.root.to_string_lossy();
+    for connection_name in Connection::list(repo)? {
+        let connection = Connection::read(repo, &connection_name)?;
+        let source_local = connection.source_covering == covering.name;
+        let target_local =
+            connection.target_repo == repo_root && connection.target_covering == covering.name;
+        if !source_local && !target_local {
+            continue;
+        }
+        for link in &connection.links {
+            let local_endpoints = [
+                (NameImpactSide::Source, source_local, &link.a),
+                (NameImpactSide::Target, target_local, &link.b),
+            ];
+            for (side, is_local, endpoint) in local_endpoints {
+                if !is_local {
+                    continue;
+                }
+                for group in &plan.groups {
+                    if let Some(warning) =
+                        split_impact_warning(&connection.name, side, endpoint, group)
+                    {
+                        if !warnings.contains(&warning) {
+                            warnings.push(warning);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(warnings)
+}
+
+fn print_split_warnings(warnings: &[String]) {
+    for warning in warnings {
+        println!("{warning}");
+    }
+    if !warnings.is_empty() {
+        println!(
+            "note: inbound connections stored in another repository cannot be discovered here"
+        );
+    }
+}
+
+fn print_split_plan(plan: &covering::SplitPlan) {
+    for group in &plan.groups {
+        println!(
+            "split {} {} ->",
+            covering::short_hash(&group.original.hash),
+            group.original.loc()
+        );
+        for (index, fragment) in group.fragments.iter().enumerate() {
+            let mut inherited = Vec::new();
+            if index == 0 {
+                if let Some(name) = &fragment.name {
+                    inherited.push(format!("@{name}"));
+                }
+                if fragment.message.is_some() {
+                    inherited.push("message".to_string());
+                }
+            }
+            let suffix = if inherited.is_empty() {
+                String::new()
+            } else {
+                format!("  inherited {}", inherited.join(", "))
+            };
+            println!(
+                "  {}  {}  {}{}",
+                covering::short_hash(&fragment.hash),
+                fragment.label,
+                fragment.loc(),
+                suffix
+            );
+        }
+    }
+    for existing in &plan.existing_cuts {
+        println!(
+            "existing cut: {}:{} (already satisfied)",
+            plan.file,
+            covering::fmt_pos(*existing)
+        );
+    }
+}
+
 fn cmd_split(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "split <covering>:<hash> <line> [<label_top>] [<label_bot>]",
+            "split <covering>:<segment|file> <cut> [<cut> ...]",
         ));
     }
-    let (covname, prefix) = parse_addr(&args[0]);
-    let covname = covname.unwrap_or_else(|| "HEAD".to_string());
-    let (cut_line, cut_col) = parse_line_col(&args[1])?;
-    let label_top = args
-        .get(2)
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
-    let label_bot = args
-        .get(3)
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
-    let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_segment_hash(&c, &prefix)?;
-    let (top, bot) = covering::split(
-        &repo, &mut c, &old, cut_line, cut_col, &label_top, &label_bot,
-    )?;
+    let (mut c, scope) = resolve_split_selector(&repo, &args[0])?;
+    let cuts = args[1..]
+        .iter()
+        .map(|raw| {
+            parse_line_col(raw)
+                .map(|(line, col)| covering::Pos { line, col })
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "split cut '{raw}' is not line[:column]; split accepts cuts only. \
+                             Apply metadata afterward with `covmap label`, `covmap name`, or \
+                             `covmap annotate`"
+                        ),
+                    )
+                })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let plan = covering::plan_split_many(&repo, &c, scope, &cuts)?;
+    let warnings = discover_split_warnings(&repo, &c, &plan)?;
+    print_split_warnings(&warnings);
+    if plan.is_noop() {
+        print_split_plan(&plan);
+        println!("split: no changes");
+        return Ok(0);
+    }
+    covering::apply_split_plan(&repo, &mut c, &plan)?;
     c.write(&repo)?;
-    println!("split {} -> {} + {}", old, top, bot);
+    print_split_plan(&plan);
     Ok(0)
 }
 
@@ -3079,32 +3229,11 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
     let mut errs = 0usize;
     for cn in Covering::list(&repo)? {
         let c = Covering::read(&repo, &cn)?;
-        let mut by_file: std::collections::BTreeMap<&str, Vec<&CoveringEntry>> =
-            std::collections::BTreeMap::new();
-        for e in &c.entries {
-            by_file.entry(e.file.as_str()).or_default().push(e);
-        }
-        for (f, mut entries) in by_file {
-            entries.sort_by_key(|e| e.sort_key());
-            // The partition must begin at the first character of the
-            // file and proceed with each segment abutting the previous
-            // one (no gap, no overlap), down to the character.
-            let mut expected = covering::Pos { line: 1, col: None };
-            for e in &entries {
-                if !covering::same_start(expected, e.start_pos()) {
-                    if !broken_only {
-                        eprintln!(
-                            "fsck: covering {} file {} has gap or overlap before {} (expected start {})",
-                            cn,
-                            f,
-                            e.range(),
-                            covering::fmt_pos(expected)
-                        );
-                    }
-                    errs += 1;
-                }
-                expected = covering::successor_of_end(e.end_pos());
+        for issue in covering::partition_issues(&c) {
+            if !broken_only {
+                eprintln!("fsck: covering {cn} {issue}");
             }
+            errs += 1;
         }
         for e in &c.entries {
             if !object_exists(&repo, &e.hash) {
@@ -3175,6 +3304,27 @@ mod tests {
         }
     }
 
+    fn split_entry(hash: &str, file: &str, end_line: usize, name: &str) -> CoveringEntry {
+        CoveringEntry {
+            hash: hash.to_string(),
+            file: file.to_string(),
+            a: 1,
+            a_col: None,
+            b: end_line,
+            b_col: None,
+            label: "unknown".to_string(),
+            name: Some(name.to_string()),
+            message: None,
+        }
+    }
+
+    fn initialize_test_repo(repo: &Repo) {
+        fs::create_dir_all(repo.objects_dir()).unwrap();
+        fs::create_dir_all(repo.coverings_dir()).unwrap();
+        fs::create_dir_all(repo.connections_dir()).unwrap();
+        fs::write(repo.head_file(), "main\n").unwrap();
+    }
+
     #[test]
     fn connection_route_marks_same_repository_targets() {
         let repo = temp_repo("route");
@@ -3189,6 +3339,105 @@ mod tests {
         assert_eq!(connection_route(&repo, &k), "left -> right (self-map)");
         k.target_repo = "/tmp/elsewhere".to_string();
         assert_eq!(connection_route(&repo, &k), "left -> /tmp/elsewhere/right");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn split_selector_prefers_exact_files_and_accepts_all_segment_forms() {
+        let repo = temp_repo("split-selector");
+        initialize_test_repo(&repo);
+        let covering = Covering {
+            name: "main".into(),
+            entries: vec![
+                split_entry("abcdef0123456789", "ab", 1, "hex-file"),
+                split_entry("1234567890abcdef", "other.txt", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+
+        let (_, file) = resolve_split_selector(&repo, "ab").unwrap();
+        assert!(matches!(file, covering::SplitScope::File(ref f) if f == "ab"));
+        let (_, named) = resolve_split_selector(&repo, "main:@other").unwrap();
+        assert!(matches!(named, covering::SplitScope::Segment(1)));
+        let (_, positioned) = resolve_split_selector(&repo, "other.txt:2").unwrap();
+        assert!(matches!(positioned, covering::SplitScope::Segment(1)));
+        let (_, hashed) = resolve_split_selector(&repo, "main:1234").unwrap();
+        assert!(matches!(hashed, covering::SplitScope::Segment(1)));
+
+        let malformed = resolve_split_selector(&repo, "main:other.txt:nope").unwrap_err();
+        assert!(malformed.to_string().contains("not a valid file:line"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn split_impact_discovery_covers_name_hash_source_and_target() {
+        let repo = temp_repo("split-impacts");
+        initialize_test_repo(&repo);
+        let content = "a\nb\n";
+        let segment = Segment {
+            file: "file.txt".into(),
+            a: 1,
+            b: 2,
+            label: "mapped".into(),
+            content: content.into(),
+        };
+        let hash = segment::write_object(&repo.objects_dir(), &segment).unwrap();
+        let covering = Covering {
+            name: "main".into(),
+            entries: vec![split_entry(&hash, "file.txt", 2, "whole")],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".into(),
+            source_covering: "main".into(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".into(),
+            links: vec![
+                Link {
+                    a: "@whole".into(),
+                    b: "@whole".into(),
+                    note: String::new(),
+                },
+                Link {
+                    a: hash.clone(),
+                    b: "@whole".into(),
+                    note: String::new(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+        let plan = covering::plan_split_many(
+            &repo,
+            &covering,
+            covering::SplitScope::Segment(0),
+            &[covering::Pos { line: 2, col: None }],
+        )
+        .unwrap();
+
+        let warnings = discover_split_warnings(&repo, &covering, &plan).unwrap();
+
+        assert_eq!(warnings.len(), 3);
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.contains("name endpoint"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.contains("hash endpoint"))
+                .count(),
+            1
+        );
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("source hash endpoint")));
+        assert!(warnings.iter().any(
+            |warning| warning.contains("target name endpoint") && warning.ends_with("to 1..1")
+        ));
         fs::remove_dir_all(repo.root).unwrap();
     }
 

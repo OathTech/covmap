@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
-#   init -> cover -> split -> merge -> connect -> link -> fsck
+#   init -> cover -> atomic multi-cut -> merge -> connect -> link -> fsck
 #   -> label -> drift after edit -> prune -> rename repair -> disconnect
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
@@ -45,41 +45,45 @@ hr "status (spec) — should report drift: clean"
 hr "ls -l (spec HEAD): two whole-file segments"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 
-# Refine widget.md by splitting at heading boundaries (lines 6, 10, 14, 18, 22, 26).
-# After each split the bottom segment is the one that needs to be split next.
-hr "refine widget.md by splitting at heading lines"
+# Refine widget.md atomically at every heading boundary. Cuts are deliberately
+# unsorted; output and covering order must still follow file position.
+hr "refine widget.md with one atomic multi-cut"
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'widget.md' | head -1 | cut -f1 )
 echo "  starting hash: $WIDGET_HASH"
+( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 26 10 18 6 22 14 )
 
-# Helper: split the segment of widget.md that currently contains <line>
-# at <line>, labelling the top + bottom.
-split_at() {
-  local cwd="$1" line="$2" lt="$3" lb="$4"
-  local h
-  # find the hash whose [a,b] range contains <line>
-  # $3 is "file:a..b" where a/b are line numbers (line-level segments
-  # have no ":col"). Parse the file before the first ':' and the line
-  # range around "..".
-  h=$( cd "$cwd" && "$COVMAP_BIN" ls -l | awk -F'\t' -v l="$line" '
-    {
-      loc=$3
-      ci=index(loc, ":")
-      file=substr(loc, 1, ci-1)
-      range=substr(loc, ci+1)
-      di=index(range, "..")
-      a=substr(range, 1, di-1) + 0
-      b=substr(range, di+2) + 0
-      if (file=="widget.md" && a<=l && l<=b) { print $1; exit }
-    }')
-  ( cd "$cwd" && "$COVMAP_BIN" split "main:$h" "$line" "$lt" "$lb" )
-}
+# Geometry and status metadata compose explicitly.
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:1  preamble )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:6  Counter )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:10 Increment )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:14 Decrement )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:18 Reset )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:22 Identity )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:26 Status )
 
-split_at "$WORK/spec"  6 "preamble"    "Counter"
-split_at "$WORK/spec" 10 "Counter"     "Increment"
-split_at "$WORK/spec" 14 "Increment"   "Decrement"
-split_at "$WORK/spec" 18 "Decrement"   "Reset"
-split_at "$WORK/spec" 22 "Reset"       "Identity"
-split_at "$WORK/spec" 26 "Identity"    "Status"
+hr "file-addressed existing cuts are idempotent and do not rewrite the ref"
+REF_INODE_BEFORE=$(ls -i "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+IDEMPOTENT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 10 14 22 )
+printf '%s\n' "$IDEMPOTENT_OUT"
+REF_INODE_AFTER=$(ls -i "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+[[ "$REF_INODE_BEFORE" == "$REF_INODE_AFTER" ]] \
+  || { echo "  FAIL: all-existing multi-cut rewrote the covering ref"; exit 1; }
+[[ $(printf '%s\n' "$IDEMPOTENT_OUT" | grep -c "already satisfied") == "3" ]] \
+  || { echo "  FAIL: existing cuts were not reported separately"; exit 1; }
+
+hr "legacy split labels are rejected atomically with a metadata hint"
+REF_HASH_BEFORE=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+if LEGACY_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 12 FormerTop 2>&1 ); then
+  echo "  FAIL: label-bearing legacy split unexpectedly succeeded"
+  exit 1
+fi
+REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+[[ "$REF_HASH_BEFORE" == "$REF_HASH_AFTER" ]] \
+  || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
+printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
+  || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
+[[ $(cat "$WORK/spec/.covmap/version") == "2" ]] \
+  || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
@@ -91,7 +95,9 @@ DEC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Decrement" | head -1 )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 # split it back at line 14
 H=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Inc+Dec" | head -1 )
-( cd "$WORK/spec" && "$COVMAP_BIN" split "main:$H" 14 "Increment" "Decrement" )
+( cd "$WORK/spec" && "$COVMAP_BIN" split "main:$H" 14 )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:10 Increment )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:14 Decrement )
 
 hr "grep 'increment' in spec"
 ( cd "$WORK/spec" && "$COVMAP_BIN" grep increment )
@@ -216,6 +222,26 @@ REPAIR_NOTE='literal $HOME, apostrophe '"'"', and `touch SHOULD_NOT_EXIST`'
 SECOND_REPAIR_NOTE='fan-out second link'
 ( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target "$REPAIR_NOTE" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two "$SECOND_REPAIR_NOTE" )
+
+hr "subdivision diagnoses name narrowing and broken hash endpoints"
+NAME_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:@audit-source 8 )
+printf '%s\n' "$NAME_SPLIT"
+printf '%s\n' "$NAME_SPLIT" | grep -qF "name endpoint '@audit-source' will narrow from 1..10 to 1..7" \
+  || { echo "  FAIL: named subdivision did not report its narrowed range"; exit 1; }
+[[ $(printf '%s\n' "$NAME_SPLIT" | grep -cF "name endpoint '@audit-source' will narrow") == "1" ]] \
+  || { echo "  FAIL: named subdivision repeated an identical fan-out warning"; exit 1; }
+printf '%s\n' "$NAME_SPLIT" | grep -qF "inbound connections stored in another repository cannot be discovered" \
+  || { echo "  FAIL: subdivision omitted the inbound-discovery limit"; exit 1; }
+
+STATUS_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:26 )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two "hash subdivision" )
+HASH_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md:26 28 )
+printf '%s\n' "$HASH_SPLIT"
+printf '%s\n' "$HASH_SPLIT" | grep -qF "hash endpoint '$STATUS_HASH' will become broken" \
+  || { echo "  FAIL: hash-addressed subdivision was not diagnosed"; exit 1; }
+PRUNE_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" prune self_audit )
+printf '%s\n' "$PRUNE_SPLIT" | grep -qF "prune: 1 link(s) dropped, 2 kept" \
+  || { echo "  FAIL: subdivision did not produce exactly one broken hash link"; exit 1; }
 
 run_repair_block() {
   local output="$1"

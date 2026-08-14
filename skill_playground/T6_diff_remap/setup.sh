@@ -13,13 +13,13 @@ set -euo pipefail
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 
-# Refine spec/api.md at lines 5, 9, 13 (the three `##` headings).
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'api.md' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  5 "preamble" "Create" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'api.md:5' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  9 "Create" "Read" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'api.md:9' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 13 "Read" "Delete" ) >/dev/null
+# Refine spec/api.md atomically at the three `##` headings, then label the
+# resulting sections explicitly.
+( cd spec && "$COVMAP_BIN" split main:api.md 5 9 13 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:1  preamble ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:5  Create   ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:9  Read     ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:13 Delete   ) >/dev/null
 
 # Name the Read and Delete segments and link them to the implementation.
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Read'   | head -1 )" read-ep   ) >/dev/null

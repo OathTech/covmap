@@ -28,7 +28,7 @@
 use crate::repo::Repo;
 use crate::segment::{self, Segment};
 use crate::store::atomic_write;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 
@@ -42,7 +42,7 @@ pub struct Pos {
     pub col: Option<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoveringEntry {
     pub hash: String,
     pub file: String,
@@ -258,6 +258,13 @@ fn start_key(p: Pos) -> (usize, usize) {
     (p.line, p.col.unwrap_or(1))
 }
 
+fn canonical_start(mut p: Pos) -> Pos {
+    if p.col == Some(1) {
+        p.col = None;
+    }
+    p
+}
+
 /// Equality of two *start* positions, treating `col = None` and
 /// `col = Some(1)` as the same point (first character of the line).
 pub fn same_start(x: Pos, y: Pos) -> bool {
@@ -274,10 +281,46 @@ pub fn file_end(n_lines: usize) -> Pos {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Covering {
     pub name: String,
     pub entries: Vec<CoveringEntry>,
+}
+
+/// Geometry-only partition validation shared by planning and `fsck`.
+/// Object existence and connection resolution are checked separately.
+pub fn partition_issues(c: &Covering) -> Vec<String> {
+    let mut issues = Vec::new();
+    let mut by_file: BTreeMap<&str, Vec<&CoveringEntry>> = BTreeMap::new();
+    for e in &c.entries {
+        by_file.entry(e.file.as_str()).or_default().push(e);
+    }
+    for (file, mut entries) in by_file {
+        entries.sort_by_key(|e| e.sort_key());
+        let mut expected = Pos { line: 1, col: None };
+        for e in entries {
+            let start = start_key(e.start_pos());
+            let end_line = e.end_pos().line;
+            let end_col = e.end_pos().col;
+            let empty = start.0 > end_line
+                || (start.0 == end_line && end_col.is_some_and(|col| start.1 > col));
+            if empty {
+                issues.push(format!(
+                    "file {file} has empty or reversed range {}",
+                    e.range()
+                ));
+            }
+            if !same_start(expected, e.start_pos()) {
+                issues.push(format!(
+                    "file {file} has gap or overlap before {} (expected start {})",
+                    e.range(),
+                    fmt_pos(expected)
+                ));
+            }
+            expected = successor_of_end(e.end_pos());
+        }
+    }
+    issues
 }
 
 impl Covering {
@@ -575,70 +618,60 @@ pub fn recut(repo: &Repo, c: &mut Covering, old_hash: &str) -> io::Result<String
     Ok(new_hash)
 }
 
-/// Split the segment with hash `old_hash` at position `(cut_line,
-/// cut_col)`. That position becomes the first character of the bottom
-/// segment; the top segment ends at the character immediately before
-/// it. `cut_col = None` means "the first character of `cut_line`", so
-/// the line-level split `a < cut_line <= b` is the special case of a
-/// `None` column. Both resulting segments must be non-empty.
-///
-/// The split is performed on the stored object content (not the file on
-/// disk), so `top_content || bot_content == content` exactly and the
-/// operation is well-defined even if the file has since drifted.
-pub fn split(
-    repo: &Repo,
-    c: &mut Covering,
-    old_hash: &str,
-    cut_line: usize,
-    cut_col: Option<usize>,
-    label_top: &str,
-    label_bot: &str,
-) -> io::Result<(String, String)> {
-    let idx = c
-        .entries
-        .iter()
-        .position(|e| e.hash == old_hash)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("hash '{old_hash}' not in covering '{}'", c.name),
-            )
-        })?;
-    let entry = c.entries[idx].clone();
+#[derive(Clone, Debug)]
+pub enum SplitScope {
+    Segment(usize),
+    File(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct SplitGroup {
+    pub original: CoveringEntry,
+    pub fragments: Vec<CoveringEntry>,
+    contents: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SplitPlan {
+    pub file: String,
+    pub groups: Vec<SplitGroup>,
+    pub existing_cuts: Vec<Pos>,
+    replacement: Covering,
+}
+
+impl SplitPlan {
+    pub fn is_noop(&self) -> bool {
+        self.groups.is_empty()
+    }
+}
+
+fn cut_offset(entry: &CoveringEntry, content: &str, cut: Pos) -> io::Result<usize> {
     let oob = || {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "split cut={} out of range for segment {}",
-                fmt_pos_field(cut_line, cut_col),
+                fmt_pos(cut),
                 entry.loc()
             ),
         )
     };
-    if cut_line < entry.a || cut_line > entry.b {
+    if !pos_in_segment(cut, entry) || same_start(cut, entry.start_pos()) {
         return Err(oob());
     }
-    let content = segment::read_object(&repo.objects_dir(), old_hash)?;
     let clines: Vec<&str> = content.split_inclusive('\n').collect();
-    let li = cut_line - entry.a; // index of the cut line within content
+    let li = cut.line - entry.a;
     if li >= clines.len() {
         return Err(oob());
     }
-    // File column at which the bottom segment begins (1 = first char).
-    let bcol = cut_col.unwrap_or(1);
-    if bcol < 1 {
-        return Err(oob());
-    }
-    // File column at which content line `li` begins: the first content
-    // line is offset by the segment's own start column; the rest start
-    // at column 1.
+    let bcol = cut.col.unwrap_or(1);
     let line_start_col = if li == 0 { entry.a_col.unwrap_or(1) } else { 1 };
     if bcol < line_start_col {
         return Err(oob());
     }
-    let skip = bcol - line_start_col; // chars to skip within content line `li`
+    let skip = bcol - line_start_col;
     let line_chars = segment::char_len(clines[li]);
-    if skip > line_chars {
+    if skip >= line_chars {
         return Err(oob());
     }
     let offset: usize = clines[..li]
@@ -646,73 +679,247 @@ pub fn split(
         .map(|l| segment::char_len(l))
         .sum::<usize>()
         + skip;
-    let total = segment::char_len(&content);
+    let total = segment::char_len(content);
     if offset == 0 || offset >= total {
-        // Empty top or empty bottom — nothing to split.
         return Err(oob());
     }
-    let top_content: String = content.chars().take(offset).collect();
-    let bot_content: String = content.chars().skip(offset).collect();
+    Ok(offset)
+}
 
-    // Boundary positions of the two halves. Bottom starts at the cut;
-    // the top ends just before it. A cut at column 1 means the top ends
-    // at the end of the previous line (canonical `None` end column).
-    let (bot_a, bot_a_col) = if bcol == 1 {
-        (cut_line, None)
+fn predecessor_of_start(p: Pos) -> Pos {
+    if p.col.unwrap_or(1) == 1 {
+        Pos {
+            line: p.line - 1,
+            col: None,
+        }
     } else {
-        (cut_line, Some(bcol))
-    };
-    let (top_b, top_b_col) = if bcol == 1 {
-        (cut_line - 1, None)
-    } else {
-        (cut_line, Some(bcol - 1))
+        Pos {
+            line: p.line,
+            col: Some(p.col.unwrap() - 1),
+        }
+    }
+}
+
+fn plan_segment_split(
+    entry: &CoveringEntry,
+    content: &str,
+    cuts: &[Pos],
+) -> io::Result<SplitGroup> {
+    let mut offsets = Vec::with_capacity(cuts.len());
+    for cut in cuts {
+        offsets.push(cut_offset(entry, content, *cut)?);
+    }
+    if offsets.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("split cuts are not strictly increasing in {}", entry.loc()),
+        ));
+    }
+
+    let mut starts = Vec::with_capacity(cuts.len() + 1);
+    starts.push(entry.start_pos());
+    starts.extend_from_slice(cuts);
+    let mut ends: Vec<Pos> = cuts.iter().map(|cut| predecessor_of_start(*cut)).collect();
+    ends.push(entry.end_pos());
+
+    let chars: Vec<char> = content.chars().collect();
+    let mut bounds = Vec::with_capacity(offsets.len() + 2);
+    bounds.push(0);
+    bounds.extend(offsets);
+    bounds.push(chars.len());
+
+    let mut fragments = Vec::with_capacity(starts.len());
+    let mut contents = Vec::with_capacity(starts.len());
+    for i in 0..starts.len() {
+        let fragment: String = chars[bounds[i]..bounds[i + 1]].iter().collect();
+        if fragment.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("split would create an empty fragment in {}", entry.loc()),
+            ));
+        }
+        let start = starts[i];
+        let end = ends[i];
+        fragments.push(CoveringEntry {
+            hash: segment::hash_of(&fragment),
+            file: entry.file.clone(),
+            a: start.line,
+            a_col: start.col,
+            b: end.line,
+            b_col: end.col,
+            label: "unknown".to_string(),
+            name: if i == 0 { entry.name.clone() } else { None },
+            message: if i == 0 { entry.message.clone() } else { None },
+        });
+        contents.push(fragment);
+    }
+    let reconstructed: String = contents.iter().map(String::as_str).collect();
+    if reconstructed != content {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("split fragments do not reconstruct {}", entry.loc()),
+        ));
+    }
+    Ok(SplitGroup {
+        original: entry.clone(),
+        fragments,
+        contents,
+    })
+}
+
+/// Build and validate an atomic multi-cut operation without writing objects or
+/// mutating the covering.
+pub fn plan_split_many(
+    repo: &Repo,
+    c: &Covering,
+    scope: SplitScope,
+    cuts: &[Pos],
+) -> io::Result<SplitPlan> {
+    if cuts.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "split needs at least one cut",
+        ));
+    }
+    let mut cuts: Vec<Pos> = cuts.iter().copied().map(canonical_start).collect();
+    cuts.sort_by_key(|p| start_key(*p));
+    for pair in cuts.windows(2) {
+        if same_start(pair[0], pair[1]) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("duplicate split cut '{}'", fmt_pos(pair[0])),
+            ));
+        }
+    }
+
+    let (file, selected_segment) = match scope {
+        SplitScope::Segment(idx) => {
+            let entry = c.entries.get(idx).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "selected segment no longer exists")
+            })?;
+            (entry.file.clone(), Some(idx))
+        }
+        SplitScope::File(file) => {
+            if !c.entries.iter().any(|e| e.file == file) {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("file '{file}' is not covered by '{}'", c.name),
+                ));
+            }
+            (file, None)
+        }
     };
 
-    let top = Segment {
-        file: entry.file.clone(),
-        a: entry.a,
-        b: top_b,
-        label: label_top.to_string(),
-        content: top_content,
+    let mut file_entries: Vec<(usize, &CoveringEntry)> = c
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.file == file)
+        .collect();
+    file_entries.sort_by_key(|(_, e)| e.sort_key());
+    let first = file_entries.first().unwrap().1;
+    let last = file_entries.last().unwrap().1;
+    let file_start = first.start_pos();
+    let file_end = successor_of_end(last.end_pos());
+
+    let mut by_index: BTreeMap<usize, Vec<Pos>> = BTreeMap::new();
+    let mut existing_cuts = Vec::new();
+    for cut in cuts {
+        if same_start(cut, file_start) || same_start(cut, file_end) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "split cut '{}' is a file boundary in '{file}'",
+                    fmt_pos(cut)
+                ),
+            ));
+        }
+        if let Some(idx) = selected_segment {
+            // A segment-scoped cut must be interior to that segment, so it
+            // cannot be an already-satisfied covering boundary.
+            by_index.entry(idx).or_default().push(cut);
+            continue;
+        }
+        if file_entries
+            .iter()
+            .any(|(_, e)| same_start(cut, e.start_pos()))
+        {
+            existing_cuts.push(cut);
+            continue;
+        }
+        let idx = file_entries
+            .iter()
+            .find(|(_, e)| pos_in_segment(cut, e))
+            .map(|(idx, _)| *idx)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "split cut '{}' is outside covered file '{file}'",
+                        fmt_pos(cut)
+                    ),
+                )
+            })?;
+        by_index.entry(idx).or_default().push(cut);
+    }
+
+    let mut groups_by_index = BTreeMap::new();
+    for (idx, segment_cuts) in &by_index {
+        let entry = &c.entries[*idx];
+        let content = segment::read_object(&repo.objects_dir(), &entry.hash)?;
+        groups_by_index.insert(*idx, plan_segment_split(entry, &content, segment_cuts)?);
+    }
+
+    let mut replacement_entries = Vec::new();
+    for (idx, entry) in c.entries.iter().enumerate() {
+        match groups_by_index.get(&idx) {
+            Some(group) => replacement_entries.extend(group.fragments.iter().cloned()),
+            None => replacement_entries.push(entry.clone()),
+        }
+    }
+    let groups = groups_by_index.into_values().collect();
+    let replacement = Covering {
+        name: c.name.clone(),
+        entries: replacement_entries,
     };
-    let bot = Segment {
-        file: entry.file.clone(),
-        a: bot_a,
-        b: entry.b,
-        label: label_bot.to_string(),
-        content: bot_content,
-    };
-    let top_hash = segment::write_object(&repo.objects_dir(), &top)?;
-    let bot_hash = segment::write_object(&repo.objects_dir(), &bot)?;
-    // Name/message propagation: the top keeps the original segment's name
-    // and message; the bottom is a fresh anonymous, un-messaged segment. (A
-    // connection to the named segment therefore follows the top half.)
-    c.entries[idx] = CoveringEntry {
-        hash: top_hash.clone(),
-        file: top.file,
-        a: top.a,
-        a_col: entry.a_col,
-        b: top_b,
-        b_col: top_b_col,
-        label: top.label,
-        name: entry.name.clone(),
-        message: entry.message.clone(),
-    };
-    c.entries.insert(
-        idx + 1,
-        CoveringEntry {
-            hash: bot_hash.clone(),
-            file: bot.file,
-            a: bot_a,
-            a_col: bot_a_col,
-            b: entry.b,
-            b_col: entry.b_col,
-            label: bot.label,
-            name: None,
-            message: None,
-        },
-    );
-    Ok((top_hash, bot_hash))
+    let issues = partition_issues(&replacement);
+    if !issues.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid split plan: {}", issues.join("; ")),
+        ));
+    }
+    Ok(SplitPlan {
+        file,
+        groups,
+        existing_cuts,
+        replacement,
+    })
+}
+
+/// Persist every planned object, then replace the in-memory covering. If an
+/// object write fails the caller's covering is unchanged.
+pub fn apply_split_plan(repo: &Repo, c: &mut Covering, plan: &SplitPlan) -> io::Result<()> {
+    for group in &plan.groups {
+        for (fragment, content) in group.fragments.iter().zip(&group.contents) {
+            let seg = Segment {
+                file: fragment.file.clone(),
+                a: fragment.a,
+                b: fragment.b,
+                label: fragment.label.clone(),
+                content: content.clone(),
+            };
+            let written = segment::write_object(&repo.objects_dir(), &seg)?;
+            if written != fragment.hash {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "split object hash changed while writing",
+                ));
+            }
+        }
+    }
+    *c = plan.replacement.clone();
+    Ok(())
 }
 
 /// Merge two adjacent segments in the same file into one. The
@@ -1157,6 +1364,25 @@ mod tests {
         }
     }
 
+    fn cut(line: usize, col: Option<usize>) -> Pos {
+        Pos { line, col }
+    }
+
+    fn ranges(c: &Covering) -> Vec<String> {
+        c.entries.iter().map(CoveringEntry::range).collect()
+    }
+
+    fn apply_test_split(
+        repo: &Repo,
+        c: &mut Covering,
+        scope: SplitScope,
+        cuts: &[Pos],
+    ) -> SplitPlan {
+        let plan = plan_split_many(repo, c, scope, cuts).unwrap();
+        apply_split_plan(repo, c, &plan).unwrap();
+        plan
+    }
+
     #[test]
     fn pos_field_roundtrip() {
         assert_eq!(parse_pos_field("7").unwrap(), (7, None));
@@ -1172,11 +1398,11 @@ mod tests {
             name: "main".into(),
             entries: vec![whole(&repo, "f.txt", "a\nb\nc\n", 3)],
         };
-        let old = c.entries[0].hash.clone();
-        split(&repo, &mut c, &old, 2, None, "top", "bot").unwrap();
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(2, None)]);
         assert_eq!(c.entries.len(), 2);
         assert_eq!(c.entries[0].range(), "1..1");
         assert_eq!(c.entries[1].range(), "2..3");
+        assert!(c.entries.iter().all(|e| e.label == "unknown"));
         let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
         let bot = segment::read_object(&repo.objects_dir(), &c.entries[1].hash).unwrap();
         assert_eq!(top, "a\n");
@@ -1210,9 +1436,8 @@ mod tests {
             name: "main".into(),
             entries: vec![whole(&repo, "f.txt", "hello world\n", 1)],
         };
-        let old = c.entries[0].hash.clone();
         // Bottom starts at col 7 ("world"); top ends at col 6.
-        split(&repo, &mut c, &old, 1, Some(7), "top", "bot").unwrap();
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(1, Some(7))]);
         assert_eq!(c.entries[0].range(), "1..1:6");
         assert_eq!(c.entries[1].range(), "1:7..1");
         let top = segment::read_object(&repo.objects_dir(), &c.entries[0].hash).unwrap();
@@ -1230,7 +1455,8 @@ mod tests {
             entries: vec![whole(&repo, "f.txt", "hello world\n", 1)],
         };
         let old = c.entries[0].hash.clone();
-        let (top, bot) = split(&repo, &mut c, &old, 1, Some(7), "t", "b").unwrap();
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(1, Some(7))]);
+        let (top, bot) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
         let merged = merge(&repo, &mut c, &top, &bot, "unknown").unwrap();
         assert_eq!(c.entries.len(), 1);
         // Merging the two halves restores the original content hash,
@@ -1243,13 +1469,159 @@ mod tests {
     #[test]
     fn split_rejects_empty_halves() {
         let repo = tmp_repo();
-        let mut c = Covering {
+        let c = Covering {
             name: "main".into(),
             entries: vec![whole(&repo, "f.txt", "abc\n", 1)],
         };
-        let old = c.entries[0].hash.clone();
         // Column 1 of the first line would make the top empty.
-        assert!(split(&repo, &mut c, &old, 1, Some(1), "t", "b").is_err());
+        assert!(plan_split_many(&repo, &c, SplitScope::Segment(0), &[cut(1, Some(1))]).is_err());
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn multi_cut_sorts_cuts_resets_labels_and_preserves_first_metadata() {
+        let repo = tmp_repo();
+        let mut original = whole(&repo, "f.txt", "a\nb\nc\nd\ne\n", 5);
+        original.label = "reviewed".into();
+        original.name = Some("whole".into());
+        original.message = Some("why whole".into());
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![original],
+        };
+
+        let plan = apply_test_split(
+            &repo,
+            &mut c,
+            SplitScope::Segment(0),
+            &[cut(4, None), cut(2, None)],
+        );
+
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(ranges(&c), ["1..1", "2..3", "4..5"]);
+        assert!(c.entries.iter().all(|e| e.label == "unknown"));
+        assert_eq!(c.entries[0].name.as_deref(), Some("whole"));
+        assert_eq!(c.entries[0].message.as_deref(), Some("why whole"));
+        assert!(c.entries[1..].iter().all(|e| e.name.is_none()));
+        assert!(c.entries[1..].iter().all(|e| e.message.is_none()));
+        let reconstructed: String = c
+            .entries
+            .iter()
+            .map(|e| segment::read_object(&repo.objects_dir(), &e.hash).unwrap())
+            .collect();
+        assert_eq!(reconstructed, "a\nb\nc\nd\ne\n");
+        assert!(partition_issues(&c).is_empty());
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn file_multi_cut_crosses_segments_and_reports_existing_boundaries() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "a\nb\nc\nd\ne\nf\n", 6)],
+        };
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(4, None)]);
+
+        let plan = apply_test_split(
+            &repo,
+            &mut c,
+            SplitScope::File("f.txt".into()),
+            &[cut(5, None), cut(4, None), cut(2, None)],
+        );
+
+        assert_eq!(plan.groups.len(), 2);
+        assert_eq!(plan.existing_cuts.len(), 1);
+        assert_eq!(plan.existing_cuts[0], cut(4, None));
+        assert_eq!(ranges(&c), ["1..1", "2..3", "4..4", "5..6"]);
+
+        let before = c.clone();
+        let all_existing = plan_split_many(
+            &repo,
+            &c,
+            SplitScope::File("f.txt".into()),
+            &[cut(2, None), cut(4, None), cut(5, Some(1))],
+        )
+        .unwrap();
+        assert!(all_existing.is_noop());
+        assert_eq!(all_existing.existing_cuts.len(), 3);
+        apply_split_plan(&repo, &mut c, &all_existing).unwrap();
+        assert_eq!(c, before);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn invalid_multi_cut_plans_leave_the_covering_unchanged() {
+        let repo = tmp_repo();
+        let c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "a\nb\nc\nd\n", 4)],
+        };
+        let before = c.clone();
+
+        for cuts in [
+            vec![cut(2, None), cut(2, Some(1))],
+            vec![cut(1, None)],
+            vec![cut(5, None)],
+        ] {
+            assert!(plan_split_many(&repo, &c, SplitScope::File("f.txt".into()), &cuts).is_err());
+            assert_eq!(c, before);
+        }
+        assert!(plan_split_many(
+            &repo,
+            &c,
+            SplitScope::Segment(0),
+            &[cut(2, None), cut(5, None)]
+        )
+        .is_err());
+        assert_eq!(c, before);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn object_write_failure_does_not_mutate_the_covering() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "a\nb\nc\n", 3)],
+        };
+        let before = c.clone();
+        let plan = plan_split_many(&repo, &c, SplitScope::Segment(0), &[cut(2, None)]).unwrap();
+        let objects = repo.objects_dir();
+        let backup = repo.dot().join("objects-backup");
+        std::fs::rename(&objects, &backup).unwrap();
+        std::fs::write(&objects, "not a directory").unwrap();
+
+        assert!(apply_split_plan(&repo, &mut c, &plan).is_err());
+        assert_eq!(c, before);
+
+        std::fs::remove_file(&objects).unwrap();
+        std::fs::rename(backup, objects).unwrap();
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn multi_cut_handles_multiple_character_boundaries() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "abçdefgh\n", 1)],
+        };
+
+        apply_test_split(
+            &repo,
+            &mut c,
+            SplitScope::Segment(0),
+            &[cut(1, Some(7)), cut(1, Some(3))],
+        );
+
+        let contents: Vec<String> = c
+            .entries
+            .iter()
+            .map(|e| segment::read_object(&repo.objects_dir(), &e.hash).unwrap())
+            .collect();
+        assert_eq!(contents, ["ab", "çdef", "gh\n"]);
+        assert_eq!(ranges(&c), ["1..1:2", "1:3..1:6", "1:7..1"]);
         std::fs::remove_dir_all(&repo.root).ok();
     }
 
@@ -1339,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn split_keeps_name_on_top_bottom_anonymous() {
+    fn split_keeps_name_on_first_fragment_and_later_fragments_anonymous() {
         let repo = tmp_repo();
         let mut e = whole(&repo, "f.txt", "a\nb\nc\n", 3);
         e.name = Some("intro".into());
@@ -1347,8 +1719,7 @@ mod tests {
             name: "main".into(),
             entries: vec![e],
         };
-        let old = c.entries[0].hash.clone();
-        split(&repo, &mut c, &old, 2, None, "top", "bot").unwrap();
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(2, None)]);
         assert_eq!(c.entries[0].name.as_deref(), Some("intro"));
         assert_eq!(c.entries[1].name, None);
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1363,9 +1734,10 @@ mod tests {
             name: "main".into(),
             entries: vec![e],
         };
-        let old = c.entries[0].hash.clone();
-        // split drops the name to the top; clear it, name the bottom, merge.
-        let (top, bot) = split(&repo, &mut c, &old, 2, None, "t", "b").unwrap();
+        // Split keeps the name on the first fragment; clear it, name the
+        // second fragment, then merge.
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(2, None)]);
+        let (top, bot) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
         c.entries[0].name = None;
         c.entries[1].name = Some("tail".into());
         let _ = merge(&repo, &mut c, &top, &bot, "m").unwrap();
@@ -1461,7 +1833,7 @@ mod tests {
     }
 
     #[test]
-    fn split_keeps_message_on_top_and_merge_keeps_earlier() {
+    fn split_keeps_message_on_first_fragment_and_merge_keeps_earlier() {
         let repo = tmp_repo();
         let mut e = whole(&repo, "f.txt", "a\nb\nc\nd\n", 4);
         e.message = Some("whole-file rationale".into());
@@ -1469,15 +1841,14 @@ mod tests {
             name: "main".into(),
             entries: vec![e],
         };
-        let old = c.entries[0].hash.clone();
-        // Split: the top keeps the message; the bottom is un-messaged.
-        split(&repo, &mut c, &old, 3, None, "top", "bot").unwrap();
+        // Split: the first fragment keeps the message; the second has none.
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(3, None)]);
         assert_eq!(
             c.entries[0].message.as_deref(),
             Some("whole-file rationale")
         );
         assert_eq!(c.entries[1].message, None);
-        // Give the bottom a message, then merge: the earlier (top) wins.
+        // Give the second fragment a message, then merge: the earlier wins.
         set_message(&mut c, 1, Some("bottom rationale"));
         let (h1, h2) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
         merge(&repo, &mut c, &h1, &h2, "merged").unwrap();

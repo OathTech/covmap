@@ -16,7 +16,7 @@ is a lens on the same tool, and a change is not finished until all six agree.
 | a | **Theory** | `theory/main.tex` | The formal model — definitions, invariants, propositions. The ground truth of *what covmap means*. |
 | b | **Requirements** | `REQUIREMENTS.md` | Coarse capabilities the implementation must provide, each derived from and mapped to the theory (via the `reqmap` connection in this repo's own `.covmap/`). |
 | c | **Implementation** | `src/` (incl. `#[cfg(test)]` unit tests) | The Rust CLI and its unit tests. *What covmap does.* |
-| d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T10). *How to drive covmap.* |
+| d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T11). *How to drive covmap.* |
 | e | **Tutorial** | `tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh` | A guided end-to-end tour; the script is the source of truth and doubles as an integration test. *How covmap feels in practice.* |
 | f | **Glossary** | `GLOSSARY.md` | The shared vocabulary across the other artifacts, with cross-references to primary definitions. *What covmap's terms mean consistently.* |
 
@@ -80,8 +80,10 @@ cargo test --all          # unit tests (artifact c)
 ./smoke_test/run.sh       # end-to-end shell test
 ```
 
-Not yet in CI but part of the contract — run them by hand when your
-change touches the skill or tutorial:
+Not yet in CI but part of the contract. Run the tutorial whenever a change
+touches it or alters command behavior, help, or output that it exercises. Run
+the affected playground tasks under the same rule, including changes that
+start outside `SKILL.md` or `skill_playground/`:
 
 ```sh
 ./tutorial/run_tutorial.sh                 # integration test for artifact e
@@ -107,3 +109,5 @@ A change is complete when:
 - [ ] All gates above pass, including the by-hand ones relevant to the
       change.
 - [ ] `covmap fsck` on this repo's own `.covmap/` is clean.
+- [ ] For CIP-backed work, the proposal and index move from Accepted to Landed
+      only in the final landing commit, not during implementation or review.

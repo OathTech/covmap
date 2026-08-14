@@ -1,6 +1,6 @@
 # Atomic multi-cut refinement
 
-Stage: **Draft**
+Stage: **Accepted**
 
 ## Relationship to other CIPs
 
@@ -233,8 +233,8 @@ endpoints affected by each subdivided segment:
   connection and side.
 - An unlinked segment produces no connection warning.
 
-Inbound connections stored in another repository cannot be discovered. Every
-warning states that limit.
+Inbound connections stored in another repository cannot be discovered. When
+one or more warnings are emitted, one accompanying note states that limit.
 
 Moving or dropping the inherited name remains explicit composition with
 `name`. Changing the name token and repairing stale stored endpoints is

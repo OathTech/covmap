@@ -40,6 +40,12 @@ segments can be merged.
 Referable only by its segment hash, so any content edit invalidates
 references to it. Contrast **named segment**.
 
+**Atomic multi-cut** **[T][R][S]** — one `split` operation that inserts a
+finite set of interior line or character boundaries into one segment or one
+covered file. All cuts validate before any covering-ref change, and the ref is
+replaced once. New fragments are labelled `unknown`; metadata is applied
+separately. Repeating an all-existing file cut set is an idempotent no-op.
+
 **Bounded drill-down** **[T][R][S]** — the intended inspection access
 pattern (req23): understanding one **region** of a mapping takes a short,
 bounded sequence of commands (orient → narrow → understand) whose final step
@@ -257,10 +263,10 @@ why it is (not) mapped* (`req22`). Set with `covmap annotate … -m`, shown by
 `show`/`ls -l`/`html`. Like a **segment name** it is covering-local metadata
 and **not** part of the **segment hash**, so editing it never touches the
 object store or causes **drift**, and it travels with the segment across
-**split** (top keeps it) / **merge** (surviving side) / **recut** /
-**diff-remap**. Distinct from the two **note** senses: a segment message is
-about *the segment itself*, a **link**'s note is about a *mapping*, and an
-iterator **task**'s note is about *one sweep step*.
+**split** (first fragment keeps it) / **merge** (surviving side) /
+**recut** / **diff-remap**. Distinct from the two **note** senses: a segment
+message is about *the segment itself*, a **link**'s note is about a *mapping*,
+and an iterator **task**'s note is about *one sweep step*.
 
 **Segment name** **[T][R][S]** — an optional, stable, human-meaningful
 string attached to a segment (e.g. `intro`, `req-1`), unique within its
@@ -393,9 +399,11 @@ identity** — so a connection can reference it by `@name` and survive
 content edits.
 
 **Split / Merge** **[T][S]** — the two manual refinement operations.
-`split` cuts one segment at a position into a top and a bottom; `merge`
-fuses two adjacent segments. Names follow rules: split keeps the name on
-the top segment; merge keeps the surviving (earlier, if both) name.
+`split` atomically inserts one or more interior cuts into a segment or covered
+file; `merge` removes one cut by fusing two adjacent segments. Every fragment
+created by split is `unknown`; the first keeps the original name and message,
+while later fragments are anonymous and un-messaged. Merge keeps the surviving
+(earlier, if both) name.
 
 **Successor (of an end position)** **[T][S]** — the character position
 immediately after a segment's end: the next line's start when the end

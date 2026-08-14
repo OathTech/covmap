@@ -11,13 +11,14 @@ set -euo pipefail
 
 ( cd spec && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 
-# The `##` headings sit at lines 5, 10, 15, 20. Split top-down; after each
-# split the bottom piece is the one to split next. Address positionally
-# (main:api.md:<line>) so we never touch a hash.
-( cd spec && "$COVMAP_BIN" split main:api.md:1   5 preamble  get-widgets    ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:5  10 get-widgets post-widgets  ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:10 15 post-widgets delete-widget ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:15 20 delete-widget healthz      ) >/dev/null
+# The `##` headings sit at lines 5, 10, 15, 20. Insert every boundary
+# atomically, then apply labels explicitly.
+( cd spec && "$COVMAP_BIN" split main:api.md 5 10 15 20 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:1  preamble      ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:5  get-widgets   ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:10 post-widgets  ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:15 delete-widget ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:20 healthz       ) >/dev/null
 
 # Name the four endpoint segments (the preamble stays anonymous). A name is
 # a stable, readable handle a task carries into the worklist.

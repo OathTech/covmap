@@ -11,10 +11,12 @@ set -euo pipefail
 
 # --- spec: preamble + 4 endpoints (headings at 5, 11, 18, 25) -----------
 ( cd spec && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:1   5  preamble get-widgets    ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:5  11  get-widgets post-widgets ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:11 18  post-widgets del-widget  ) >/dev/null
-( cd spec && "$COVMAP_BIN" split main:api.md:18 25  del-widget healthz       ) >/dev/null
+( cd spec && "$COVMAP_BIN" split main:api.md 5 11 18 25 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:1  preamble     ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:5  get-widgets  ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:11 post-widgets ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:18 del-widget   ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:api.md:25 healthz      ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name main:api.md:5  spec-get     ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name main:api.md:11 spec-post    ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name main:api.md:18 spec-delete  ) >/dev/null
@@ -26,10 +28,12 @@ set -euo pipefail
 
 # --- impl: preamble + 4 handlers (fns at 3, 8, 19, 30) ------------------
 ( cd impl_rs && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
-( cd impl_rs && "$COVMAP_BIN" split main:handlers.rs:1   3  preamble list-fn     ) >/dev/null
-( cd impl_rs && "$COVMAP_BIN" split main:handlers.rs:3   8  list-fn create-fn    ) >/dev/null
-( cd impl_rs && "$COVMAP_BIN" split main:handlers.rs:8  19  create-fn delete-fn  ) >/dev/null
-( cd impl_rs && "$COVMAP_BIN" split main:handlers.rs:19 30  delete-fn health-fn  ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" split main:handlers.rs 3 8 19 30 ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" label main:handlers.rs:1  preamble  ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" label main:handlers.rs:3  list-fn   ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" label main:handlers.rs:8  create-fn ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" label main:handlers.rs:19 delete-fn ) >/dev/null
+( cd impl_rs && "$COVMAP_BIN" label main:handlers.rs:30 health-fn ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" name main:handlers.rs:3  impl-list   ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" name main:handlers.rs:8  impl-create ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" name main:handlers.rs:19 impl-delete ) >/dev/null

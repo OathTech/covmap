@@ -95,6 +95,8 @@ There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
 every readable UTF-8 file it has not yet covered. You refine the
 covering with `covmap split`, `covmap merge`, and `covmap recut`.
+`split` inserts one or more cut positions atomically; labels, names,
+and messages are applied afterward as separate metadata operations.
 
 For the formal model, see [`theory/main.tex`](theory/main.tex).
 
@@ -111,15 +113,18 @@ covmap status
 # covering main: segments=1 lines=42
 #   drift: clean
 
-# 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+),
-#    then name the Body segment so links to it survive content edits.
-covmap ls -l                          # find the spec.md hash
-# 7f0a8e83a07ef76d  unknown  spec.md:1..42  42
-covmap split main:7f0a8e83 10 "Intro" "Body"
-# split 7f0a8e83a07ef76d -> 838a4a248219f38c + 8c39d43caabe6fc6
+# 2. Refine: atomically split spec.md into Intro (lines 1-9) and Body
+#    (lines 10+), then apply metadata explicitly. Every new fragment
+#    starts as unknown.
+covmap split main:spec.md 10
+# split 2f69d21281b3c270 spec.md:1..42 ->
+#   3daa6fe23aac4c3d  unknown  spec.md:1..9
+#   be498b0b3d8e19b2  unknown  spec.md:10..42
+covmap label main:spec.md:1 Intro
+covmap label main:spec.md:10 Body
 # A cut can also fall mid-line: `covmap split main:<h> 10:5` begins the
-# bottom segment at character 5 of line 10 (1-indexed, inclusive).
-covmap name main:8c39d43c body        # a stable @name handle for the Body
+# following fragment at character 5 of line 10 (1-indexed, inclusive).
+covmap name main:spec.md:10 body       # a stable @name handle for the Body
 
 # 3. Cover the implementation side.
 cd ../impl/
@@ -161,7 +166,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
 | `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. A rename lists exact local `@old` endpoints and emits a safe link-then-unlink repair when possible; it never rewrites connections implicitly. |
 | `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
-| `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
+| `split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert one or more line or character cuts. New fragments are `unknown`; apply metadata separately. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
@@ -177,6 +182,23 @@ Run `covmap help` for the full reference. Top-level porcelain:
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
 `fsck [--broken-links]`.
+
+### Split grammar migration
+
+`split` no longer accepts optional top/bottom labels. Every operand after the
+selector is a `line[:column]` cut, and one file-addressed command may insert
+several cuts atomically:
+
+```sh
+covmap split main:spec.md 10 24 41
+covmap label main:spec.md:10 reviewed
+```
+
+An alphabetic former label now fails with a hint to use `label`, `name`, or
+`annotate`. A position-shaped former label such as `42` is indistinguishable
+from a cut and is therefore treated as one. This is a command-grammar change
+only: covering refs, objects, connections, and repository format v2 are
+unchanged.
 
 `covmap html` renders the whole map as a static, self-contained page:
 

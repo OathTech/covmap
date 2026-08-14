@@ -88,7 +88,7 @@ formal model but has no CLI surface yet. Each step is annotated with the
 requirements it exercises. For the agent-facing reference, see
 [`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
 [`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T10).
+in the scenarios from tasks T1–T11).
 
 ---
 
@@ -158,28 +158,30 @@ drift.
 ## 3. Refine into one segment per section  (req5, req8)
 
 There are no automatic segmentation rules — you refine by hand with
-`split`. You point at the segment to cut by **position**, not by hash:
+`split`. A file selector such as `main:queue.md` inserts several cuts
+atomically against the covering state present when the command starts.
+You can instead point at one segment by hash, `@name`, or position:
 `main:queue.md:5` means *"the segment of `queue.md` that covers line 5"*.
-Exactly one segment covers any given line, so this address is
-unambiguous — and, unlike a hash, it never changes if the content or the
-hashing does. (You can still use a hash prefix or an `@name`; position
-is just the friendliest handle while you're reading the file.)
+Exactly one segment covers any given position.
 
 The `##` headings sit at lines 5, 10, 14 (the Enqueue body wraps onto
 two lines, so the sections are *not* uniformly sized — read the line
-numbers off the file, don't assume them). `split`'s second argument is
-the line to cut at; the top keeps the first label, the bottom gets the
-second:
+numbers off the file, don't assume them). Give those starts as one cut
+set. The deliberately unsorted operands demonstrate that covmap applies
+them in file order and replaces the covering ref once:
 
 ```sh
-covmap split main:queue.md:1  5 preamble Enqueue   # cut the whole file at line 5
-covmap split main:queue.md:5  10 Enqueue Dequeue   # cut the 5.. segment at line 10
-covmap split main:queue.md:10 14 Dequeue Size      # cut the 10.. segment at line 14
+covmap split main:queue.md 14 5 10
+covmap label main:queue.md:1  preamble
+covmap label main:queue.md:5  Enqueue
+covmap label main:queue.md:10 Dequeue
+covmap label main:queue.md:14 Size
 covmap ls -l
 ```
 
-Each address names a *current* segment (`:1` the whole file, then `:5`
-and `:10` the growing bottom piece), and the cut line follows. Result:
+`split` changes geometry only: all resulting fragments begin
+`unknown`. `label`, `name`, and `annotate` compose metadata explicitly
+afterward. Result:
 
 ```
 preamble	queue.md:1..4	4	-
@@ -199,7 +201,9 @@ line 10:
 
 ```sh
 covmap merge main:queue.md:5 main:queue.md:10 "Enq+Deq"
-covmap split main:queue.md:5 10 Enqueue Dequeue
+covmap split main:queue.md:5 10
+covmap label main:queue.md:5 Enqueue
+covmap label main:queue.md:10 Dequeue
 ```
 
 `merge` requires the two segments to be adjacent; `split` puts them back.
@@ -221,9 +225,13 @@ QueueFull line is on its own. This time we'll **name** that line
 you're working on:
 
 ```sh
-covmap split main:errors.md:3 3 head qf-line   # the QueueFull line is now its own segment
+covmap split main:errors.md 3                  # the QueueFull line is now its own segment
+covmap label main:errors.md:1 head
+covmap label main:errors.md:3 qf-line
 covmap name  main:errors.md:3 qf-line          # give it a stable name
-covmap split main:@qf-line 3:17 QueueFull-code QueueFull-meaning
+covmap split main:@qf-line 3:17
+covmap label main:@qf-line QueueFull-code
+covmap label main:errors.md:3:17 QueueFull-meaning
 covmap ls -l
 ```
 
@@ -236,12 +244,14 @@ QueueFull-code	  errors.md:3..3:16	1	@qf-line
 QueueFull-meaning errors.md:3:17..4	2	-
 ```
 
-Two things to notice. The locations `errors.md:3..3:16` and
+Three things to notice. The locations `errors.md:3..3:16` and
 `errors.md:3:17..4` are character-precise — the cut is between columns
-16 and 17 of line 3. And on a split **the name stays with the top
-half** (`QueueFull-code` kept `@qf-line`); the bottom is anonymous. If
-you wanted the name on the meaning clause instead, just re-`name` it —
-which is exactly what the next step does with proper names.
+16 and 17 of line 3. Both fragments initially became `unknown`, and the
+labels were applied separately. On a split **the name and message stay
+with the first fragment** (`QueueFull-code` kept `@qf-line`); later
+fragments are anonymous and un-messaged. If you wanted the name on the
+meaning clause instead, just re-`name` it — which is exactly what the
+next step does with proper names.
 
 ## 6. Label a segment  (req4)
 
@@ -683,7 +693,7 @@ the List / Source views of HEAD's covering.
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
 | status, ls (metrics) | 2, 10 | req12, req20 |
-| split (line + character) | 3, 5 | req5, req8 |
+| atomic multi-cut (line + character) | 3, 5 | req4, req5, req8 |
 | merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |
 | annotate (segment message) | 8 | req22 |

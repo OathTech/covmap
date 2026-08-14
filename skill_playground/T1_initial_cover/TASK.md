@@ -21,9 +21,10 @@
    one whole-file segment labelled `unknown` for `stack.md`.
 2. From `impl_rs/`, run `covmap init` and `covmap cover`. Same: one
    whole-file segment for `stack.rs`.
-3. In `spec/`, refine `stack.md` by repeatedly invoking
-   `covmap split main:<hash> <line> <label_top> <label_bot>` at each
-   `##` heading. The `##` headings are at lines 5, 10, 15, 20, 24.
+3. In `spec/`, refine `stack.md` atomically with
+   `covmap split main:stack.md 5 10 15 20 24`, then use `covmap label`
+   separately if descriptive status labels are useful. The cuts may be
+   supplied in any order.
 4. Run `covmap status` and report the final segment count.
 5. Do **not** create connections yet — the user only asked for setup
    and refinement.

@@ -34,8 +34,9 @@
 2. Find the column where the normative sentence begins on line 7
    (the `I` of "It must be a power of two…"). It is column 40.
 3. Split at that character position:
-   `covmap split main:<Capacity_hash> 7:40 "Capacity" "PowerOfTwo"`.
-   The bottom segment now begins mid-line at character 40.
+   `covmap split main:<Capacity_hash> 7:40`, then label the two fragments
+   separately with `covmap label`. The following fragment now begins mid-line
+   at character 40.
 4. If the new segment still trails into the blank line 8, split again
    at line 8 to leave the clause (`buffer.md:7:40..7`) on its own.
    Confirm with `covmap show` that the segment's content is exactly
@@ -48,9 +49,8 @@
 ## Notes on character positions
 
 - Columns are 1-indexed and inclusive. In `covmap split`, the
-  `<line>:<col>` argument names the **first character of the new
-  bottom segment**; the top segment ends at the character just before
-  it.
+  `<line>:<col>` argument names the **first character of the following
+  fragment**; the preceding fragment ends at the character just before it.
 - A range prints as `file:a..b`; a character column appears only when
   set, e.g. `buffer.md:7:40..7` (from column 40 of line 7 through the
   end of line 7).

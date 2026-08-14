@@ -1,15 +1,15 @@
 # Developing covmap
 
 This document is for anyone — human or agent — changing covmap. It
-describes the one rule that governs how the project evolves: **the five
+describes the one rule that governs how the project evolves: **the six
 artifacts must stay consistent with each other.** Read the *Consistency
 contract* before you touch anything.
 
-## The five artifacts
+## The six artifacts
 
-covmap is described in five places, at decreasing levels of abstraction.
-Each is a lens on the same tool; a change is not finished until all five
-agree.
+covmap is described in six places. The first five move from formal model
+to practical use; the glossary is the cross-cutting vocabulary index. Each
+is a lens on the same tool, and a change is not finished until all six agree.
 
 | # | Artifact | Files | Role |
 |---|----------|-------|------|
@@ -18,19 +18,19 @@ agree.
 | c | **Implementation** | `src/` (incl. `#[cfg(test)]` unit tests) | The Rust CLI and its unit tests. *What covmap does.* |
 | d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T8). *How to drive covmap.* |
 | e | **Tutorial** | `tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh` | A guided end-to-end tour; the script is the source of truth and doubles as an integration test. *How covmap feels in practice.* |
-
-The `GLOSSARY.md` cross-references all five and is a good map of the
-vocabulary; keep it in sync too when you rename a concept.
+| f | **Glossary** | `GLOSSARY.md` | The shared vocabulary across the other artifacts, with cross-references to primary definitions. *What covmap's terms mean consistently.* |
 
 ## Consistency contract
 
-> **A change to any one artifact must be reconciled across all five
+> **A change to any one artifact must be reconciled across all six
 > before it lands.**
 
-The artifacts form a dependency order — **a → b → c → d → e** — but
-changes originate anywhere (a bug fix starts in `c`; a new idea may start
-in `a`). Wherever a change starts, propagate it in that order so the
-downstream layers rest on a settled definition.
+The artifacts form a dependency order — **a → b → c → d → e → f**.
+Semantic changes can originate in any of `a`–`e` (a bug fix starts in `c`;
+a new idea may start in `a`), while `f` is downstream-only: it records
+vocabulary settled by the preceding artifacts rather than defining it.
+Wherever a change starts, propagate it in that order so the downstream
+layers rest on a settled definition.
 
 ### Propagation by change type
 
@@ -44,15 +44,18 @@ downstream layers rest on a settled definition.
    `skill_playground/` task if it introduces an agent-visible operation.
 5. **Tutorial** — add a step to `run_tutorial.sh` (with an assertion) and
    narrate it in `TUTORIAL.md`.
+6. **Glossary** — add or amend entries for the capability's concepts and
+   cross-reference their primary definitions.
 
 **Behavior change** (existing capability behaves differently)
 - Reconcile the theory wording, the affected `req`, the code + unit
   tests, any `SKILL.md`/playground step that assumed the old behavior,
-  and the tutorial narration + assertions. Re-run every gate below.
+  the tutorial narration + assertions, and affected glossary entries.
+  Re-run every gate below.
 
 **Rename / vocabulary change**
-- Update the term across all five artifacts *and* `GLOSSARY.md` and
-  `README.md`. Check CLI help strings (`src/cli.rs`), on-disk ref
+- Update the term across all six artifacts and `README.md`. Check CLI
+  help strings (`src/cli.rs`), on-disk ref
   comments, and playground `grade.sh`/`setup.sh` fixtures for the old
   name. Search the whole tree: `git grep -n '<old-term>'`.
 
@@ -98,9 +101,9 @@ covmap fsck              # partitions valid, every reqmap endpoint resolves
 
 A change is complete when:
 
-- [ ] All five artifacts reflect it (or you have consciously decided one
+- [ ] All six artifacts reflect it (or you have consciously decided one
       is out of scope — say so in the commit message).
-- [ ] `GLOSSARY.md` and `README.md` reflect any vocabulary/format change.
+- [ ] `README.md` reflects any vocabulary/format change.
 - [ ] All gates above pass, including the by-hand ones relevant to the
       change.
 - [ ] `covmap fsck` on this repo's own `.covmap/` is clean.

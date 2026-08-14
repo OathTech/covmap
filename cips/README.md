@@ -14,17 +14,17 @@ its own review, or touches the model rather than just the implementation.
 
 A cip is **not** an implemented feature. It is a design under discussion or
 accepted-but-not-yet-built. Landing the feature it describes is a separate step
-governed by the five-artifact consistency contract in
+governed by the six-artifact consistency contract in
 [`../DEVELOPER.md`](../DEVELOPER.md): a change is not done until it is reconciled
-across theory, requirements, implementation, skill, and tutorial. Each cip
-should end with a **landing checklist** naming that fallout, so the gap between
-"design accepted" and "feature shipped" is explicit.
+across theory, requirements, implementation, skill, tutorial, and glossary.
+Each cip should end with a **landing checklist** naming that fallout, so the
+gap between "design accepted" and "feature shipped" is explicit.
 
 Rough stages a proposal moves through:
 
 1. **Draft** — under active design; the API and model are still changing.
 2. **Accepted** — the design is settled and ready to implement.
-3. **Landed** — the feature has been built and reconciled across all five
+3. **Landed** — the feature has been built and reconciled across all six
    artifacts; the cip stays as the historical design record.
 
 ## Naming
@@ -52,5 +52,5 @@ Aim for clear and concise; a cip is a spec, not an essay. A good one covers:
 - **Commands / API** — the exact surface, with signatures.
 - **Invariants** — what must always hold.
 - **Use cases** — concrete workflows that exercise the API.
-- **Landing checklist** — the five-artifact reconciliation the feature will
+- **Landing checklist** — the six-artifact reconciliation the feature will
   require (see [`../DEVELOPER.md`](../DEVELOPER.md)).

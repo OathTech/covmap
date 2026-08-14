@@ -139,10 +139,10 @@ The iterator never mutates segments or coverings — it only records position an
 per-task state over a frozen snapshot, so it composes cleanly with every
 existing covmap operation.
 
-## Landing checklist (five-artifact consistency)
+## Landing checklist (six-artifact consistency)
 
 Per `DEVELOPER.md`, this is a **new capability** and is not done until it is
-reconciled across all five artifacts (a→b→c→d→e):
+reconciled across all six artifacts (a→b→c→d→e→f):
 
 - **Theory** (`theory/main.tex`): define an iterator as a total order over a
   covering's (optionally label-filtered) segments plus a state map

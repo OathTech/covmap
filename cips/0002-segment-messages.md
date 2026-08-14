@@ -141,7 +141,7 @@ surfaced, read-only, by existing inspection commands:
   subtle boundary decision and the alternatives rejected — the kind of thing
   that otherwise lives only in a commit message or a reviewer's head.
 
-## Landing checklist (five-artifact consistency)
+## Landing checklist (six-artifact consistency)
 
 Per `DEVELOPER.md`, this is a **new capability**, not done until reconciled
 across the artifacts:

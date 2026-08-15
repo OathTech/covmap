@@ -348,12 +348,24 @@ run_repair_block "$TARGET_RENAME"
 
 [[ ! -e "$WORK/spec/SHOULD_NOT_EXIST" ]] \
   || { echo "  FAIL: repair note syntax was executed by the shell"; exit 1; }
-ACTUAL_REPAIR_NOTE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit \
-  | grep $'^@audit-source-next\\t@audit-target-next\\t' | cut -f3- )
+
+link_note() {
+  local source="$1" target="$2"
+  awk -F '\t' -v source="$source" -v target="$target" '
+    $1 == source && $2 == target {
+      print substr($0, length($1) + length($2) + 3)
+      exit
+    }
+  '
+}
+
+SELF_AUDIT_LINKS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit )
+ACTUAL_REPAIR_NOTE=$(printf '%s\n' "$SELF_AUDIT_LINKS" \
+  | link_note @audit-source-next @audit-target-next)
 [[ "$ACTUAL_REPAIR_NOTE" == "$REPAIR_NOTE" ]] \
   || { echo "  FAIL: repair changed the link note"; exit 1; }
-ACTUAL_SECOND_NOTE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit \
-  | grep $'^@audit-source-next\\t@audit-target-two\\t' | cut -f3- )
+ACTUAL_SECOND_NOTE=$(printf '%s\n' "$SELF_AUDIT_LINKS" \
+  | link_note @audit-source-next @audit-target-two)
 [[ "$ACTUAL_SECOND_NOTE" == "$SECOND_REPAIR_NOTE" ]] \
   || { echo "  FAIL: fan-out repair changed the second link note"; exit 1; }
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

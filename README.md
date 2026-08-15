@@ -77,7 +77,9 @@ There are no runtime dependencies beyond `sha2`.
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
-  endpoint is a segment name (`@name`) or a segment hash.
+  endpoint is a segment name (`@name`) or a segment hash. `connect`
+  creates the ref; `disconnect` removes only that ref, leaving coverings,
+  objects, and generated reports untouched.
 - A **label** is a per-segment status string (`unknown`, `reviewed`,
   `mapped`, …) set with `covmap label`. Like a name and a message it is
   covering-local and not part of the hash, so relabelling never changes a
@@ -93,6 +95,8 @@ There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
 every readable UTF-8 file it has not yet covered. You refine the
 covering with `covmap split`, `covmap merge`, and `covmap recut`.
+`split` inserts one or more cut positions atomically; labels, names,
+and messages are applied afterward as separate metadata operations.
 
 For the formal model, see [`theory/main.tex`](theory/main.tex).
 
@@ -109,15 +113,18 @@ covmap status
 # covering main: segments=1 lines=42
 #   drift: clean
 
-# 2. Refine: split spec.md into Intro (lines 1-9) and Body (lines 10+),
-#    then name the Body segment so links to it survive content edits.
-covmap ls -l                          # find the spec.md hash
-# 7f0a8e83a07ef76d  unknown  spec.md:1..42  42
-covmap split main:7f0a8e83 10 "Intro" "Body"
-# split 7f0a8e83a07ef76d -> 838a4a248219f38c + 8c39d43caabe6fc6
+# 2. Refine: atomically split spec.md into Intro (lines 1-9) and Body
+#    (lines 10+), then apply metadata explicitly. Every new fragment
+#    starts as unknown.
+covmap split main:spec.md 10
+# split 2f69d21281b3c270 spec.md:1..42 ->
+#   3daa6fe23aac4c3d  unknown  spec.md:1..9
+#   be498b0b3d8e19b2  unknown  spec.md:10..42
+covmap label main:spec.md:1 Intro
+covmap label main:spec.md:10 Body
 # A cut can also fall mid-line: `covmap split main:<h> 10:5` begins the
-# bottom segment at character 5 of line 10 (1-indexed, inclusive).
-covmap name main:8c39d43c body        # a stable @name handle for the Body
+# following fragment at character 5 of line 10 (1-indexed, inclusive).
+covmap name main:spec.md:10 body       # a stable @name handle for the Body
 
 # 3. Cover the implementation side.
 cd ../impl/
@@ -135,7 +142,7 @@ covmap status
 # covering main: segments=2 lines=42
 #   drift: 1 file(s) edited, 0 file(s) missing/binary
 # connections:
-#   spec_to_impl -> .../impl/main : 1 links, 0 broken · coverage source 1/2, target 1/1
+#   spec_to_impl: main -> .../impl/main : 1 links, 0 broken · coverage source 1/2, target 1/1
 
 # 6. Refresh the changed segment in place. Because the link is by @name,
 #    it follows the new content automatically — no relinking needed.
@@ -152,20 +159,21 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
-| `ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to a region, label, or link status. |
-| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. `--label <l>` = label lens. |
+| `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
+| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
-| `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. |
+| `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. A rename lists exact local `@old` endpoints and emits a safe link-then-unlink repair when possible; it never rewrites connections implicitly. |
 | `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
-| `split <C>:<h> <line[:col]> [<top>] [<bot>]` | Split a segment at a line or character position. |
+| `split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert one or more line or character cuts. New fragments are `unknown`; apply metadata separately. |
 | `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
 | `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
-| `connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. |
-| `link <K> <h_A> <h_B> [<note>]` | Add a link. |
-| `unlink <K> <h_A> <h_B>` | Remove a link. |
+| `connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection; omit `<repo>:` for another covering in the same repository. |
+| `disconnect <K>` | Delete only the named connection ref. |
+| `link <K> <A> <B> [<note>]` | Add a link; each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. |
+| `unlink <K> <A> <B>` | Remove a link using the same endpoint forms. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |
 | `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; pull tasks one at a time (`next`/`done`/`skip`). Bare `iter` lists all. |
 | `html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser (one connection; auto-selected when only one exists). |
@@ -174,6 +182,42 @@ Run `covmap help` for the full reference. Top-level porcelain:
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
 `fsck [--broken-links]`.
+
+Several regions can be reviewed in one covering-ordered listing:
+
+```sh
+covmap ls -l main src/api.rs src/worker.rs:40..120
+```
+
+If a region filename also names a covering, make the covering explicit; for
+example, `covmap ls -l HEAD main` selects the file `main` in `HEAD`.
+
+The regions form a union; `--label`, `--linked`, and `--unlinked` further
+filter that selection. `show <connection>` reports resolved maximum in/out
+degree and bounded fan-in/fan-out hubs. Hash and `@name` endpoints resolving
+to the same content hash count as one node; repeated covering locations with
+that hash produce one hub row at the first covering-order location. Broken
+links do not contribute.
+
+Long link notes are wrapped beneath their resolved endpoint pair;
+`ls-links --resolve` remains the stable TAB-delimited form for scripts.
+
+### Split grammar migration
+
+`split` no longer accepts optional top/bottom labels. Every operand after the
+selector is a `line[:column]` cut, and one file-addressed command may insert
+several cuts atomically:
+
+```sh
+covmap split main:spec.md 10 24 41
+covmap label main:spec.md:10 reviewed
+```
+
+An alphabetic former label now fails with a hint to use `label`, `name`, or
+`annotate`. A position-shaped former label such as `42` is indistinguishable
+from a cut and is therefore treated as one. This is a command-grammar change
+only: covering refs, objects, connections, and repository format v2 are
+unchanged.
 
 `covmap html` renders the whole map as a static, self-contained page:
 
@@ -252,8 +296,9 @@ covmap/
 ./smoke_test/run.sh
 ```
 
-Goes through init → cover → split → merge → connect → link → fsck →
-label → drift → prune on a small fixture in a temporary directory.
+Goes through init → cover → split → merge → connect → link → multi-region and
+degree review → fsck → label → drift → prune → rename repair → disconnect on
+a small fixture in a temporary directory.
 
 ## For agents
 

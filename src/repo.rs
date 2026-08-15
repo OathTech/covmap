@@ -3,10 +3,10 @@
 //! ```text
 //! <repo>/
 //!   .covmap/
-//!     version             # on-disk format version (currently "1")
+//!     version             # on-disk format version (currently "2")
 //!     HEAD                # default covering name
 //!     ignore              # optional gitignore-lite patterns
-//!     objects/<hh>/<rest> # segment object: "<label>\0<content>"
+//!     objects/<hh>/<rest> # segment object: raw content
 //!     coverings/<name>    # covered files + segment list
 //!     connections/<name>  # connection metadata + links
 //!     iterators/<name>    # frozen worklist + per-task state + cursor

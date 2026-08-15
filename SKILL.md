@@ -43,17 +43,18 @@ binary path is `covmap/target/release/covmap`.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
-  and references the target repo by absolute path. Each endpoint is
-  either a segment name (`@name`, resilient to content edits) or a segment
-  hash (legacy / anonymous).
-- **Sharing** is automatic: any two coverings (in any repo) that
-  produce a segment with the same content+label end up referencing
-  the same object. Names are per-covering segment metadata and are not
-  part of the shared segment hash.
+  and references the target repo by absolute path, including for a
+  same-repository self-map. Each endpoint is either a segment name
+  (`@name`, resilient to content edits) or a segment hash (legacy /
+  anonymous). `disconnect` deletes only the connection ref.
+- **Segment hash identity is content-only.** Equal content has the same hash
+  regardless of label. Labels and names are covering-local metadata and do
+  not affect the segment hash.
 - **There are no segmentation rules.** `covmap cover` walks the repo
   and adds a single whole-file segment labelled `unknown` for every
   readable UTF-8 file it has not yet covered. The user / agent then
-  refines the covering with `covmap split` and `covmap merge`.
+  refines the covering with `covmap split` and `covmap merge`. `split`
+  atomically inserts one or more cut positions; it does not set metadata.
 
 ### Where text lives — five channels, don't confuse them
 
@@ -110,20 +111,21 @@ are unique.
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
-| `covmap ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to a **region** (file or line range), a label, or link status. | yes |
-| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
+| `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
+| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
-| `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. Name the segments you intend to map. | no |
+| `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. A rename does not rewrite connections: read its affected-endpoint diagnostics and execute an emitted repair block when present. | **yes when renaming/clearing** |
 | `covmap annotate <C>:<addr> [-m <msg>]...` | Set/replace a segment's free-form **message** (why it was cut / what it is / why it is or isn't mapped). Repeatable `-m` = paragraphs; `-` clears; no `-m` prints it. Not hashed — editing it never causes drift. | yes (read) |
-| `covmap split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]` | Split a segment at `<line>` (the first line of the new bottom segment), or mid-line at `<line>:<col>` (the first character of the new bottom segment). The top half keeps any name; the bottom is anonymous. | yes |
+| `covmap split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert line or character cuts. A file selector can span several original segments. New fragments are `unknown`; the first keeps the original name/message and later fragments are anonymous. Apply labels/names/messages separately. | yes |
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
-| `covmap connect <C_A> <repoB:C_B> [<K>]` | Create empty connection. | no |
-| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name` or hash prefix); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
-| `covmap unlink <K> <A> <B>` | Remove a link (endpoints by `@name` or hash). | no |
+| `covmap connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection. Omit `<repo>:` for a same-repository target (`connect main main audit`). | yes |
+| `covmap disconnect <K>` | Delete only connection ref `K`; coverings and objects are untouched. Regenerate the default HTML report if warned that it may be stale. | yes |
+| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
+| `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
 | `covmap fsck` | Verify partitions and connection endpoints. | yes |
@@ -134,11 +136,11 @@ are unique.
 | Command | Purpose |
 | ------- | ------- |
 | `covmap ls-segments [-l] <C>` | One hash per line; `-l` = full record `hash⇥file⇥a⇥b⇥label⇥name⇥message` (TAB, empty fields for absent name/message). |
-| `covmap ls-links [--resolve] <K>` | `<hash_A>\t<hash_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
+| `covmap ls-links [--resolve] <K>` | `<endpoint_A>\t<endpoint_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
 | `covmap hash-segment <file> <a> <b> [-w]` | Hash a candidate segment (content only) without registering it (or with `-w`). |
-| `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<hash_A>\t<hash_B>`. |
+| `covmap fsck --broken-links` | Print one broken link per line: `<conn>\t<endpoint_A>\t<endpoint_B>`. |
 
 ### Address forms
 
@@ -149,10 +151,12 @@ are unique.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` that **covers**
   that position (unique by the partition invariant). The friendliest,
   least brittle handle: it depends only on where the text is, not on a
-  hash. Any command that takes a segment address (`split`, `merge`,
-  `recut`, `label`, `name`, `show`, `link`, `unlink`, …) accepts all
-  three forms — e.g. `covmap split main:@enqueue-op 12` or
-  `covmap split main:spec.md:40 45`.
+  hash. Commands that take a segment address (`merge`, `recut`, `label`,
+  `name`, `show`, `link`, `unlink`, …) accept all three forms.
+- `split` additionally accepts an exact covered-file selector. Compare
+  `covmap split main:spec.md:40 45` (one selected segment) with
+  `covmap split main:spec.md 40 75` (two file-level cuts, possibly in
+  different original segments).
 - Bare `<C>` (no colon) — covering ref by name. `HEAD` resolves to
   the covering named in `.covmap/HEAD`.
 
@@ -222,15 +226,18 @@ that first.
    ignored set) becomes one whole-file `unknown` segment. Binaries are
    skipped with a warning. Inspect `covmap ls`; if noise remains,
    tighten `ignore` and re-cover before refining.
-4. Refine the spec covering. Use `covmap ls -l` to see file:line
-   ranges, then `covmap split main:<hash> <line> <lbl_top> <lbl_bot>`
-   at each meaningful boundary (`##` headings, function declarations,
-   etc.). The first line of the bottom segment is `<line>`. To cut
-   inside a line — e.g. to isolate an inline term or a clause — pass
-   `<line>:<col>` instead; the bottom segment then begins at character
-   `<col>` (1-indexed, inclusive) of that line.
+4. Refine the spec covering. Use `covmap ls -l` to see file:line ranges,
+   gather the meaningful boundaries (`##` headings, declarations, etc.),
+   then insert them in one command: `covmap split main:<file> <cut>...`.
+   Cuts may be unsorted; covmap validates the full set before replacing the
+   covering ref once. Cuts must be interior: omit a heading at line 1 because
+   the file already starts there, and do not pass the position immediately
+   after the file. A line cut names the first line below the cut. To cut inside
+   a line, pass `<line>:<col>`; the fragment below begins at that 1-indexed
+   inclusive character. Every resulting fragment is `unknown`, so apply
+   deliberate metadata afterward with `label`, `name`, and `annotate`.
 5. Run `covmap status` and report cardinality back.
-6. Optionally `covmap connect <C_A> <repoB:C_B> <K>` to create the
+6. Optionally `covmap connect <C_A> [<repo>:]<C_B> <K>` to create the
    empty connection — but do not start linking yet.
 
 ### A2. Understand how a part of the software maps (bounded drill-down)
@@ -240,12 +247,23 @@ Drill down in ≤3 calls, ending on a self-sufficient view:
 
 1. **Orient** — `covmap status` shows the coverings, connections, and each
    connection's coverage (how much is mapped).
-2. **Narrow** — `covmap ls -l <C> <file>` lists just that file's segments
-   (add `:a..b` for a line range; `--unlinked` to find gaps).
+2. **Narrow** — `covmap ls -l <C> <region>...` lists the union of several
+   files or `file:a..b` ranges in covering order, without duplicates
+   (`--unlinked` finds gaps; `--label` intersects the same selection).
+   If a filename also names a covering, pass the covering explicitly first,
+   such as `covmap ls -l HEAD main` to select file `main` in `HEAD`.
 3. **Understand** — `covmap show <C>:<file>[:a..b]` prints each segment in
    the region *with the segment(s) it maps to*, resolved to
    `label loc` — the combined view, in one call. For a single segment,
    `covmap show <C>:@name` shows its links both directions plus drift state.
+
+To review the relation's shape and rationale, run `covmap show <K>`. Read
+`max-out` as the widest fan-out and `max-in` as the widest fan-in; the bounded
+hub lists identify the segments responsible. Broken links are excluded from
+those degree counts. Repeated covering locations with identical content share
+one content-hash node and produce one hub row at the first covering-order
+location. Mapping notes appear on wrapped lines beneath each resolved pair;
+add `--all` when the command suppresses a large link list.
 
 You can open the files yourself, so these views never dump content (use
 `--content` if you want a segment's bytes inline).
@@ -301,6 +319,30 @@ Steps:
 `@name` and survives later content edits, so drift repair collapses to a
 single `recut`. This is the difference between task T3 (hash link, must
 relink) and T5 (named link, recut only).
+
+### B2. Rename or clear a linked segment name
+
+`name` changes one covering only. If a connection ref stored in the current
+repository contains exact endpoint `@old`, renaming it makes that stored
+endpoint broken; covmap lists the affected connection and side. It never
+rewrites the connection behind your back.
+
+For a safe rename, execute the commands between the single repair block's
+delimiters exactly as printed. For fan-out, the block adds every replacement
+before removing any stale pair, preserving each link note:
+
+```text
+--- covmap repair begin ---
+covmap link 'K' '@new' '@target' 'existing note'
+covmap unlink 'K' '@old' '@target'
+--- covmap repair end ---
+```
+
+Do not invent a repair when no block is emitted: the far endpoint may already
+be broken or the replacement pair may exist. Clearing a name has no generic
+replacement, so use the printed `unlink` command if the stale link should be
+removed. Connections stored in another repository and pointing inbound cannot
+be discovered locally; inspect those source repositories separately.
 
 ### E. Absorb boundary drift with diff-remap
 
@@ -380,7 +422,7 @@ connection endpoint — by hash or by name — keeps resolving.
 covering main: segments=7 lines=29
   drift: 1 file(s) edited, 0 file(s) missing/binary
 connections:
-  widget_links -> /tmp/impl/main : 2 links, 1 broken
+  widget_links: main -> /tmp/impl/main : 2 links, 1 broken
 ```
 
 - `drift: clean` — every covered file's bytes still match the
@@ -388,7 +430,8 @@ connections:
 - `drift: N file(s) edited` — N files have been modified since their
   segments were recorded. Use `recut` (or merge+split if boundaries
   moved) to refresh.
-- `<conn> -> <repo>/<C> : N links, M broken` — relink or `prune` if `M > 0`.
+- `<conn>: <source-C> -> <repo>/<target-C> : N links, M broken` — relink
+  or `prune` if `M > 0`. Same-repository targets display `(self-map)`.
 
 ### F. Work a covering as a worklist (iterators)
 
@@ -508,29 +551,33 @@ covering; repair it with `recut` / `recut --remap` (workflows B, E).
 - `covmap: ambiguous: N segments match '<prefix>'` → use a longer
   prefix.
 - `covmap: split cut=<n> out of range for segment <file:a..b>` → you
-  asked to split outside the segment, or at a position that would make
-  one side empty; check `covmap ls -l` for the actual range. The cut
+  asked to split outside the segment, or at a position that would create
+  an empty fragment; check `covmap ls -l` for the actual range. The cut
   may be a line (`<n>`) or a character position (`<n>:<col>`).
+- `covmap: split cut '<n>' is a file boundary...` → file-level cuts must
+  be interior. Omit line 1 and the position immediately after the file;
+  those boundaries already exist.
+- `covmap: invalid split cut '<text>'...` with a metadata hint → `split`
+  accepts only cuts after its selector. Apply former inline labels with a
+  separate `covmap label` command. A numeric former label is parsed as a cut.
 
 ## Minimum-viable session
+
+For a repository containing `spec.md` and `src/lib.rs`:
 
 ```
 $ covmap init
 $ covmap cover
-Covering 'main': 3 segments, 120 lines (3 added)
 $ covmap status
-covering main: segments=3 lines=120
-  drift: clean
 $ covmap ls -l
-e76e5429f980abcd  unknown  README.md:1..30   30
-38f1a9c45dcd1234  unknown  src/lib.rs:1..50  50
-9a0947eeea4ab16c  unknown  spec.md:1..40     40
-$ covmap split main:9a0947ee 10 "Intro" "Body"
-split 9a0947eeea4ab16c -> 5b3a... + 8c4e...
-$ covmap connect main /path/to/impl:main spec_to_impl
-$ covmap link spec_to_impl 5b3a 38f1 "fn foo"
+$ covmap split main:spec.md 10 25
+$ covmap label main:spec.md:1 Intro
+$ covmap label main:spec.md:10 Body
+$ covmap name main:spec.md:1 intro
+$ covmap name main:src/lib.rs:1 implementation
+$ covmap connect main main spec_to_impl
+$ covmap link spec_to_impl @intro @implementation "fn foo"
 $ covmap fsck
-fsck: ok
 ```
 
 After any spec edit, run `covmap status`; for each affected segment

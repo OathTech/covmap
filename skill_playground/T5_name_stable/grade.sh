@@ -41,7 +41,7 @@ check "drift is clean (segment was recut)" bash -c "
   cd spec && \"$COVMAP_BIN\" status | grep -q 'drift: clean'
 "
 check "auth_links has 0 broken links"   bash -c "
-  cd spec && \"$COVMAP_BIN\" status | grep -qE 'auth_links .*: 1 links, 0 broken'
+  cd spec && \"$COVMAP_BIN\" status | grep -qE 'auth_links: .*: 1 links, 0 broken'
 "
 check "no broken links from fsck"       bash -c "
   [[ -z \"\$( ( cd spec && \"$COVMAP_BIN\" fsck --broken-links ) )\" ]]

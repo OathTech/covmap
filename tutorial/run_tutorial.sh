@@ -45,6 +45,19 @@ assert() { # <description> <command...>
   else printf '  \033[31mFAIL\033[0m  %s\n' "$msg"; exit 1; fi
 }
 
+run_repair_block() { # <cwd> <captured name output>
+  local cwd="$1" output="$2" script
+  script=$(printf '%s\n' "$output" \
+    | sed -n '/^--- covmap repair begin ---$/,/^--- covmap repair end ---$/p' \
+    | sed '1d;$d')
+  if [[ -z "$script" ]]; then
+    printf '  \033[31mFAIL\033[0m  rename emitted no repair block\n'
+    exit 1
+  fi
+  printf '%s\n' "$script" | sed 's/^/$ /'
+  ( cd "$cwd" && PATH="$(dirname "$COVMAP"):$PATH" sh -eu -c "$script" )
+}
+
 # ---- 0. fresh workspace ----------------------------------------------------
 # The spec/impl source files are kept as fixtures under tutorial/files/,
 # so the tutorial never edits a file "in place" with an opaque sed/perl
@@ -104,14 +117,15 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 hr "3. refine queue.md into one segment per section  (REQ5, REQ8)"
 #############################################################################
 # The `##` headings sit at lines 5, 10, 14 (the Enqueue body wraps onto
-# two lines, so the sections are not uniform). We address each segment
-# *positionally* — `main:queue.md:<line>` is "the segment of queue.md
-# that covers <line>" (unique by Segment Lookup), a stable handle that
-# never depends on a segment hash. Each split's SECOND argument is the
-# cut line.
-( cd "$WORK/spec" && run split main:queue.md:1  5 preamble Enqueue )
-( cd "$WORK/spec" && run split main:queue.md:5  10 Enqueue Dequeue )
-( cd "$WORK/spec" && run split main:queue.md:10 14 Dequeue Size )
+# two lines, so the sections are not uniform). A file selector applies every
+# cut against the covering state present when the command starts and writes
+# the covering ref once. Cuts may be unsorted; output is in file order.
+( cd "$WORK/spec" && run split main:queue.md 14 5 10 )
+# Split changes geometry only. Apply status metadata explicitly afterward.
+( cd "$WORK/spec" && run label main:queue.md:1  preamble )
+( cd "$WORK/spec" && run label main:queue.md:5  Enqueue )
+( cd "$WORK/spec" && run label main:queue.md:10 Dequeue )
+( cd "$WORK/spec" && run label main:queue.md:14 Size )
 ( cd "$WORK/spec" && run ls -l )
 
 assert "queue.md now has >=4 segments" \
@@ -124,7 +138,9 @@ hr "4. merge + re-split to show refinement is reversible  (REQ8)"
 # Dequeue covers line 10. After the merge, the combined segment covers
 # line 5; re-split it at line 10.
 ( cd "$WORK/spec" && run merge main:queue.md:5 main:queue.md:10 "Enq+Deq" )
-( cd "$WORK/spec" && run split main:queue.md:5 10 Enqueue Dequeue )
+( cd "$WORK/spec" && run split main:queue.md:5 10 )
+( cd "$WORK/spec" && run label main:queue.md:5  Enqueue )
+( cd "$WORK/spec" && run label main:queue.md:10 Dequeue )
 
 #############################################################################
 hr "5. character-level split: isolate a clause inside one line  (REQ5)"
@@ -141,11 +157,15 @@ echo "  clause begins at line 3, column $ECOL"
 # Split the segment covering errors.md line 3 first at line 3 (so the
 # QueueFull line is on its own). Name that line `qf-line`, then split it
 # BY NAME at the clause column — a name is a unique, readable handle for
-# the chunk you're working on. (On a split the name stays with the top
-# half; step 7 clears this temporary name.)
-( cd "$WORK/spec" && run split main:errors.md:3 3 head qf-line )
+# the chunk you're working on. (On a split the name stays with the first
+# fragment; step 7 clears this temporary name.)
+( cd "$WORK/spec" && run split main:errors.md 3 )
+( cd "$WORK/spec" && run label main:errors.md:1 head )
+( cd "$WORK/spec" && run label main:errors.md:3 qf-line )
 ( cd "$WORK/spec" && run name  main:errors.md:3 qf-line )
-( cd "$WORK/spec" && run split main:@qf-line "3:$ECOL" QueueFull-code QueueFull-meaning )
+( cd "$WORK/spec" && run split main:@qf-line "3:$ECOL" )
+( cd "$WORK/spec" && run label main:@qf-line QueueFull-code )
+( cd "$WORK/spec" && run label "main:errors.md:3:$ECOL" QueueFull-meaning )
 ( cd "$WORK/spec" && run ls -l )
 
 assert "a character-level segment exists on errors.md line 3" \
@@ -154,8 +174,14 @@ assert "a character-level segment exists on errors.md line 3" \
 #############################################################################
 hr "6. label a segment  (REQ4)"
 #############################################################################
-# Size is the segment covering queue.md line 14.
+# Size is the segment covering queue.md line 14. A label is ref-local
+# metadata, so changing it must preserve the content hash.
+SIZE_BEFORE=$( cd "$WORK/spec" && "$COVMAP" rev-parse main:queue.md:14 )
 ( cd "$WORK/spec" && run label main:queue.md:14 reviewed )
+SIZE_AFTER=$( cd "$WORK/spec" && "$COVMAP" rev-parse main:queue.md:14 )
+
+assert "relabeling preserves the segment hash" \
+  test "$SIZE_BEFORE" = "$SIZE_AFTER"
 
 #############################################################################
 hr "7. name the segments we intend to map  (REQ3, REQ8)"
@@ -192,13 +218,34 @@ hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 #############################################################################
 ( cd "$WORK/spec" && run connect main "$WORK/impl_rs:main" queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
+DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
 ( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
-( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "fn dequeue" )
+( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "$DEQUEUE_NOTE" )
 ( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" "QueueFull guard" )
 ( cd "$WORK/spec" && run ls-links queue_links )
 
 assert "connection has 3 links, all by @name" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-links queue_links | grep -c '^@' ) ) -eq 3 ]]"
+
+echo "  same-repository shorthand and lifecycle:"
+( cd "$WORK/spec" && run connect main main local_preview )
+( cd "$WORK/spec" && run show local_preview )
+assert "status identifies the temporary connection as a self-map" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status ) | grep -qF 'local_preview: main -> main (self-map)'"
+( cd "$WORK/spec" && run disconnect local_preview )
+assert "disconnect removed only the temporary connection ref" \
+  test ! -e "$WORK/spec/.covmap/connections/local_preview"
+
+echo "  covering-local rename and explicit connection repair:"
+printf '\033[2m$ covmap name main:@queuefull-meaning queuefull-clause\033[0m\n'
+RENAME_OUT=$( cd "$WORK/spec" && "$COVMAP" name main:@queuefull-meaning queuefull-clause )
+printf '%s\n' "$RENAME_OUT"
+run_repair_block "$WORK/spec" "$RENAME_OUT"
+
+assert "rename repair preserved the link and its note" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' ls-links queue_links ) | grep -qF \$'@queuefull-clause\\t$IMPL\\tQueueFull guard'"
+assert "rename repair restored connection integrity" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 #############################################################################
 hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
@@ -221,16 +268,39 @@ hr "10b. bounded drill-down: understand a region in a few calls  (REQ23)"
 # The inspection access pattern: narrow to a region, then `show` it to see
 # each segment together with what it maps to — resolved to label+loc, in one
 # self-sufficient call (no bare-hash hand-joining).
-( cd "$WORK/spec" && run ls -l main queue.md )        # narrow to one file
-( cd "$WORK/spec" && run show main:queue.md )         # region: segments + their images
-( cd "$WORK/spec" && run show --label reviewed main ) # label lens: a concern across files
+( cd "$WORK/spec" && run ls -l main queue.md errors.md ) # union of two files
+( cd "$WORK/spec" && run show main:queue.md )            # region: segments + images
+( cd "$WORK/spec" && run show --label reviewed main )    # concern across files
+( cd "$WORK/spec" && run show queue_links )               # degree hubs + notes
+
+assert "multi-region ls returns both files once in covering order" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' ls -l main errors.md queue.md:5..10 queue.md:10..10)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 5 ]] \
+    && [[ \$(printf '%s\n' \"\$out\" | grep -c 'errors.md') -eq 3 ]] \
+    && [[ \$(printf '%s\n' \"\$out\" | grep -c 'queue.md') -eq 2 ]] \
+    && ! printf '%s\n' \"\$out\" | grep -q 'queue.md:1..4'"
 
 # `show <connection>` now resolves endpoints and reports coverage.
 assert "show queue_links reports coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' show queue_links ) | grep -q 'coverage\|segments'"
+assert "show queue_links reports the resolved fan-in hub" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
+  printf '%s\n' \"\$out\" | grep -q 'degree max-out 1, max-in 3' \
+    && printf '%s\n' \"\$out\" | grep -q 'fan-in:' \
+    && printf '%s\n' \"\$out\" | grep -q '3 <- unknown queue.rs:1..15'"
+assert "show queue_links wraps the long mapping note" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
+  printf '%s\n' \"\$out\" | grep -q '^    The dequeue operation delegates empty-queue handling to the same' \
+    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review'"
+assert "ls-links --resolve keeps the long note on one TAB record" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' ls-links --resolve queue_links)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 3 ]] \
+    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_NOTE\""
 # `status` surfaces per-connection coverage.
 assert "status reports connection coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'coverage'"
+assert "status remains terse and omits degree detail" bash -c "
+  ! ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'degree'"
 # region show resolves the mapping (the enqueue op maps to the impl).
 assert "region show resolves a link to its target loc" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' show main:queue.md ) | grep -q '\->'"
@@ -337,7 +407,7 @@ DEQ=$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@dequeue-op"{p
 assert "after recut: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
 assert "queue_links still 3 links, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links: .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "13. T6-style drift: insert lines, diff-remap re-fits boundaries  (REQ13)"
@@ -355,7 +425,7 @@ diff "$FILES/queue.reworded.md" "$FILES/queue.inserted.md" | sed 's/^/    /' || 
 assert "after remap: drift clean" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -q 'drift: clean' )"
 assert "after remap: still 3 links, 0 broken" \
-  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links .*: 3 links, 0 broken' )"
+  bash -c "( cd '$WORK/spec' && '$COVMAP' status main | grep -qE 'queue_links: .*: 3 links, 0 broken' )"
 
 #############################################################################
 hr "14. T7-style drift: move a section, fingerprint proposes its new home"
@@ -382,7 +452,7 @@ hr "15. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate prune on a deliberately broken link: clear a segment's name,
 # which deletes that segment identity, breaking its link. Then prune drops it.
-( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-meaning"{print $1}' )" - )
+( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-clause"{print $1}' )" - )
 ( cd "$WORK/spec" && run fsck --broken-links || true )
 ( cd "$WORK/spec" && run prune queue_links )
 ( cd "$WORK/spec" && run status main )

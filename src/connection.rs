@@ -7,7 +7,7 @@
 //! # source_covering=<C_A>
 //! # target_repo=<abs/path>
 //! # target_covering=<C_B>
-//! <hash_A>\t<hash_B>[\t<note>]
+//! <endpoint_A>\t<endpoint_B>[\t<note>]
 //! ...
 //! ```
 
@@ -85,6 +85,18 @@ impl Connection {
                 });
             }
         }
+        for (field, value) in [
+            ("source_covering", source_covering.as_str()),
+            ("target_repo", target_repo.as_str()),
+            ("target_covering", target_covering.as_str()),
+        ] {
+            if value.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("connection '{name}' is missing required field '{field}'"),
+                ));
+            }
+        }
         Ok(Connection {
             name: name.to_string(),
             source_covering,
@@ -92,6 +104,14 @@ impl Connection {
             target_covering,
             links,
         })
+    }
+
+    /// Remove one connection ref after parsing it successfully. Reading first
+    /// prevents a malformed ref from being silently discarded.
+    pub fn remove(repo: &Repo, name: &str) -> io::Result<Connection> {
+        let connection = Self::read(repo, name)?;
+        fs::remove_file(repo.connections_dir().join(name))?;
+        Ok(connection)
     }
 
     pub fn list(repo: &Repo) -> io::Result<Vec<String>> {
@@ -109,5 +129,76 @@ impl Connection {
         }
         out.sort();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(tag: &str) -> Repo {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "covmap-connection-{tag}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join(".covmap/connections")).unwrap();
+        Repo { root }
+    }
+
+    #[test]
+    fn remove_reads_then_deletes_only_the_connection_ref() {
+        let repo = temp_repo("remove");
+        let keep = repo.dot().join("keep");
+        fs::write(&keep, "untouched").unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "source".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![Link {
+                a: "@left".to_string(),
+                b: "@right".to_string(),
+                note: "why".to_string(),
+            }],
+        };
+        connection.write(&repo).unwrap();
+
+        let removed = Connection::remove(&repo, "map").unwrap();
+
+        assert_eq!(removed.links.len(), 1);
+        assert!(!repo.connections_dir().join("map").exists());
+        assert_eq!(fs::read_to_string(keep).unwrap(), "untouched");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn remove_preserves_a_malformed_connection_ref() {
+        let repo = temp_repo("malformed");
+        let path = repo.connections_dir().join("broken");
+        fs::write(&path, "# source_covering=main\nnot-a-link\n").unwrap();
+
+        let err = Connection::remove(&repo, "broken").unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(path.exists());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn read_rejects_missing_connection_metadata() {
+        let repo = temp_repo("metadata");
+        let path = repo.connections_dir().join("broken");
+        fs::write(&path, "# source_covering=main\n# target_covering=main\n").unwrap();
+
+        let err = Connection::read(&repo, "broken").unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("target_repo"));
+        fs::remove_dir_all(repo.root).unwrap();
     }
 }

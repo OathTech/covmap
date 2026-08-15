@@ -163,6 +163,19 @@ When every cut falls on a line boundary this is the line-level
 covering with cut points $1 = c_0 < \cdots < c_{k_f} = |f|_A + 1$ and
 segments $(f, c_{j-1}, c_j - 1, \lambda_j)$.
 
+Refinement inserts a finite set of interior positions into this cut
+sequence. For requested cuts $P_f$ in file $f$,
+\[
+  \mathrm{cuts}'(f) = \mathrm{cuts}(f) \cup P_f.
+\]
+Set insertion preserves disjointness, completeness, and confinement:
+each affected original segment is replaced by the non-empty consecutive
+fragments induced by the new cuts, whose concatenated content is exactly
+the original content. Removing a cut is the distinct coarsening operation
+\texttt{merge}. Partition geometry is independent of status metadata:
+\texttt{split} inserts cuts, while \texttt{label}, \texttt{name}, and
+\texttt{annotate} compose metadata afterward.
+
 \begin{proposition}[Segment lookup]\label{prop:lookup}
 For any covering $\Cov$ and any character of $A$ in a file
 $f \in F(\Cov)$, exactly one segment of $\Cov$ contains it.
@@ -234,10 +247,13 @@ does not.
 \end{definition}
 
 Operations propagate names as follows: \texttt{split} keeps the name on
-the top segment and leaves the bottom anonymous; \texttt{merge} keeps
+the first fragment and leaves later fragments anonymous; \texttt{merge} keeps
 the single surviving name (the earlier segment's if both are named);
 \texttt{recut} and \texttt{label} preserve the name. A first-class
-\texttt{name} operation sets, renames, or clears a name.
+\texttt{name} operation sets, renames, or clears a name. This operation
+changes only the covering: it never rewrites a stored connection. Therefore
+renaming or clearing $\nu$ makes every stored endpoint that is exactly $\nu$
+fail to resolve until that endpoint is explicitly relinked or removed.
 
 \section{Connections}\label{sec:conn}
 
@@ -255,11 +271,20 @@ otherwise a segment hash.
 
 A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
 to segment $t$ of $B$. Connections are stored separately from
-coverings and refer to their endpoints by hash. Note that nothing
+coverings and record each endpoint by name when the segment is named,
+otherwise by segment hash. Note that nothing
 requires $A$ and $B$ to be distinct: they may be the same repository, and
 $\Cov^A$ and $\Cov^B$ may even be the same covering, so a connection can
 also relate a repository to itself (e.g. a docs-to-code map, or a
 duplication audit within one tree).
+
+A stored connection has a lifecycle independent of either covering.
+\texttt{connect} creates a named connection ref containing an initially empty
+relation, and \texttt{disconnect} deletes that ref. Deleting a connection
+does not delete either covering, any segment object, or a derived report; it
+removes only the selected stored relation. This lifecycle operation is
+distinct from the relational operations below, which derive relations from
+relations without changing their inputs.
 
 \begin{definition}[Image of a subset]\label{def:image}
 For a subset $S \subseteq \Cov^A$, the \emph{image} of $S$ under $\kappa$
@@ -270,12 +295,13 @@ is
 the segments of $B$ that some segment of $S$ links to; the \emph{preimage}
 $\kappa^{-1}(T)$ of $T \subseteq \Cov^B$ is defined symmetrically. Selecting
 $S$ by a shared property makes $\kappa(S)$ the corresponding slice of the
-relation: when $S$ is the segments of one file (or a line range within it)
-this is the \emph{region} view, and when $S = \Cov^A \restriction \ell$ is
-the segments carrying a label $\ell$ (\S\ref{sec:complexity}) it is the
-\emph{label lens} --- one query returning a cross-cutting concern together
-with everything it maps to. This is the formal basis of covmap's
-inspection-for-understanding access pattern (\S\ref{sec:interface}).
+relation: when $S$ is the segments of one file, a line range within it, or a
+finite union of such selections, this is the \emph{region} view; when
+$S = \Cov^A \restriction \ell$ is the segments carrying a label $\ell$
+(\S\ref{sec:complexity}) it is the \emph{label lens} --- one query returning
+a cross-cutting concern together with everything it maps to. This is the
+formal basis of covmap's inspection-for-understanding access pattern
+(\S\ref{sec:interface}).
 \end{definition}
 
 \begin{definition}[Coverage]\label{def:coverage}
@@ -288,6 +314,22 @@ The \emph{source coverage} of $\kappa$ is
 \]
 The \emph{target coverage} is the symmetric quantity for $\Cov^B$. A
 connection is \emph{source-total} if $\rho_{\mathrm{src}}(\kappa) = 1$.
+\end{definition}
+
+\begin{definition}[Resolved degree]\label{def:degree}
+At inspection time, let $\kappa^\checkmark$ be the subset of stored links whose
+two endpoints both resolve in the current coverings, with each endpoint
+interpreted by its resolved content hash (so hash and name spellings, or
+several covering entries with identical content, denote the same operational
+node). The \emph{out-degree} and \emph{in-degree} are
+\[
+  d^+(s) = |\{t \mid (s,t) \in \kappa^\checkmark\}|,
+  \qquad
+  d^-(t) = |\{s \mid (s,t) \in \kappa^\checkmark\}|.
+\]
+The connection's degree maxima are $\max_s d^+(s)$ and $\max_t d^-(t)$,
+or zero when $\kappa^\checkmark$ is empty. A \emph{fan-out hub} has
+$d^+(s)>1$ and a \emph{fan-in hub} has $d^-(t)>1$.
 \end{definition}
 
 \begin{definition}[Operations]\label{def:conn-ops}
@@ -397,14 +439,16 @@ endpoint it means no segment carries that name any longer.
 \end{definition}
 
 The two identity axes give two breakage regimes. A link recorded by
-hash breaks as soon as its endpoint is rewritten (\texttt{recut},
-\texttt{label}, \texttt{split}, \texttt{merge}) or removed — i.e. on
-any content edit to the endpoint. A link recorded by name breaks
-\emph{only} when the named segment is deleted; an edit that changes the
-segment's bytes (followed by \texttt{recut}) leaves the name, hence
-the link, intact. Naming the segments one intends to map therefore
-shrinks ``broken'' from the routine outcome of any edit to the rare
-outcome of a genuine structural deletion.
+hash breaks as soon as its endpoint's content identity is rewritten
+(\texttt{recut}, \texttt{split}, \texttt{merge}) or removed. Relabelling
+does not break it because the label is not part of the hash. A link
+recorded by name breaks
+when the named segment is deleted or when that covering-local name is
+cleared or changed; an edit that changes the segment's bytes (followed by
+\texttt{recut}) leaves the name, hence the link, intact. Naming the segments
+one intends to map therefore shrinks ``broken'' from the routine outcome of
+any content edit to the explicit removal or reassignment of the name
+identity.
 
 \begin{definition}[Link drift]\label{def:link-drift}
 A link is \emph{drifted} when it still resolves
@@ -416,8 +460,8 @@ diff-remap) carries the drifted link forward untouched.
 
 A named link therefore passes through a repairable middle state:
 $\textsc{in-sync} \to \textsc{drifted} \to \textsc{broken}$, drifting when
-its segment's bytes change and breaking only if that segment is later
-deleted. A hash-recorded link has no such middle state — its identity
+its segment's bytes change and breaking only if its name identity is later
+deleted, cleared, or changed. A hash-recorded link has no such middle state — its identity
 \emph{is} the content, so a content edit takes it straight
 $\textsc{in-sync} \to \textsc{broken}$. Drift is thus the repairable
 precursor of breakage, available precisely to links carried by name.
@@ -606,13 +650,17 @@ A repository under \texttt{covmap} acquires a \texttt{.covmap/}
 directory:
 \begin{verbatim}
 .covmap/
+  version             on-disk format version (currently 2)
   HEAD                default covering name
   ignore              optional gitignore-lite patterns
-  objects/<hh>/<rest> segments, addressed by hash
+  objects/<hh>/<rest> raw content, addressed by truncated SHA-256(content)
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
   iterators/<name>    one file per iterator (frozen worklist + cursor)
 \end{verbatim}
+The format-2 object body is exactly the segment content. Labels, names,
+and messages live in covering refs and are not stored in or hashed into
+objects.
 The \texttt{iterators/} directory is purely additive: an older
 \texttt{covmap} simply never reads it, so introducing it needs no
 format-version change, mirroring how the character column and segment name
@@ -628,6 +676,7 @@ throughout the interface and can be mixed freely.
 \texttt{<hash>}            \> a segment, by full or short hex prefix\\
 \texttt{$C$:$h$}           \> a segment $h$ in covering $C$\\
 \texttt{$C$:@$\nu$}        \> the segment named $\nu$ in covering $C$\\
+\texttt{$C$:file:$i$[:$c$]} \> the segment containing one file position\\
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
@@ -653,17 +702,31 @@ There is no segmentation rule. The interface gives the user one
       \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
       adds segments only for new files. Existing segments are never
       touched, so any user-driven refinement is preserved.
-\item \texttt{covmap split $C$:$h$ $\ell$\texttt{[:}$k$\texttt{]} [$\lambda_t$] [$\lambda_b$]}\\
-      Cut the segment with hash $h$ at the position $(\ell, k)$, which
-      becomes the first character of the bottom segment; the top segment
-      ends at the immediately preceding character. With the column
-      omitted, the cut is the line boundary $(\ell, \bot)$, recovering
-      the line-level split into $(f, a, \ell-1, \lambda_t)$ and
-      $(f, \ell, b, \lambda_b)$. The cut must leave both segments
-      non-empty. The split is computed on the stored content, so
-      $\mathrm{content}(\text{top}) \Vert \mathrm{content}(\text{bot})
-      = \mathrm{content}(s)$ exactly. Both new labels default to
-      \texttt{unknown}.
+\item \texttt{covmap split $C$:$a$ $p_1$ [$p_2$ \ldots]}\\
+      Atomically insert the finite set of cut positions $p_i$ into the
+      selected part of covering $C$. The selector $a$ is a segment address
+      (hash prefix, \texttt{@name}, or position), in which case every cut
+      must lie strictly inside that original segment, or an exact covered
+      file path, in which case cuts may affect several original segments.
+      A bare file path selects that file in \texttt{HEAD}. Exact covered
+      paths outrank hash prefixes; a selector containing \texttt{:} is
+      positional syntax.
+
+      Each $p_i=(\ell,k)$ denotes the first character below the cut; omitting
+      $k$ means the line start $(\ell,\bot)$. Duplicate operands and file
+      outer boundaries are errors. For file selection, an existing interior
+      cut is an already-satisfied no-op. All cuts are parsed and every
+      resulting fragment is validated before any covering-ref replacement;
+      the command writes the ref once.
+
+      Every fragment created from an actually subdivided segment receives
+      label \texttt{unknown}. The first fragment retains the original name
+      and message; later fragments are anonymous and un-messaged. Slicing
+      uses stored object content, and the fragments concatenate exactly to
+      the original. Discoverable local name endpoints keep resolving but
+      narrow to the first fragment; local hash endpoints to the original
+      become broken. The command reports both effects and the inability to
+      discover inbound refs stored in another repository.
 \item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
       $\lambda$ (default \texttt{unknown}).
@@ -684,24 +747,27 @@ There is no segmentation rule. The interface gives the user one
       boundary drift automatically for localized edits, so connections
       by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
 \item \texttt{covmap label $C$:$h$ $\lambda$}\\
-      Replace the label of one segment. Because labels are part of
-      identity, this rewrites the entry in $C$; old hashes remain in
-      the object store so any connection that referenced them keeps
-      resolving. The segment's name, if any, is preserved.
+      Replace the label of one segment in the covering ref. Because labels
+      are not part of identity, the segment hash and object store are
+      unchanged, so connections referencing the segment by hash or name
+      keep resolving. The segment's name and message, if any, are preserved.
 \item \texttt{covmap name $C$:$h$ $\nu$} (or \texttt{@$\nu'$}; \texttt{-} to clear)\\
       Set, rename, or clear the name of one segment
       (Definition~\ref{def:segment-name}). Names are unique within $C$ and are
       covering-local metadata, so this does not touch the object store
-      and shares nothing across coverings. Connections referencing the
-      segment by \texttt{@$\nu$} are unaffected unless the name string
-      itself changes.
+      and shares nothing across coverings. When the name string changes,
+      stored \texttt{@$\nu$} endpoints are not mutated implicitly: the
+      command lists discoverable affected connections and, when safe,
+      presents an explicit \texttt{link}-then-\texttt{unlink} repair.
+      Inbound connections stored in another repository are not discoverable
+      from $C$'s repository.
 \end{itemize}
 
 These operations are the only way to change a covering after
 \texttt{cover}. Together they are complete: any covering reachable
-from the initial cover by repeated splits / merges / recuts / relabels /
-re-tags
-is the most general covering one can ask for.
+from the initial cover by repeated cut-set insertions, merges, recuts,
+relabels, renames, and annotations is the most general covering one can
+ask for.
 
 \subsection{Inspection, connections, prune}
 
@@ -711,9 +777,9 @@ whose final step resolves the relation fully (endpoints shown as
 \texttt{covering:label loc}, not bare hashes), so no follow-up lookup is
 forced. Listing commands print one condensed line per item; a command that
 names one item prints all covmap holds about it. The region view and the
-label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a
-file/range or a label, presenting each selected segment together with its
-image.
+label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
+of file/range regions or a label, presenting each selected segment together
+with its image.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
@@ -725,20 +791,30 @@ image.
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
       link shows its resolved links, a region/label its image. \texttt{--label
-      $\ell$} runs the label lens; \texttt{--all} expands a large connection.
-\item \texttt{covmap ls [-l] [$C$] [region] [--label $\ell$] [--linked|--unlinked]}\\
-      List segments of $C$ in file-and-line order, optionally narrowed to a
-      region, a label, or link status.
+      $\ell$} runs the label lens. A connection view reports resolved degree
+      maxima and bounded non-trivial hubs (Definition~\ref{def:degree});
+      \texttt{--all} expands its link list, with link notes on wrapped lines
+      below their resolved endpoint pair.
+\item \texttt{covmap ls [-l] [$C$] [region \ldots] [--label $\ell$] [--linked|--unlinked]}\\
+      List segments of $C$ in file-and-line order, optionally narrowed to the
+      union of several file/range regions and intersected with a label or link
+      status.
 \item \texttt{covmap grep [-l] [-c $C$] <pattern>}\\
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
       Segments only in $C_1$, only in $C_2$, and shared.
-\item \texttt{covmap connect $C_A$ $\langle\text{repo}_B\rangle$:$C_B$ [$K$]}\\
-      Create an empty connection between two coverings.
-\item \texttt{covmap link $K$ $h_A$ $h_B$ [$\nu$]}\\
-      \texttt{covmap unlink $K$ $h_A$ $h_B$}\\
-      Add or remove a single link, optionally annotated with note
-      $\nu$.
+\item \texttt{covmap connect $C_A$ [repo$_B$:]$C_B$ [$K$]}\\
+      Create an empty connection between two coverings. Omitting repo$_B$
+      selects another covering in the source repository, including $C_A$
+      itself; inspection marks this case as a self-map.
+\item \texttt{covmap disconnect $K$}\\
+      Delete the stored connection ref $K$ without deleting either covering,
+      any segment object, or a derived report.
+\item \texttt{covmap link $K$ $A$ $B$ [$\nu$]}\\
+      \texttt{covmap unlink $K$ $A$ $B$}\\
+      Add or remove a single link, optionally annotated with note $\nu$.
+      Each endpoint operand $A$ or $B$ may be a segment name, hash prefix,
+      or position resolved against that side's covering.
 \item \texttt{covmap prune $K$}\\
       Drop every link of $K$ whose endpoint is no longer in its
       covering.
@@ -815,7 +891,8 @@ Lower-level commands meant for scripts.
 
 \begin{itemize}[leftmargin=2em]
 \item Coverings and connections are independent artifacts; a
-      connection refers to its coverings only by hash.
+      connection names its source and target coverings in metadata and
+      records each link using name or hash endpoints.
 \item Every state-changing operation is explicit. \texttt{cover} is
       additive only. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —

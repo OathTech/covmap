@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
-#   init -> cover -> split -> merge -> connect -> link -> fsck
-#   -> label -> drift after edit -> prune
+#   init -> cover -> atomic multi-cut -> merge -> connect -> link -> fsck
+#   -> review surfaces -> label -> drift -> prune -> rename repair -> disconnect
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
 # Set KEEP=1 to preserve the workdir for inspection.
@@ -45,41 +45,45 @@ hr "status (spec) — should report drift: clean"
 hr "ls -l (spec HEAD): two whole-file segments"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 
-# Refine widget.md by splitting at heading boundaries (lines 6, 10, 14, 18, 22, 26).
-# After each split the bottom segment is the one that needs to be split next.
-hr "refine widget.md by splitting at heading lines"
+# Refine widget.md atomically at every heading boundary. Cuts are deliberately
+# unsorted; output and covering order must still follow file position.
+hr "refine widget.md with one atomic multi-cut"
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'widget.md' | head -1 | cut -f1 )
 echo "  starting hash: $WIDGET_HASH"
+( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 26 10 18 6 22 14 )
 
-# Helper: split the segment of widget.md that currently contains <line>
-# at <line>, labelling the top + bottom.
-split_at() {
-  local cwd="$1" line="$2" lt="$3" lb="$4"
-  local h
-  # find the hash whose [a,b] range contains <line>
-  # $3 is "file:a..b" where a/b are line numbers (line-level segments
-  # have no ":col"). Parse the file before the first ':' and the line
-  # range around "..".
-  h=$( cd "$cwd" && "$COVMAP_BIN" ls -l | awk -F'\t' -v l="$line" '
-    {
-      loc=$3
-      ci=index(loc, ":")
-      file=substr(loc, 1, ci-1)
-      range=substr(loc, ci+1)
-      di=index(range, "..")
-      a=substr(range, 1, di-1) + 0
-      b=substr(range, di+2) + 0
-      if (file=="widget.md" && a<=l && l<=b) { print $1; exit }
-    }')
-  ( cd "$cwd" && "$COVMAP_BIN" split "main:$h" "$line" "$lt" "$lb" )
-}
+# Geometry and status metadata compose explicitly.
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:1  preamble )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:6  Counter )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:10 Increment )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:14 Decrement )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:18 Reset )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:22 Identity )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:26 Status )
 
-split_at "$WORK/spec"  6 "preamble"    "Counter"
-split_at "$WORK/spec" 10 "Counter"     "Increment"
-split_at "$WORK/spec" 14 "Increment"   "Decrement"
-split_at "$WORK/spec" 18 "Decrement"   "Reset"
-split_at "$WORK/spec" 22 "Reset"       "Identity"
-split_at "$WORK/spec" 26 "Identity"    "Status"
+hr "file-addressed existing cuts are idempotent and do not rewrite the ref"
+REF_INODE_BEFORE=$(ls -i "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+IDEMPOTENT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 10 14 22 )
+printf '%s\n' "$IDEMPOTENT_OUT"
+REF_INODE_AFTER=$(ls -i "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+[[ "$REF_INODE_BEFORE" == "$REF_INODE_AFTER" ]] \
+  || { echo "  FAIL: all-existing multi-cut rewrote the covering ref"; exit 1; }
+[[ $(printf '%s\n' "$IDEMPOTENT_OUT" | grep -c "already satisfied") == "3" ]] \
+  || { echo "  FAIL: existing cuts were not reported separately"; exit 1; }
+
+hr "legacy split labels are rejected atomically with a metadata hint"
+REF_HASH_BEFORE=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+if LEGACY_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 12 FormerTop 2>&1 ); then
+  echo "  FAIL: label-bearing legacy split unexpectedly succeeded"
+  exit 1
+fi
+REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
+[[ "$REF_HASH_BEFORE" == "$REF_HASH_AFTER" ]] \
+  || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
+printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
+  || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
+[[ $(cat "$WORK/spec/.covmap/version") == "2" ]] \
+  || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
@@ -91,7 +95,9 @@ DEC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Decrement" | head -1 )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 # split it back at line 14
 H=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Inc+Dec" | head -1 )
-( cd "$WORK/spec" && "$COVMAP_BIN" split "main:$H" 14 "Increment" "Decrement" )
+( cd "$WORK/spec" && "$COVMAP_BIN" split "main:$H" 14 )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:10 Increment )
+( cd "$WORK/spec" && "$COVMAP_BIN" label main:widget.md:14 Decrement )
 
 hr "grep 'increment' in spec"
 ( cd "$WORK/spec" && "$COVMAP_BIN" grep increment )
@@ -103,25 +109,117 @@ hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
 DEC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Decrement" | head -1 )
 RS=$(  cd "$WORK/impl_rs" && "$COVMAP_BIN" ls-segments | head -1 )
+INCREMENT_NOTE="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
 echo "  inc:  $INC"
 echo "  dec:  $DEC"
 echo "  impl: $RS"
 # The Increment endpoint is given with a redundant `main:` covering prefix
 # (naming the source covering) — link accepts and strips it, like every
 # other segment-address command. Decrement uses the bare hash.
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "fn increment" )
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "$INCREMENT_NOTE" )
+# Name the target after the first link. The first stored endpoint remains the
+# resolving hash; the second is stored as @impl-widget. Degree must combine
+# both spellings into one target node.
+( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
 
 hr "re-link with a new note updates it in place (not a no-op)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
   && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
 
+hr "review surfaces: region union, resolved degree, wrapped notes, stable plumbing"
+SHOW_HELP=$( "$COVMAP_BIN" show --help )
+TOP_HELP=$( "$COVMAP_BIN" help 2>&1 )
+printf '%s\n' "$SHOW_HELP" | grep -qF "segment, covering, region, link, or connection" \
+  && printf '%s\n' "$TOP_HELP" | grep -qF "segment, covering, region, link, or connection" \
+  || { echo "  FAIL: focused and top-level show help disagree"; exit 1; }
+LS_HELP=$( "$COVMAP_BIN" ls --help )
+printf '%s\n' "$LS_HELP" | grep -qF "list segments, optionally narrowed to regions" \
+  && printf '%s\n' "$TOP_HELP" | grep -qF "list segments, optionally narrowed to regions" \
+  || { echo "  FAIL: focused and top-level ls help disagree"; exit 1; }
+
+MULTI_LS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main errors.md widget.md:10..20 widget.md:14..20 )
+printf '%s\n' "$MULTI_LS"
+[[ $(printf '%s\n' "$MULTI_LS" | wc -l | tr -d ' ') == "4" ]] \
+  || { echo "  FAIL: overlapping multi-region ls duplicated or omitted segments"; exit 1; }
+[[ $(printf '%s\n' "$MULTI_LS" | grep -c 'errors.md') == "1" \
+  && $(printf '%s\n' "$MULTI_LS" | grep -c 'widget.md') == "3" ]] \
+  && ! printf '%s\n' "$MULTI_LS" | grep -q 'widget.md:1..5' \
+  || { echo "  FAIL: multi-region ls did not restrict the union"; exit 1; }
+
+REGION_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10..13 --linked )
+[[ $(printf '%s\n' "$REGION_LINKED" | wc -l | tr -d ' ') == "1" \
+  && "$REGION_LINKED" == *$'\tIncrement\twidget.md:10..13\t'* ]] \
+  || { echo "  FAIL: linked filter did not intersect the region union"; exit 1; }
+REGION_LABEL=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:14..17 --label Increment )
+[[ -z "$REGION_LABEL" ]] \
+  || { echo "  FAIL: label filter did not intersect the region union"; exit 1; }
+IMPLICIT_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l --linked )
+[[ "$IMPLICIT_LINKED" == "$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main --linked )" ]] \
+  || { echo "  FAIL: implicit HEAD changed linked-filter results"; exit 1; }
+
+if BAD_REGION=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:20..10 2>&1 ); then
+  echo "  FAIL: reversed region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_REGION" | grep -qF "invalid region 'widget.md:20..10'" \
+  || { echo "  FAIL: invalid region did not name the offending token"; exit 1; }
+
+if BAD_RANGE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10 2>&1 ); then
+  echo "  FAIL: single-line region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_RANGE" | grep -qF "a line range must use a..b" \
+  || { echo "  FAIL: single-line region error misdiagnosed the range"; exit 1; }
+
+if BAD_COVERING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l typo 2>&1 ); then
+  echo "  FAIL: unknown covering/region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_COVERING" | grep -qF "'typo' is neither an existing covering nor a covered file" \
+  || { echo "  FAIL: covering typo did not explain the ambiguity"; exit 1; }
+
+SHOW_WIDGET_LINKS=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links )
+printf '%s\n' "$SHOW_WIDGET_LINKS"
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "degree max-out 1, max-in 2" \
+  || { echo "  FAIL: connection degree did not combine hash and @name target spellings"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "2 <- unknown widget.rs:1..28" \
+  || { echo "  FAIL: resolved fan-in hub was not reported"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    The increment contract maps to the shared widget implementation segment" \
+  || { echo "  FAIL: long link note was not wrapped beneath the endpoint pair"; exit 1; }
+
+RESOLVED_PLUMBING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links )
+[[ $(printf '%s\n' "$RESOLVED_PLUMBING" | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: resolved plumbing changed row cardinality"; exit 1; }
+printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_NOTE" \
+  || { echo "  FAIL: resolved plumbing changed the long note"; exit 1; }
+STATUS_REVIEW=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+if printf '%s\n' "$STATUS_REVIEW" | grep -q "degree"; then
+  echo "  FAIL: status gained degree detail"
+  exit 1
+fi
+
 hr "fsck (clean)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
 
 hr "label the Increment segment as 'mapped'"
 ( cd "$WORK/spec" && "$COVMAP_BIN" label "main:$INC" mapped )
+
+INC_AFTER=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "main:$INC" )
+[[ "$INC_AFTER" == "$INC" ]] \
+  && echo "  hash unchanged after relabel" \
+  || { echo "  FAIL: relabel changed $INC to $INC_AFTER"; exit 1; }
+
+if BROKEN_AFTER_LABEL=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  [[ -z "$BROKEN_AFTER_LABEL" ]] \
+    && echo "  existing hash-addressed link still resolves" \
+    || { echo "  FAIL: fsck succeeded but reported a broken link"; printf '%s\n' "$BROKEN_AFTER_LABEL"; exit 1; }
+else
+  echo "  FAIL: relabel broke a link"
+  printf '%s\n' "$BROKEN_AFTER_LABEL"
+  exit 1
+fi
 
 hr "rev-parse <hash-prefix>"
 SHORT="${INC:0:8}"
@@ -142,11 +240,172 @@ PY
 hr "status (should report drift: 1 file edited)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
-hr "fsck --broken-links (one broken: the Increment hash moved when we relabeled to 'mapped')"
-( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ) || true
+hr "fsck --broken-links (none: relabeling preserved Increment, Decrement is only drifted)"
+if BROKEN_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  [[ -z "$BROKEN_AFTER_EDIT" ]] \
+    && echo "  no broken links" \
+    || { echo "  FAIL: fsck succeeded but reported a broken link"; printf '%s\n' "$BROKEN_AFTER_EDIT"; exit 1; }
+else
+  echo "  FAIL: drift alone broke a link"
+  printf '%s\n' "$BROKEN_AFTER_EDIT"
+  exit 1
+fi
 
-hr "prune widget_links (drops links whose endpoints disappeared from a covering)"
-( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
+hr "recut Decrement (the old hash-addressed endpoint now breaks)"
+RECUT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" recut "main:$DEC" )
+printf '  %s\n' "$RECUT_OUT"
+DEC_AFTER="${RECUT_OUT##* -> }"
+[[ "$DEC_AFTER" != "$DEC" ]] \
+  || { echo "  FAIL: content-changing recut preserved $DEC"; exit 1; }
+
+EXPECTED_BROKEN=$(printf 'widget_links\t%s\t%s' "$DEC" "@impl-widget")
+if BROKEN_AFTER_RECUT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
+  echo "  FAIL: expected the stale Decrement hash endpoint to be broken"
+  exit 1
+else
+  [[ "$BROKEN_AFTER_RECUT" == "$EXPECTED_BROKEN" ]] \
+    && echo "  exactly one expected broken link reported" \
+    || { echo "  FAIL: unexpected broken-link report"; printf '%s\n' "$BROKEN_AFTER_RECUT"; exit 1; }
+fi
+
+hr "prune widget_links (drops the stale Decrement link)"
+PRUNE_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" prune widget_links )
+printf '%s\n' "$PRUNE_OUT"
+printf '%s\n' "$PRUNE_OUT" | grep -qF "prune: 1 link(s) dropped, 1 kept" \
+  || { echo "  FAIL: prune did not report one dropped and one kept link"; exit 1; }
+
+LINK_COUNT=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | wc -l | tr -d ' ' )
+[[ "$LINK_COUNT" == "1" ]] \
+  && echo "  one live link remains" \
+  || { echo "  FAIL: expected one live link after prune, found $LINK_COUNT"; exit 1; }
+
+hr "same-repository connection lifecycle and rename repair"
+ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'errors.md' | cut -f1 )
+IDENTITY_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:22 )
+RESET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:18 )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$ERROR_HASH" audit-source )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$IDENTITY_HASH" audit-target )
+( cd "$WORK/spec" && "$COVMAP_BIN" name "main:$RESET_HASH" audit-target-two )
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main main self_audit )
+
+STATUS_SELF=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+SHOW_SELF=$( cd "$WORK/spec" && "$COVMAP_BIN" show self_audit )
+printf '%s\n' "$STATUS_SELF" | grep -qF "self_audit: main -> main (self-map)" \
+  || { echo "  FAIL: status did not identify the same-repository connection"; exit 1; }
+printf '%s\n' "$SHOW_SELF" | grep -qF "main -> main (self-map)" \
+  || { echo "  FAIL: show did not identify the same-repository connection"; exit 1; }
+
+REPAIR_NOTE='literal $HOME, apostrophe '"'"', and `touch SHOULD_NOT_EXIST`'
+SECOND_REPAIR_NOTE='fan-out second link'
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two "$SECOND_REPAIR_NOTE" )
+
+hr "subdivision diagnoses name narrowing and broken hash endpoints"
+NAME_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:@audit-source 8 )
+printf '%s\n' "$NAME_SPLIT"
+printf '%s\n' "$NAME_SPLIT" | grep -qF "name endpoint '@audit-source' will narrow from 1..10 to 1..7" \
+  || { echo "  FAIL: named subdivision did not report its narrowed range"; exit 1; }
+[[ $(printf '%s\n' "$NAME_SPLIT" | grep -cF "name endpoint '@audit-source' will narrow") == "1" ]] \
+  || { echo "  FAIL: named subdivision repeated an identical fan-out warning"; exit 1; }
+printf '%s\n' "$NAME_SPLIT" | grep -qF "inbound connections stored in another repository cannot be discovered" \
+  || { echo "  FAIL: subdivision omitted the inbound-discovery limit"; exit 1; }
+
+STATUS_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:26 )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two "hash subdivision" )
+HASH_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md:26 28 )
+printf '%s\n' "$HASH_SPLIT"
+printf '%s\n' "$HASH_SPLIT" | grep -qF "hash endpoint '$STATUS_HASH' will become broken" \
+  || { echo "  FAIL: hash-addressed subdivision was not diagnosed"; exit 1; }
+PRUNE_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" prune self_audit )
+printf '%s\n' "$PRUNE_SPLIT" | grep -qF "prune: 1 link(s) dropped, 2 kept" \
+  || { echo "  FAIL: subdivision did not produce exactly one broken hash link"; exit 1; }
+
+run_repair_block() {
+  local output="$1"
+  local script
+  [[ $(printf '%s\n' "$output" | grep -c '^--- covmap repair begin ---$') == "1" \
+    && $(printf '%s\n' "$output" | grep -c '^--- covmap repair end ---$') == "1" ]] \
+    || { echo "  FAIL: rename did not emit exactly one repair block"; printf '%s\n' "$output"; exit 1; }
+  script=$(printf '%s\n' "$output" \
+    | sed -n '/^--- covmap repair begin ---$/,/^--- covmap repair end ---$/p' \
+    | sed '1d;$d')
+  [[ -n "$script" ]] \
+    || { echo "  FAIL: rename emitted no repair block"; printf '%s\n' "$output"; exit 1; }
+  ( cd "$WORK/spec" && PATH="$(dirname "$COVMAP_BIN"):$PATH" sh -eu -c "$script" )
+}
+
+SOURCE_RENAME=$( cd "$WORK/spec" && "$COVMAP_BIN" name main:@audit-source audit-source-next )
+printf '%s\n' "$SOURCE_RENAME"
+printf '%s\n' "$SOURCE_RENAME" | grep -qF "stored source endpoint '@audit-source' is now broken" \
+  || { echo "  FAIL: source-side rename impact was not reported"; exit 1; }
+run_repair_block "$SOURCE_RENAME"
+
+TARGET_RENAME=$( cd "$WORK/spec" && "$COVMAP_BIN" name main:@audit-target audit-target-next )
+printf '%s\n' "$TARGET_RENAME"
+printf '%s\n' "$TARGET_RENAME" | grep -qF "stored target endpoint '@audit-target' is now broken" \
+  || { echo "  FAIL: target-side rename impact was not reported"; exit 1; }
+run_repair_block "$TARGET_RENAME"
+
+[[ ! -e "$WORK/spec/SHOULD_NOT_EXIST" ]] \
+  || { echo "  FAIL: repair note syntax was executed by the shell"; exit 1; }
+
+link_note() {
+  local source="$1" target="$2"
+  awk -F '\t' -v source="$source" -v target="$target" '
+    $1 == source && $2 == target {
+      print substr($0, length($1) + length($2) + 3)
+      exit
+    }
+  '
+}
+
+SELF_AUDIT_LINKS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit )
+ACTUAL_REPAIR_NOTE=$(printf '%s\n' "$SELF_AUDIT_LINKS" \
+  | link_note @audit-source-next @audit-target-next)
+[[ "$ACTUAL_REPAIR_NOTE" == "$REPAIR_NOTE" ]] \
+  || { echo "  FAIL: repair changed the link note"; exit 1; }
+ACTUAL_SECOND_NOTE=$(printf '%s\n' "$SELF_AUDIT_LINKS" \
+  | link_note @audit-source-next @audit-target-two)
+[[ "$ACTUAL_SECOND_NOTE" == "$SECOND_REPAIR_NOTE" ]] \
+  || { echo "  FAIL: fan-out repair changed the second link note"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
+
+hr "unlink accepts exact @name endpoints"
+( cd "$WORK/spec" && "$COVMAP_BIN" unlink self_audit @audit-source-next @audit-target-next )
+[[ $( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit | wc -l | tr -d ' ' ) == "1" ]] \
+  || { echo "  FAIL: name-addressed unlink did not remove the link"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next "$REPAIR_NOTE" )
+
+hr "disconnect removes only the connection ref and warns about the default report"
+( cd "$WORK/spec" && "$COVMAP_BIN" html --connection self_audit )
+OBJECTS_BEFORE_DISCONNECT=$(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ')
+COVERINGS_BEFORE_DISCONNECT=$(find "$WORK/spec/.covmap/coverings" -type f | wc -l | tr -d ' ')
+DISCONNECT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" disconnect self_audit 2>&1 )
+printf '%s\n' "$DISCONNECT_OUT"
+printf '%s\n' "$DISCONNECT_OUT" | grep -qF "removed 2 link(s) from main -> main (self-map)" \
+  || { echo "  FAIL: disconnect summary omitted link count or coverings"; exit 1; }
+printf '%s\n' "$DISCONNECT_OUT" | grep -qF ".covmap/report.html may be stale" \
+  || { echo "  FAIL: disconnect did not warn about the default report"; exit 1; }
+[[ ! -e "$WORK/spec/.covmap/connections/self_audit" ]] \
+  || { echo "  FAIL: disconnect left the connection ref behind"; exit 1; }
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "$OBJECTS_BEFORE_DISCONNECT" ]] \
+  || { echo "  FAIL: disconnect changed the object store"; exit 1; }
+[[ $(find "$WORK/spec/.covmap/coverings" -type f | wc -l | tr -d ' ') == "$COVERINGS_BEFORE_DISCONNECT" ]] \
+  || { echo "  FAIL: disconnect changed a covering"; exit 1; }
+if ( cd "$WORK/spec" && "$COVMAP_BIN" show self_audit >/dev/null 2>&1 ); then
+  echo "  FAIL: disconnected connection is still showable"
+  exit 1
+fi
+
+hr "disconnect refuses to delete a malformed connection ref"
+printf '# source_covering=main\nmalformed-link\n' > "$WORK/spec/.covmap/connections/malformed"
+if ( cd "$WORK/spec" && "$COVMAP_BIN" disconnect malformed >/dev/null 2>&1 ); then
+  echo "  FAIL: malformed connection was silently deleted"
+  exit 1
+fi
+[[ -e "$WORK/spec/.covmap/connections/malformed" ]] \
+  || { echo "  FAIL: malformed connection ref was deleted"; exit 1; }
+rm "$WORK/spec/.covmap/connections/malformed"
 
 hr "final fsck"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )

@@ -54,6 +54,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
         "link" => cmd_link(&rest),
         "unlink" => cmd_unlink(&rest),
         "connect" => cmd_connect(&rest),
+        "disconnect" => cmd_disconnect(&rest),
         "prune" => cmd_prune(&rest),
         "iter" => cmd_iter(&rest),
         "html" => cmd_html(&rest),
@@ -102,22 +103,37 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "init" => "covmap init                                  create .covmap/ in the cwd",
         "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
         "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
-        "show" => "covmap show <addr>                           segment | covering | connection at <addr>",
-        "ls" => "covmap ls [-l] [<covering>]                  list segments",
+        "show" => {
+            "covmap show <addr> [--content] [--all]   inspect a segment, covering, region, link, or connection"
+        }
+        "ls" => {
+            "covmap ls [-l] [<covering>] [<region> ...] [--label <l>] [--linked|--unlinked]   list segments, optionally narrowed to regions"
+        }
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
         "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
         "annotate" => "covmap annotate <C>:<addr> [-m <msg>...] | -   set, replace, clear (-), or print a segment's message",
-        "split" => "covmap split <C>:<h> <line[:col]> [<top>] [<bot>] split one segment at a line or character position",
+        "split" => {
+            "covmap split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately"
+        }
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
-        "link" => "covmap link <K> <h_A> <h_B> [<note>]         add a link to connection K",
-        "unlink" => "covmap unlink <K> <h_A> <h_B>                remove a link",
-        "connect" => "covmap connect <C_A> <repoB:C_B> [<K>]       create empty connection",
+        "link" => {
+            "covmap link <K> <A> <B> [<note>]            add a link to connection K\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
+        }
+        "unlink" => {
+            "covmap unlink <K> <A> <B>                   remove a link\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
+        }
+        "connect" => {
+            "covmap connect <C_A> [<repo>:]<C_B> [<K>]   create an empty connection; omit <repo>: for a same-repository target"
+        }
+        "disconnect" => {
+            "covmap disconnect <K>                       delete only the named connection ref"
+        }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
-            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist (bare `iter` lists all; `iter <name>` with no verb prints the verb list)"
+            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  peek          list pending tasks\n  peek --all    list the complete frozen worklist with state and notes"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
         "migrate" => "covmap migrate                              upgrade .covmap/ on-disk format (1 → 2: content-only segment hash)",
@@ -142,20 +158,21 @@ PORCELAIN
   init                                create .covmap/ in the cwd
   cover [<covering>]                  add one whole-file `unknown` segment per missing file
   status [<covering>]                 cardinality, lines, drift, broken links
-  show <addr>                         segment | covering | connection at <addr>
-  ls [-l] [<covering>]                list segments
+  show <addr> [--content] [--all]     inspect a segment, covering, region, link, or connection
+  ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
   name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
   annotate <C>:<addr> [-m <msg>...]   set/replace/clear (-)/print a segment's free-form message
-  split <C>:<h> <line[:col]> [<lbl_top>] [<lbl_bot>]   split one segment at a line or character position
+  split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
-  link <K> <h_A> <h_B> [<note>]       add a link to connection K
-  unlink <K> <h_A> <h_B>              remove a link
-  connect <C_A> <repoB:C_B> [<K>]     create empty connection
+  link <K> <A> <B> [<note>]           add a link; endpoints accept @name, hash prefix, or position
+  unlink <K> <A> <B>                  remove a link by @name, hash prefix, or position
+  connect <C_A> [<repo>:]<C_B> [<K>]  create empty connection; omit <repo>: for same-repo
+  disconnect <K>                      delete only the named connection ref
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
@@ -349,6 +366,19 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
 
 // ---- status ---------------------------------------------------------------
 
+/// Render a connection's two coverings without exposing the repository's
+/// absolute path for a same-repository target.
+fn connection_route(repo: &Repo, k: &Connection) -> String {
+    if k.target_repo == repo.root.to_string_lossy() {
+        format!("{} -> {} (self-map)", k.source_covering, k.target_covering)
+    } else {
+        format!(
+            "{} -> {}/{}",
+            k.source_covering, k.target_repo, k.target_covering
+        )
+    }
+}
+
 /// "Drift" for a hand-curated covering means: a file the covering
 /// claims to partition has been edited so that the recorded segments
 /// no longer match its current bytes. We detect this without needing
@@ -441,10 +471,9 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
                 None => format!("source {src_cov}/{src_tot}, target (covering unavailable)"),
             };
             println!(
-                "  {} -> {}/{} : {} links, {} broken · coverage {}",
+                "  {}: {} : {} links, {} broken · coverage {}",
                 cn,
-                k.target_repo,
-                k.target_covering,
+                connection_route(&repo, &k),
                 k.links.len(),
                 broken,
                 cov_note
@@ -555,8 +584,8 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     if let Some(cname) = &covering {
         if repo.coverings_dir().join(cname).is_file() {
             let c = Covering::read(&repo, cname)?;
-            if let Some((file, range)) = parse_region(&c, &prefix) {
-                return show_region(&repo, &c, &file, range);
+            if let Some(region) = parse_region(&c, &prefix) {
+                return show_region(&repo, &c, &region?);
             }
         }
     } else if repo.coverings_dir().join(addr).is_file() {
@@ -568,22 +597,67 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     show_segment(&repo, covering.as_deref(), &prefix, with_content)
 }
 
-/// Parse the part after `<C>:` as a region — a covered file, optionally
-/// with a `:a..b` line range — or `None` if it is a segment address.
-fn parse_region(c: &Covering, rest: &str) -> Option<(String, Option<(usize, usize)>)> {
-    if let Some((file, rng)) = rest.rsplit_once(':') {
-        if let Some((a, b)) = rng.split_once("..") {
-            if let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) {
-                if c.entries.iter().any(|e| e.file == file) {
-                    return Some((file.to_string(), Some((a, b))));
-                }
-            }
-        }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Region {
+    file: String,
+    range: Option<(usize, usize)>,
+}
+
+impl Region {
+    fn contains(&self, entry: &CoveringEntry) -> bool {
+        entry.file == self.file
+            && self
+                .range
+                .map(|(a, b)| overlaps(entry.a, entry.b, a, b))
+                .unwrap_or(true)
     }
-    if c.entries.iter().any(|e| e.file == rest) {
-        return Some((rest.to_string(), None));
+}
+
+/// Parse a covered file or `file:a..b` region. Exact covered filenames win,
+/// including filenames containing `:`. `None` means the token may instead be
+/// a segment address; a range-shaped token returns a specific error.
+fn parse_region(c: &Covering, input: &str) -> Option<io::Result<Region>> {
+    let covered = |file: &str| c.entries.iter().any(|entry| entry.file == file);
+    if covered(input) {
+        return Some(Ok(Region {
+            file: input.to_string(),
+            range: None,
+        }));
     }
-    None
+
+    let (file, bounds) = input.rsplit_once(':')?;
+    let invalid = |detail: &str| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "invalid region '{input}': {detail}; expected covered-file or covered-file:a..b"
+            ),
+        )
+    };
+    if !covered(file) {
+        return Some(Err(invalid(
+            "the prefix before the final ':' is not a covered file",
+        )));
+    }
+    let (a, b) = match bounds.split_once("..") {
+        Some(bounds) => bounds,
+        None => return Some(Err(invalid("a line range must use a..b"))),
+    };
+    let a = match a.parse::<usize>() {
+        Ok(a) if a > 0 => a,
+        _ => return Some(Err(invalid("range bounds must be positive integers"))),
+    };
+    let b = match b.parse::<usize>() {
+        Ok(b) if b > 0 => b,
+        _ => return Some(Err(invalid("range bounds must be positive integers"))),
+    };
+    if a > b {
+        return Some(Err(invalid("range start must not exceed its end")));
+    }
+    Some(Ok(Region {
+        file: file.to_string(),
+        range: Some((a, b)),
+    }))
 }
 
 /// Whether a segment (line range `[a,b]`) overlaps a region `[ra,rb]`.
@@ -769,78 +843,220 @@ fn resolved_loc(l: &crate::resolve::ResolvedEnd) -> String {
     l.loc.clone().unwrap_or_else(|| "(unresolved)".to_string())
 }
 
-/// Above this many links, `show <connection>` summarizes (coverage +
-/// fan-in hubs) instead of dumping every link; `--all` forces the full list.
+/// Above this many links, `show <connection>` summarizes instead of dumping
+/// every link; degree maxima and bounded hubs are always shown when available.
 const CONN_LIST_THRESHOLD: usize = 30;
 
-fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
-    let self_map = k.target_repo == repo.root.to_string_lossy();
+#[derive(Clone, Debug)]
+struct ResolvedConnectionLink {
+    source_hash: Option<String>,
+    target_hash: Option<String>,
+    source_display: String,
+    target_display: String,
+    note: String,
+}
+
+fn resolve_connection_endpoint(c: Option<&Covering>, endpoint: &str) -> (Option<String>, String) {
+    match c.and_then(|covering| covering::endpoint_to_hash(covering, endpoint)) {
+        Some(hash) => {
+            let display = c
+                .and_then(|covering| covering.entries.iter().find(|entry| entry.hash == hash))
+                .map(display_entry)
+                .unwrap_or_else(|| endpoint.to_string());
+            (Some(hash), display)
+        }
+        None if c.is_some() => (None, format!("{endpoint} (broken)")),
+        None => (None, endpoint.to_string()),
+    }
+}
+
+fn display_entry(entry: &CoveringEntry) -> String {
+    let label = if entry.label.is_empty() {
+        "-"
+    } else {
+        &entry.label
+    };
+    format!("{label} {}", entry.loc())
+}
+
+fn resolve_connection_links(
+    source: &Covering,
+    target: Option<&Covering>,
+    connection: &Connection,
+) -> Vec<ResolvedConnectionLink> {
+    connection
+        .links
+        .iter()
+        .map(|link| {
+            let (source_hash, source_display) = resolve_connection_endpoint(Some(source), &link.a);
+            let (target_hash, target_display) = resolve_connection_endpoint(target, &link.b);
+            ResolvedConnectionLink {
+                source_hash,
+                target_hash,
+                source_display,
+                target_display,
+                note: link.note.clone(),
+            }
+        })
+        .collect()
+}
+
+fn ranked_hubs(
+    covering: &Covering,
+    degree: &std::collections::HashMap<String, usize>,
+) -> Vec<(usize, String)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut hubs = Vec::new();
+    for (order, entry) in covering.entries.iter().enumerate() {
+        if !seen.insert(entry.hash.as_str()) {
+            continue;
+        }
+        let count = degree.get(&entry.hash).copied().unwrap_or(0);
+        if count > 1 {
+            hubs.push((count, order, display_entry(entry)));
+        }
+    }
+    hubs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    hubs.into_iter()
+        .map(|(count, _, display)| (count, display))
+        .collect()
+}
+
+fn append_hubs(lines: &mut Vec<String>, kind: &str, arrow: &str, hubs: &[(usize, String)]) {
+    if hubs.is_empty() {
+        return;
+    }
+    lines.push(format!("  {kind}:"));
+    for (degree, display) in hubs.iter().take(10) {
+        lines.push(format!("    {degree:>4} {arrow} {display}"));
+    }
+    if hubs.len() > 10 {
+        lines.push(format!("    ... {} more {kind} hubs", hubs.len() - 10));
+    }
+}
+
+const CONNECTION_NOTE_WIDTH: usize = 79;
+const CONNECTION_NOTE_INDENT: &str = "    ";
+
+fn wrap_connection_note(note: &str) -> Vec<String> {
+    let content_width = CONNECTION_NOTE_WIDTH - CONNECTION_NOTE_INDENT.chars().count();
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in note.split_whitespace() {
+        let next_len =
+            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
+        if !current.is_empty() && next_len > content_width {
+            lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
+    }
+    lines
+}
+
+fn connection_lines(repo: &Repo, k: &Connection, all: bool) -> io::Result<Vec<String>> {
     let src = Covering::read(repo, &k.source_covering)?;
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
+    let resolved = resolve_connection_links(&src, tgt.as_ref(), k);
 
     // Coverage: distinct resolving endpoints over covering cardinality.
-    let (src_cov, src_tot) = coverage(&src, k.links.iter().map(|p| p.a.as_str()));
+    let src_cov = resolved
+        .iter()
+        .filter_map(|link| link.source_hash.as_ref())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let src_tot = src.entries.len();
     let (tgt_cov, tgt_tot) = match &tgt {
-        Some(t) => coverage(t, k.links.iter().map(|p| p.b.as_str())),
+        Some(t) => (
+            resolved
+                .iter()
+                .filter_map(|link| link.target_hash.as_ref())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            t.entries.len(),
+        ),
         None => (0, 0),
     };
 
-    println!(
-        "connection {}   {} -> {}{}",
+    let mut lines = vec![format!(
+        "connection {}   {}",
         k.name,
-        k.source_covering,
-        k.target_covering,
-        if self_map { "   (self-map)" } else { "" }
-    );
-    println!(
+        connection_route(repo, k)
+    )];
+    lines.push(format!(
         "  {} links · source {}/{} segments · target {}/{} segments",
         k.links.len(),
         src_cov,
         src_tot,
         tgt_cov,
         tgt_tot
-    );
+    ));
 
-    // Large connections summarize by default: show the top fan-in targets
-    // (the highest-signal rows for triage — a catch-all hub stands out),
-    // and require --all for the full per-link dump.
+    if let Some(target) = &tgt {
+        let pairs: std::collections::BTreeSet<(String, String)> = resolved
+            .iter()
+            .filter_map(|link| {
+                Some((
+                    link.source_hash.as_ref()?.clone(),
+                    link.target_hash.as_ref()?.clone(),
+                ))
+            })
+            .collect();
+        let mut out_degree = std::collections::HashMap::new();
+        let mut in_degree = std::collections::HashMap::new();
+        for (source, target) in pairs {
+            *out_degree.entry(source).or_insert(0) += 1;
+            *in_degree.entry(target).or_insert(0) += 1;
+        }
+        let max_out = out_degree.values().copied().max().unwrap_or(0);
+        let max_in = in_degree.values().copied().max().unwrap_or(0);
+        lines.push(format!("  degree max-out {max_out}, max-in {max_in}"));
+        append_hubs(&mut lines, "fan-out", "->", &ranked_hubs(&src, &out_degree));
+        append_hubs(&mut lines, "fan-in", "<-", &ranked_hubs(target, &in_degree));
+    } else {
+        lines.push("  degree unavailable (target covering unavailable)".to_string());
+    }
+
+    // Large connections summarize by default and require --all for the full
+    // per-link dump.
     if k.links.len() > CONN_LIST_THRESHOLD && !all {
-        let mut degree: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for p in &k.links {
-            *degree.entry(p.b.as_str()).or_insert(0) += 1;
-        }
-        let mut ranked: Vec<(&str, usize)> = degree.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-        println!("  top targets by in-degree:");
-        for (ep, n) in ranked.iter().take(10) {
-            let disp = tgt
-                .as_ref()
-                .map(|t| resolve_display(t, ep))
-                .unwrap_or_else(|| ep.to_string());
-            println!("    {n:>4}  <- {disp}");
-        }
-        println!(
+        lines.push(format!(
             "  ({} links total — `covmap show {} --all` to list each)",
             k.links.len(),
             k.name
-        );
-        return Ok(0);
+        ));
+        return Ok(lines);
     }
 
-    for p in &k.links {
-        let a = resolve_display(&src, &p.a);
-        let b = tgt
-            .as_ref()
-            .map(|t| resolve_display(t, &p.b))
-            .unwrap_or_else(|| p.b.clone());
-        if p.note.is_empty() {
-            println!("  {a}   ->   {b}");
+    for link in resolved {
+        if link.note.is_empty() {
+            lines.push(format!(
+                "  {}   ->   {}",
+                link.source_display, link.target_display
+            ));
         } else {
-            println!("  {a}   ->   {b}   {}", p.note);
+            lines.push(format!(
+                "  {}   ->   {}",
+                link.source_display, link.target_display
+            ));
+            lines.extend(wrap_connection_note(&link.note));
         }
+    }
+    Ok(lines)
+}
+
+fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
+    for line in connection_lines(repo, k, all)? {
+        println!("{line}");
     }
     Ok(0)
 }
@@ -852,10 +1068,7 @@ fn resolve_display(c: &Covering, ep: &str) -> String {
             .entries
             .iter()
             .find(|e| e.hash == h)
-            .map(|e| {
-                let lbl = if e.label.is_empty() { "-" } else { &e.label };
-                format!("{lbl} {}", e.loc())
-            })
+            .map(display_entry)
             .unwrap_or_else(|| ep.to_string()),
         None => format!("{ep} (broken)"),
     }
@@ -939,27 +1152,17 @@ fn endpoints_match(stored: &str, given: &str) -> bool {
         || format!("@{given}") == *stored
 }
 
-fn show_region(
-    repo: &Repo,
-    c: &Covering,
-    file: &str,
-    range: Option<(usize, usize)>,
-) -> io::Result<u8> {
+fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
     let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     let mut segs: Vec<&CoveringEntry> = c
         .entries
         .iter()
-        .filter(|e| {
-            e.file == file
-                && range
-                    .map(|(ra, rb)| overlaps(e.a, e.b, ra, rb))
-                    .unwrap_or(true)
-        })
+        .filter(|entry| region.contains(entry))
         .collect();
     segs.sort_by_key(|e| e.sort_key());
-    let where_ = match range {
-        Some((a, b)) => format!("{file}:{a}..{b}"),
-        None => file.to_string(),
+    let where_ = match region.range {
+        Some((a, b)) => format!("{}:{a}..{b}", region.file),
+        None => region.file.clone(),
     };
     println!("region {} {} · {} segment(s)", c.name, where_, segs.len());
     print_region_segs(&rel, &segs);
@@ -1044,42 +1247,36 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
             }
         }
     }
-    // Positionals: an optional covering name and/or a region (a covered
-    // file, or `<file>:a..b`). `ls [<C>] [<file>[:a..b]]`.
-    if positionals.len() > 2 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "ls [-l] [<covering>] [<file>[:a..b]] [--label <l>] [--linked|--unlinked]",
-        ));
-    }
     let repo = current_repo()?;
-    // Decide which positional is the covering and which is the region.
-    let (cov_name, region) = split_ls_positionals(&repo, &positionals)?;
+    // Decide whether the first positional is a covering; all remaining
+    // positionals are regions, or every positional is a HEAD region.
+    let (cov_name, region_args, implicit_head) = split_ls_positionals(&repo, &positionals);
     let c = resolve_covering(&repo, &cov_name)?;
-
-    // Region filter (file + optional line range).
-    let region_parsed: Option<(String, Option<(usize, usize)>)> = match &region {
-        Some(r) => match r.split_once(':') {
-            Some((f, rng)) => match rng.split_once("..") {
-                Some((a, b)) => {
-                    let a: usize = a.parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
-                    })?;
-                    let b: usize = b.parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
-                    })?;
-                    Some((f.to_string(), Some((a, b))))
-                }
-                None => Some((r.clone(), None)),
-            },
-            None => Some((r.clone(), None)),
-        },
-        None => None,
-    };
+    let regions: Vec<Region> = region_args
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| match parse_region(&c, arg) {
+            Some(region) => region,
+            None if implicit_head && index == 0 && !arg.contains(':') => {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "'{arg}' is neither an existing covering nor a covered file; expected [<covering>] [<covered-file>[:a..b] ...]"
+                    ),
+                ))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid region '{arg}': not a covered file or covered-file:a..b range"
+                ),
+            )),
+        })
+        .collect::<io::Result<_>>()?;
 
     // Build the link relation only when a link filter is requested.
     let rel = match link_filter {
-        Some(_) => Some(crate::resolve::Relation::build(&repo, &cov_name, &c)?),
+        Some(_) => Some(crate::resolve::Relation::build(&repo, &c.name, &c)?),
         None => None,
     };
 
@@ -1089,15 +1286,8 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
                 continue;
             }
         }
-        if let Some((f, rng)) = &region_parsed {
-            if &e.file != f {
-                continue;
-            }
-            if let Some((ra, rb)) = rng {
-                if !overlaps(e.a, e.b, *ra, *rb) {
-                    continue;
-                }
-            }
+        if !regions.is_empty() && !regions.iter().any(|region| region.contains(e)) {
+            continue;
         }
         if let (Some(want_linked), Some(rel)) = (link_filter, &rel) {
             if rel.is_linked(&e.hash) != want_linked {
@@ -1135,28 +1325,14 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-/// Split `ls` positionals into (covering, region). A positional that names
-/// an existing covering is the covering; anything else is a region (a
-/// covered file, optionally `file:a..b`). Defaults the covering to HEAD.
-fn split_ls_positionals(
-    repo: &Repo,
-    positionals: &[String],
-) -> io::Result<(String, Option<String>)> {
+/// Split `ls` positionals into (covering, regions). The first positional is
+/// the covering only when it names an existing covering or HEAD; otherwise
+/// every positional is a region under HEAD.
+fn split_ls_positionals(repo: &Repo, positionals: &[String]) -> (String, Vec<String>, bool) {
     let is_cov = |s: &str| repo.coverings_dir().join(s).is_file() || s == "HEAD";
-    match positionals {
-        [] => Ok(("HEAD".to_string(), None)),
-        [one] => {
-            if is_cov(one) {
-                Ok((one.clone(), None))
-            } else {
-                Ok(("HEAD".to_string(), Some(one.clone())))
-            }
-        }
-        [a, b] => {
-            // Two positionals: <covering> <region>.
-            Ok((a.clone(), Some(b.clone())))
-        }
-        _ => unreachable!("caller guards length"),
+    match positionals.first() {
+        Some(first) if is_cov(first) => (first.clone(), positionals[1..].to_vec(), false),
+        _ => ("HEAD".to_string(), positionals.to_vec(), true),
     }
 }
 
@@ -1273,6 +1449,256 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
 
 // ---- name -----------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NameImpactSide {
+    Source,
+    Target,
+    Both,
+}
+
+impl NameImpactSide {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Target => "target",
+            Self::Both => "source and target",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NameImpact {
+    connection: String,
+    side: NameImpactSide,
+    old_a: String,
+    old_b: String,
+    note: String,
+    repair: NameRepair,
+}
+
+#[derive(Clone, Debug)]
+enum NameRepair {
+    Ready { a: String, b: String },
+    BrokenFar,
+    Collision { a: String, b: String },
+    NoReplacement,
+}
+
+/// Find exact `@old` endpoints in connections stored in this repository.
+/// A connection stored elsewhere and pointing into this covering is
+/// intentionally undiscoverable from local state.
+fn discover_name_impacts(
+    repo: &Repo,
+    covering: &Covering,
+    old_name: &str,
+    new_name: Option<&str>,
+) -> io::Result<Vec<NameImpact>> {
+    let old_endpoint = format!("@{old_name}");
+    let new_endpoint = new_name.map(|n| format!("@{n}"));
+    let repo_root = repo.root.to_string_lossy();
+    let mut impacts = Vec::new();
+
+    for connection_name in Connection::list(repo)? {
+        let k = Connection::read(repo, &connection_name)?;
+        let source_is_covering = k.source_covering == covering.name;
+        let target_is_covering = k.target_repo == repo_root && k.target_covering == covering.name;
+        let affected: Vec<_> = k
+            .links
+            .iter()
+            .filter_map(|link| {
+                let source_affected = source_is_covering && link.a == old_endpoint;
+                let target_affected = target_is_covering && link.b == old_endpoint;
+                (source_affected || target_affected).then_some((
+                    link,
+                    source_affected,
+                    target_affected,
+                ))
+            })
+            .collect();
+        if affected.is_empty() {
+            continue;
+        }
+
+        // Load each covering at most once for this connection. The covering
+        // being renamed is already available in its pre-rename state.
+        let source_covering = if affected.iter().any(|(_, source, _)| !source) {
+            if source_is_covering {
+                Some(covering.clone())
+            } else {
+                Covering::read(repo, &k.source_covering).ok()
+            }
+        } else {
+            None
+        };
+        let target_covering = if affected.iter().any(|(_, _, target)| !target) {
+            if target_is_covering {
+                Some(covering.clone())
+            } else {
+                let target_repo = Repo {
+                    root: PathBuf::from(&k.target_repo),
+                };
+                Covering::read(&target_repo, &k.target_covering).ok()
+            }
+        } else {
+            None
+        };
+
+        for (link, source_affected, target_affected) in affected {
+            let side = if source_affected {
+                if target_affected {
+                    NameImpactSide::Both
+                } else {
+                    NameImpactSide::Source
+                }
+            } else {
+                NameImpactSide::Target
+            };
+            let repair = match &new_endpoint {
+                None => NameRepair::NoReplacement,
+                Some(endpoint) => {
+                    let a = if source_affected {
+                        endpoint.clone()
+                    } else {
+                        link.a.clone()
+                    };
+                    let b = if target_affected {
+                        endpoint.clone()
+                    } else {
+                        link.b.clone()
+                    };
+                    let source_resolves = source_affected
+                        || source_covering
+                            .as_ref()
+                            .is_some_and(|c| covering::endpoint_resolves(c, &link.a));
+                    let target_resolves = target_affected
+                        || target_covering
+                            .as_ref()
+                            .is_some_and(|c| covering::endpoint_resolves(c, &link.b));
+
+                    if !source_resolves || !target_resolves {
+                        NameRepair::BrokenFar
+                    } else if k
+                        .links
+                        .iter()
+                        .any(|existing| existing.a == a && existing.b == b)
+                    {
+                        NameRepair::Collision { a, b }
+                    } else {
+                        NameRepair::Ready { a, b }
+                    }
+                }
+            };
+
+            impacts.push(NameImpact {
+                connection: k.name.clone(),
+                side,
+                old_a: link.a.clone(),
+                old_b: link.b.clone(),
+                note: link.note.clone(),
+                repair,
+            });
+        }
+    }
+    Ok(impacts)
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn link_command(connection: &str, a: &str, b: &str, note: &str) -> String {
+    let mut command = format!(
+        "covmap link {} {} {}",
+        posix_shell_quote(connection),
+        posix_shell_quote(a),
+        posix_shell_quote(b)
+    );
+    if !note.is_empty() {
+        command.push(' ');
+        command.push_str(&posix_shell_quote(note));
+    }
+    command
+}
+
+fn unlink_command(connection: &str, a: &str, b: &str) -> String {
+    format!(
+        "covmap unlink {} {} {}",
+        posix_shell_quote(connection),
+        posix_shell_quote(a),
+        posix_shell_quote(b)
+    )
+}
+
+fn render_name_impacts(impacts: &[NameImpact], old_name: &str) -> String {
+    if impacts.is_empty() {
+        return format!(
+            "no connection refs stored in this repository use exact endpoint '@{old_name}'"
+        );
+    }
+    let mut lines = Vec::new();
+    let mut link_commands = Vec::new();
+    let mut unlink_commands = Vec::new();
+    let mut reported_ready = Vec::new();
+
+    for impact in impacts {
+        let ready_key = (impact.connection.as_str(), impact.side);
+        if !matches!(impact.repair, NameRepair::Ready { .. })
+            || !reported_ready.contains(&ready_key)
+        {
+            lines.push(format!(
+                "connection '{}': stored {} endpoint '@{}' is now broken",
+                impact.connection,
+                impact.side.description(),
+                old_name
+            ));
+        }
+        match &impact.repair {
+            NameRepair::Ready { a, b } => {
+                reported_ready.push(ready_key);
+                link_commands.push(link_command(&impact.connection, a, b, &impact.note));
+                unlink_commands.push(unlink_command(
+                    &impact.connection,
+                    &impact.old_a,
+                    &impact.old_b,
+                ));
+            }
+            NameRepair::BrokenFar => {
+                lines.push(
+                    "  no repair block: the unchanged far endpoint is already broken".to_string(),
+                );
+            }
+            NameRepair::Collision { a, b } => {
+                lines.push(format!(
+                    "  no repair block: replacement pair {} -> {} already exists",
+                    a, b
+                ));
+            }
+            NameRepair::NoReplacement => {
+                lines.push(format!(
+                    "  remove the stale link with: {}",
+                    unlink_command(&impact.connection, &impact.old_a, &impact.old_b)
+                ));
+            }
+        }
+    }
+
+    if !link_commands.is_empty() {
+        lines.push("--- covmap repair begin ---".to_string());
+        lines.extend(link_commands);
+        lines.extend(unlink_commands);
+        lines.push("--- covmap repair end ---".to_string());
+    }
+    lines.push(
+        "note: inbound connections stored in another repository cannot be discovered here"
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn print_name_impacts(impacts: &[NameImpact], old_name: &str) {
+    println!("{}", render_name_impacts(impacts, old_name));
+}
+
 /// `name <C>:<h|@name> <name|->` — set, rename, or clear a segment's
 /// name. The address may itself be a hash prefix or an existing
 /// `@name`. A `<name>` of `-` clears it (segment becomes anonymous).
@@ -1290,18 +1716,27 @@ fn cmd_name(args: &[String]) -> io::Result<u8> {
     let mut c = resolve_covering(&repo, &covname)?;
     let idx = covering::resolve_segment(&c, &addr)?;
     let old = c.entries[idx].name.clone();
+    let before = c.clone();
     let new_name = if tag == "-" { None } else { Some(tag) };
     covering::set_name(&mut c, idx, new_name)?;
+    let impacts = match old.as_deref() {
+        Some(old_name) if new_name != Some(old_name) => {
+            discover_name_impacts(&repo, &before, old_name, new_name)?
+        }
+        _ => Vec::new(),
+    };
     c.write(&repo)?;
     let h = covering::short_hash(&c.entries[idx].hash);
-    match (old, new_name) {
+    match (old.as_deref(), new_name) {
         (None, Some(n)) => println!("named {h} -> @{n}"),
         (Some(o), Some(n)) if o != n => {
-            println!("renamed @{o} -> @{n}  (re-point connections that used '@{o}')")
+            println!("renamed @{o} -> @{n} in covering '{}'", c.name);
+            print_name_impacts(&impacts, o);
         }
         (Some(o), Some(_)) => println!("@{o} (unchanged)"),
         (Some(o), None) => {
-            println!("cleared @{o} from {h}  (connections to '@{o}' are now broken)")
+            println!("cleared @{o} from {h} in covering '{}'", c.name);
+            print_name_impacts(&impacts, o);
         }
         (None, None) => println!("{h} (already anonymous)"),
     }
@@ -1394,32 +1829,181 @@ fn cmd_annotate(args: &[String]) -> io::Result<u8> {
 
 // ---- split ----------------------------------------------------------------
 
+fn resolve_split_selector(repo: &Repo, raw: &str) -> io::Result<(Covering, covering::SplitScope)> {
+    let covering_names = Covering::list(repo)?;
+    let (covering_name, selector) = match raw.split_once(':') {
+        Some((candidate, rest))
+            if candidate == "HEAD" || covering_names.iter().any(|name| name == candidate) =>
+        {
+            (candidate.to_string(), rest.to_string())
+        }
+        _ => ("HEAD".to_string(), raw.to_string()),
+    };
+    let covering = resolve_covering(repo, &covering_name)?;
+    let scope = if selector.starts_with('@') || selector.contains(':') {
+        covering::SplitScope::Segment(covering::resolve_segment(&covering, &selector)?)
+    } else if covering.covered_files().contains(&selector) {
+        covering::SplitScope::File(selector)
+    } else {
+        covering::SplitScope::Segment(covering::resolve_segment(&covering, &selector)?)
+    };
+    Ok((covering, scope))
+}
+
+fn split_impact_warning(
+    connection: &str,
+    side: NameImpactSide,
+    endpoint: &str,
+    group: &covering::SplitGroup,
+) -> Option<String> {
+    if let Some(name) = &group.original.name {
+        let named = format!("@{name}");
+        if endpoint == named {
+            return Some(format!(
+                "warning: connection '{connection}': {} name endpoint '{named}' will narrow from {} to {}",
+                side.description(),
+                group.original.range(),
+                group.fragments[0].range()
+            ));
+        }
+    }
+    (endpoint == group.original.hash).then(|| {
+        format!(
+            "warning: connection '{connection}': {} hash endpoint '{}' will become broken after subdividing {}",
+            side.description(),
+            group.original.hash,
+            group.original.range()
+        )
+    })
+}
+
+fn discover_split_warnings(
+    repo: &Repo,
+    covering: &Covering,
+    plan: &covering::SplitPlan,
+) -> io::Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    let repo_root = repo.root.to_string_lossy();
+    for connection_name in Connection::list(repo)? {
+        let connection = Connection::read(repo, &connection_name)?;
+        let source_local = connection.source_covering == covering.name;
+        let target_local =
+            connection.target_repo == repo_root && connection.target_covering == covering.name;
+        if !source_local && !target_local {
+            continue;
+        }
+        for link in &connection.links {
+            let local_endpoints = [
+                (NameImpactSide::Source, source_local, &link.a),
+                (NameImpactSide::Target, target_local, &link.b),
+            ];
+            for (side, is_local, endpoint) in local_endpoints {
+                if !is_local {
+                    continue;
+                }
+                for group in &plan.groups {
+                    if let Some(warning) =
+                        split_impact_warning(&connection.name, side, endpoint, group)
+                    {
+                        if !warnings.contains(&warning) {
+                            warnings.push(warning);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(warnings)
+}
+
+fn print_split_warnings(warnings: &[String]) {
+    for warning in warnings {
+        println!("{warning}");
+    }
+    if !warnings.is_empty() {
+        println!(
+            "note: inbound connections stored in another repository cannot be discovered here"
+        );
+    }
+}
+
+fn print_split_plan(plan: &covering::SplitPlan) {
+    for group in &plan.groups {
+        println!(
+            "split {} {} ->",
+            covering::short_hash(&group.original.hash),
+            group.original.loc()
+        );
+        for (index, fragment) in group.fragments.iter().enumerate() {
+            let mut inherited = Vec::new();
+            if index == 0 {
+                if let Some(name) = &fragment.name {
+                    inherited.push(format!("@{name}"));
+                }
+                if fragment.message.is_some() {
+                    inherited.push("message".to_string());
+                }
+            }
+            let suffix = if inherited.is_empty() {
+                String::new()
+            } else {
+                format!("  inherited {}", inherited.join(", "))
+            };
+            println!(
+                "  {}  {}  {}{}",
+                covering::short_hash(&fragment.hash),
+                fragment.label,
+                fragment.loc(),
+                suffix
+            );
+        }
+    }
+    for existing in &plan.existing_cuts {
+        println!(
+            "existing cut: {}:{} (already satisfied)",
+            plan.file,
+            covering::fmt_pos(*existing)
+        );
+    }
+}
+
 fn cmd_split(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "split <covering>:<hash> <line> [<label_top>] [<label_bot>]",
+            "split <covering>:<segment|file> <cut> [<cut> ...]",
         ));
     }
-    let (covname, prefix) = parse_addr(&args[0]);
-    let covname = covname.unwrap_or_else(|| "HEAD".to_string());
-    let (cut_line, cut_col) = parse_line_col(&args[1])?;
-    let label_top = args
-        .get(2)
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
-    let label_bot = args
-        .get(3)
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
-    let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_segment_hash(&c, &prefix)?;
-    let (top, bot) = covering::split(
-        &repo, &mut c, &old, cut_line, cut_col, &label_top, &label_bot,
-    )?;
+    let (mut c, scope) = resolve_split_selector(&repo, &args[0])?;
+    let cuts = args[1..]
+        .iter()
+        .map(|raw| {
+            parse_line_col(raw)
+                .map(|(line, col)| covering::Pos { line, col })
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "split cut '{raw}' is not line[:column]; split accepts cuts only. \
+                             Apply metadata afterward with `covmap label`, `covmap name`, or \
+                             `covmap annotate`"
+                        ),
+                    )
+                })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let plan = covering::plan_split_many(&repo, &c, scope, &cuts)?;
+    let warnings = discover_split_warnings(&repo, &c, &plan)?;
+    print_split_warnings(&warnings);
+    if plan.is_noop() {
+        print_split_plan(&plan);
+        println!("split: no changes");
+        return Ok(0);
+    }
+    covering::apply_split_plan(&repo, &mut c, &plan)?;
     c.write(&repo)?;
-    println!("split {} -> {} + {}", old, top, bot);
+    print_split_plan(&plan);
     Ok(0)
 }
 
@@ -1731,7 +2315,7 @@ fn cmd_link(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "link <connection> <hash_A> <hash_B> [<note>]",
+            "link <connection> <A> <B> [<note>]",
         ));
     }
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
@@ -1784,7 +2368,7 @@ fn cmd_unlink(args: &[String]) -> io::Result<u8> {
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "unlink <connection> <hash_A> <hash_B>",
+            "unlink <connection> <A> <B>",
         ));
     }
     let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
@@ -1889,7 +2473,7 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "connect <C_A> <repoB:C_B> [<connection-name>]",
+            "connect <C_A> [<repo>:]<C_B> [<connection-name>]",
         ));
     }
     let src_cov = args[0].clone();
@@ -1936,9 +2520,32 @@ fn cmd_connect(args: &[String]) -> io::Result<u8> {
     }
     k.write(&repo)?;
     println!(
-        "Created connection '{}' from {} to {}/{}",
-        kname, k.source_covering, k.target_repo, k.target_covering
+        "created connection '{kname}': {}",
+        connection_route(&repo, &k)
     );
+    Ok(0)
+}
+
+// ---- disconnect -----------------------------------------------------------
+
+fn cmd_disconnect(args: &[String]) -> io::Result<u8> {
+    if args.len() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "disconnect <connection>",
+        ));
+    }
+    let repo = current_repo()?;
+    let k = Connection::remove(&repo, &args[0])?;
+    println!(
+        "disconnected '{}': removed {} link(s) from {}",
+        k.name,
+        k.links.len(),
+        connection_route(&repo, &k)
+    );
+    if repo.dot().join("report.html").is_file() {
+        eprintln!("warning: .covmap/report.html may be stale; regenerate it with `covmap html`");
+    }
     Ok(0)
 }
 
@@ -2025,7 +2632,9 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
         None => {
             eprintln!(
                 "covmap iter {name} <verb> — no verb given. Verbs: new, next, current, \
-                 done, skip, choose, rewind, peek, status, finished, rm"
+                 done, skip, choose, rewind, peek, status, finished, rm\n  \
+                 peek          list pending tasks\n  \
+                 peek --all    list the complete frozen worklist with state and notes"
             );
             return Ok(2);
         }
@@ -2778,32 +3387,11 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
     let mut errs = 0usize;
     for cn in Covering::list(&repo)? {
         let c = Covering::read(&repo, &cn)?;
-        let mut by_file: std::collections::BTreeMap<&str, Vec<&CoveringEntry>> =
-            std::collections::BTreeMap::new();
-        for e in &c.entries {
-            by_file.entry(e.file.as_str()).or_default().push(e);
-        }
-        for (f, mut entries) in by_file {
-            entries.sort_by_key(|e| e.sort_key());
-            // The partition must begin at the first character of the
-            // file and proceed with each segment abutting the previous
-            // one (no gap, no overlap), down to the character.
-            let mut expected = covering::Pos { line: 1, col: None };
-            for e in &entries {
-                if !covering::same_start(expected, e.start_pos()) {
-                    if !broken_only {
-                        eprintln!(
-                            "fsck: covering {} file {} has gap or overlap before {} (expected start {})",
-                            cn,
-                            f,
-                            e.range(),
-                            covering::fmt_pos(expected)
-                        );
-                    }
-                    errs += 1;
-                }
-                expected = covering::successor_of_end(e.end_pos());
+        for issue in covering::partition_issues(&c) {
+            if !broken_only {
+                eprintln!("fsck: covering {cn} {issue}");
             }
+            errs += 1;
         }
         for e in &c.entries {
             if !object_exists(&repo, &e.hash) {
@@ -2841,4 +3429,768 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
         }
     }
     Ok(if errs > 0 { 1 } else { 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(tag: &str) -> Repo {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("covmap-cli-{tag}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.join(".covmap")).unwrap();
+        Repo { root }
+    }
+
+    fn named_entry(hash: &str, line: usize, name: &str) -> CoveringEntry {
+        CoveringEntry {
+            hash: hash.to_string(),
+            file: "file.txt".to_string(),
+            a: line,
+            a_col: None,
+            b: line,
+            b_col: None,
+            label: "mapped".to_string(),
+            name: Some(name.to_string()),
+            message: None,
+        }
+    }
+
+    fn split_entry(hash: &str, file: &str, end_line: usize, name: &str) -> CoveringEntry {
+        CoveringEntry {
+            hash: hash.to_string(),
+            file: file.to_string(),
+            a: 1,
+            a_col: None,
+            b: end_line,
+            b_col: None,
+            label: "unknown".to_string(),
+            name: Some(name.to_string()),
+            message: None,
+        }
+    }
+
+    fn initialize_test_repo(repo: &Repo) {
+        fs::create_dir_all(repo.objects_dir()).unwrap();
+        fs::create_dir_all(repo.coverings_dir()).unwrap();
+        fs::create_dir_all(repo.connections_dir()).unwrap();
+        fs::write(repo.head_file(), "main\n").unwrap();
+    }
+
+    #[test]
+    fn connection_route_marks_same_repository_targets() {
+        let repo = temp_repo("route");
+        let mut k = Connection {
+            name: "map".to_string(),
+            source_covering: "left".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "right".to_string(),
+            links: Vec::new(),
+        };
+
+        assert_eq!(connection_route(&repo, &k), "left -> right (self-map)");
+        k.target_repo = "/tmp/elsewhere".to_string();
+        assert_eq!(connection_route(&repo, &k), "left -> /tmp/elsewhere/right");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn region_parser_prefers_exact_colon_filenames_and_validates_ranges() {
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: "1111111111111111".to_string(),
+                    file: "api:v1.md".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 10,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "2222222222222222".to_string(),
+                    file: "api:v1.md".to_string(),
+                    a: 11,
+                    a_col: None,
+                    b: 20,
+                    b_col: None,
+                    label: "reviewed".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "3333333333333333".to_string(),
+                    file: "other.md".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 20,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: None,
+                    message: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            parse_region(&covering, "api:v1.md").unwrap().unwrap(),
+            Region {
+                file: "api:v1.md".to_string(),
+                range: None,
+            }
+        );
+        assert_eq!(
+            parse_region(&covering, "api:v1.md:4..9").unwrap().unwrap(),
+            Region {
+                file: "api:v1.md".to_string(),
+                range: Some((4, 9)),
+            }
+        );
+        let selected = parse_region(&covering, "api:v1.md:4..12").unwrap().unwrap();
+        assert!(selected.contains(&covering.entries[0]));
+        assert!(selected.contains(&covering.entries[1]));
+        assert!(!selected.contains(&covering.entries[2]));
+        let first_only = parse_region(&covering, "api:v1.md:1..3").unwrap().unwrap();
+        assert!(first_only.contains(&covering.entries[0]));
+        assert!(!first_only.contains(&covering.entries[1]));
+        for invalid in ["api:v1.md:0..3", "api:v1.md:8..3", "missing.md:1..3"] {
+            let error = parse_region(&covering, invalid)
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(invalid));
+        }
+        assert!(parse_region(&covering, "api:v1.md:5")
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("a line range must use a..b"));
+        assert!(parse_region(&covering, "@segment").is_none());
+    }
+
+    #[test]
+    fn ls_positionals_treat_only_an_existing_first_token_as_covering() {
+        let repo = temp_repo("ls-positionals");
+        initialize_test_repo(&repo);
+        fs::write(repo.coverings_dir().join("review"), "# covered=x\n").unwrap();
+
+        let two_regions = vec!["one.md".to_string(), "two.md:4..8".to_string()];
+        assert_eq!(
+            split_ls_positionals(&repo, &two_regions),
+            ("HEAD".to_string(), two_regions, true)
+        );
+
+        let explicit = vec![
+            "review".to_string(),
+            "one.md".to_string(),
+            "two.md".to_string(),
+        ];
+        assert_eq!(
+            split_ls_positionals(&repo, &explicit),
+            (
+                "review".to_string(),
+                vec!["one.md".to_string(), "two.md".to_string()],
+                false
+            )
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn connection_degree_combines_hash_and_name_endpoint_spellings() {
+        let repo = temp_repo("degree-identity");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "one"),
+                named_entry("2222222222222222", 2, "two"),
+                named_entry("3333333333333333", 3, "three"),
+            ],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![CoveringEntry {
+                hash: "aaaaaaaaaaaaaaaa".to_string(),
+                file: "target.txt".to_string(),
+                a: 1,
+                a_col: None,
+                b: 1,
+                b_col: None,
+                label: "mapped".to_string(),
+                name: Some("hub".to_string()),
+                message: None,
+            }],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@one".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@two".to_string(),
+                    b: "@hub".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@three".to_string(),
+                    b: "@hub".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("target 1/1 segments"));
+        assert!(output.contains("degree max-out 1, max-in 3"));
+        assert_eq!(output.matches("mapped target.txt:1..1").count(), 4);
+        assert_eq!(output.matches("fan-in:").count(), 1);
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn hub_rendering_is_capped_and_reports_the_omitted_count() {
+        let covering = Covering {
+            name: "target".to_string(),
+            entries: (0..12)
+                .map(|i| CoveringEntry {
+                    hash: format!("{i:016x}"),
+                    file: "target.txt".to_string(),
+                    a: i + 1,
+                    a_col: None,
+                    b: i + 1,
+                    b_col: None,
+                    label: format!("target-{i}"),
+                    name: None,
+                    message: None,
+                })
+                .collect(),
+        };
+        let degree = covering
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let count = if i == 2 { 19 } else { 20 - i };
+                (entry.hash.clone(), count)
+            })
+            .collect();
+        let hubs = ranked_hubs(&covering, &degree);
+        let mut lines = Vec::new();
+
+        append_hubs(&mut lines, "fan-in", "<-", &hubs);
+
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], "  fan-in:");
+        assert!(lines[1].contains("20 <- target-0"));
+        assert!(lines[2].contains("19 <- target-1"));
+        assert!(lines[3].contains("19 <- target-2"));
+        assert_eq!(lines[11], "    ... 2 more fan-in hubs");
+    }
+
+    #[test]
+    fn shared_content_hash_prints_one_hub_row() {
+        let repo = temp_repo("shared-hub-hash");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "one"),
+                named_entry("2222222222222222", 2, "two"),
+            ],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "x.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "first".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "y.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "second".to_string(),
+                    name: None,
+                    message: None,
+                },
+            ],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@one".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@two".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree max-out 1, max-in 2"));
+        assert_eq!(output.matches("2 <- first x.txt:1..1").count(), 1);
+        assert!(!output.contains("2 <- second y.txt:1..1"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn degree_excludes_broken_links_and_reports_fan_out() {
+        let repo = temp_repo("degree-broken-fanout");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![named_entry("1111111111111111", 1, "source")],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![
+                named_entry("aaaaaaaaaaaaaaaa", 1, "one"),
+                named_entry("bbbbbbbbbbbbbbbb", 2, "two"),
+            ],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@source".to_string(),
+                    b: "@one".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@source".to_string(),
+                    b: "@two".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@source".to_string(),
+                    b: "@missing".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree max-out 2, max-in 1"));
+        assert!(output.contains("fan-out:"));
+        assert!(output.contains("2 -> mapped file.txt:1..1"));
+        assert!(output.contains("@missing (broken)"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn unavailable_target_reports_unknown_degree_instead_of_zero() {
+        let repo = temp_repo("degree-unavailable");
+        initialize_test_repo(&repo);
+        Covering {
+            name: "main".to_string(),
+            entries: vec![named_entry("1111111111111111", 1, "source")],
+        }
+        .write(&repo)
+        .unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.join("missing").to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![Link {
+                a: "@source".to_string(),
+                b: "@target".to_string(),
+                note: String::new(),
+            }],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree unavailable (target covering unavailable)"));
+        assert!(!output.contains("degree max-out"));
+        assert!(!output.contains("fan-in:"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn connection_note_wrapping_is_deterministic_and_bounded() {
+        let note = "The parser normalizes escaped fields before the reader validates the decoded value, preserving the mapping rationale without stretching the resolved endpoint row across the terminal.";
+
+        let lines = wrap_connection_note(note);
+
+        assert!(lines.len() > 1);
+        assert!(lines
+            .iter()
+            .all(|line| line.chars().count() <= CONNECTION_NOTE_WIDTH));
+        assert_eq!(
+            lines
+                .iter()
+                .flat_map(|line| line.split_whitespace())
+                .collect::<Vec<_>>()
+                .join(" "),
+            note
+        );
+    }
+
+    #[test]
+    fn large_connection_wraps_notes_only_when_all_is_requested() {
+        let repo = temp_repo("connection-all-notes");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: (0..31)
+                .map(|i| named_entry(&format!("{:016x}", i + 1), i + 1, &format!("source-{i}")))
+                .collect(),
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![named_entry("aaaaaaaaaaaaaaaa", 1, "target")],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let note = "This long note must appear as wrapped porcelain only when the caller explicitly expands the large connection with show --all.";
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: (0..31)
+                .map(|i| Link {
+                    a: format!("@source-{i}"),
+                    b: "@target".to_string(),
+                    note: if i == 0 { note } else { "" }.to_string(),
+                })
+                .collect(),
+        };
+
+        let summary = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+        let expanded = connection_lines(&repo, &connection, true)
+            .unwrap()
+            .join("\n");
+
+        assert!(summary.contains("31 links total"));
+        assert!(!summary.contains("This long note"));
+        assert!(expanded.contains("    This long note must appear as wrapped porcelain"));
+        assert!(!expanded.contains("31 links total"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn split_selector_prefers_exact_files_and_accepts_all_segment_forms() {
+        let repo = temp_repo("split-selector");
+        initialize_test_repo(&repo);
+        let covering = Covering {
+            name: "main".into(),
+            entries: vec![
+                split_entry("abcdef0123456789", "ab", 1, "hex-file"),
+                split_entry("1234567890abcdef", "other.txt", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+
+        let (_, file) = resolve_split_selector(&repo, "ab").unwrap();
+        assert!(matches!(file, covering::SplitScope::File(ref f) if f == "ab"));
+        let (_, named) = resolve_split_selector(&repo, "main:@other").unwrap();
+        assert!(matches!(named, covering::SplitScope::Segment(1)));
+        let (_, positioned) = resolve_split_selector(&repo, "other.txt:2").unwrap();
+        assert!(matches!(positioned, covering::SplitScope::Segment(1)));
+        let (_, hashed) = resolve_split_selector(&repo, "main:1234").unwrap();
+        assert!(matches!(hashed, covering::SplitScope::Segment(1)));
+
+        let malformed = resolve_split_selector(&repo, "main:other.txt:nope").unwrap_err();
+        assert!(malformed.to_string().contains("not a valid file:line"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn split_impact_discovery_covers_name_hash_source_and_target() {
+        let repo = temp_repo("split-impacts");
+        initialize_test_repo(&repo);
+        let content = "a\nb\n";
+        let segment = Segment {
+            file: "file.txt".into(),
+            a: 1,
+            b: 2,
+            label: "mapped".into(),
+            content: content.into(),
+        };
+        let hash = segment::write_object(&repo.objects_dir(), &segment).unwrap();
+        let covering = Covering {
+            name: "main".into(),
+            entries: vec![split_entry(&hash, "file.txt", 2, "whole")],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".into(),
+            source_covering: "main".into(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".into(),
+            links: vec![
+                Link {
+                    a: "@whole".into(),
+                    b: "@whole".into(),
+                    note: String::new(),
+                },
+                Link {
+                    a: hash.clone(),
+                    b: "@whole".into(),
+                    note: String::new(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+        let plan = covering::plan_split_many(
+            &repo,
+            &covering,
+            covering::SplitScope::Segment(0),
+            &[covering::Pos { line: 2, col: None }],
+        )
+        .unwrap();
+
+        let warnings = discover_split_warnings(&repo, &covering, &plan).unwrap();
+
+        assert_eq!(warnings.len(), 3);
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.contains("name endpoint"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.contains("hash endpoint"))
+                .count(),
+            1
+        );
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("source hash endpoint")));
+        assert!(warnings.iter().any(
+            |warning| warning.contains("target name endpoint") && warning.ends_with("to 1..1")
+        ));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn shell_quote_round_trips_without_evaluating_note_syntax() {
+        let value = "spaces ' \"$HOME\" `printf executed` $(printf executed) ; * ? !";
+        let script = format!("printf '%s' {}", posix_shell_quote(value));
+        let output = Command::new("sh").args(["-c", &script]).output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
+    }
+
+    #[test]
+    fn rename_discovery_handles_source_target_and_both_sides() {
+        let repo = temp_repo("rename-sides");
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "old"),
+                named_entry("2222222222222222", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".to_string(),
+            links: vec![
+                Link {
+                    a: "@old".to_string(),
+                    b: "@other".to_string(),
+                    note: "source".to_string(),
+                },
+                Link {
+                    a: "@other".to_string(),
+                    b: "@old".to_string(),
+                    note: "target".to_string(),
+                },
+                Link {
+                    a: "@old".to_string(),
+                    b: "@old".to_string(),
+                    note: "both".to_string(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let impacts = discover_name_impacts(&repo, &covering, "old", Some("new")).unwrap();
+
+        assert_eq!(impacts.len(), 3);
+        assert_eq!(impacts[0].side, NameImpactSide::Source);
+        assert_eq!(impacts[1].side, NameImpactSide::Target);
+        assert_eq!(impacts[2].side, NameImpactSide::Both);
+        assert!(matches!(
+            &impacts[2].repair,
+            NameRepair::Ready { a, b } if a == "@new" && b == "@new"
+        ));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn rename_discovery_blocks_collisions_and_broken_far_endpoints() {
+        let repo = temp_repo("rename-conflicts");
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "old"),
+                named_entry("2222222222222222", 2, "other"),
+            ],
+        };
+        covering.write(&repo).unwrap();
+        Connection {
+            name: "self".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "main".to_string(),
+            links: vec![
+                Link {
+                    a: "@old".to_string(),
+                    b: "@other".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@new".to_string(),
+                    b: "@other".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@old".to_string(),
+                    b: "@missing".to_string(),
+                    note: String::new(),
+                },
+            ],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let impacts = discover_name_impacts(&repo, &covering, "old", Some("new")).unwrap();
+
+        assert_eq!(impacts.len(), 2);
+        assert!(matches!(impacts[0].repair, NameRepair::Collision { .. }));
+        assert!(matches!(impacts[1].repair, NameRepair::BrokenFar));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn rename_rendering_groups_fanout_into_one_executable_block() {
+        let no_impacts = render_name_impacts(&[], "unused");
+        assert!(!no_impacts.contains("inbound connections"));
+
+        let impacts = vec![
+            NameImpact {
+                connection: "map".to_string(),
+                side: NameImpactSide::Source,
+                old_a: "@old".to_string(),
+                old_b: "@one".to_string(),
+                note: "first".to_string(),
+                repair: NameRepair::Ready {
+                    a: "@new".to_string(),
+                    b: "@one".to_string(),
+                },
+            },
+            NameImpact {
+                connection: "map".to_string(),
+                side: NameImpactSide::Source,
+                old_a: "@old".to_string(),
+                old_b: "@two".to_string(),
+                note: "second".to_string(),
+                repair: NameRepair::Ready {
+                    a: "@new".to_string(),
+                    b: "@two".to_string(),
+                },
+            },
+        ];
+
+        let rendered = render_name_impacts(&impacts, "old");
+        assert_eq!(rendered.matches("--- covmap repair begin ---").count(), 1);
+        assert_eq!(rendered.matches("--- covmap repair end ---").count(), 1);
+        assert_eq!(
+            rendered
+                .matches("stored source endpoint '@old' is now broken")
+                .count(),
+            1
+        );
+
+        let script = rendered
+            .lines()
+            .skip_while(|line| *line != "--- covmap repair begin ---")
+            .skip(1)
+            .take_while(|line| *line != "--- covmap repair end ---")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let commands: Vec<_> = script.lines().collect();
+        assert_eq!(commands.len(), 4);
+        assert!(commands[..2]
+            .iter()
+            .all(|line| line.starts_with("covmap link ")));
+        assert!(commands[2..]
+            .iter()
+            .all(|line| line.starts_with("covmap unlink ")));
+
+        let shell = format!("covmap() {{ :; }}\n{script}");
+        let status = Command::new("sh")
+            .args(["-eu", "-c", &shell])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 }

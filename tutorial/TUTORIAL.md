@@ -88,7 +88,7 @@ formal model but has no CLI surface yet. Each step is annotated with the
 requirements it exercises. For the agent-facing reference, see
 [`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
 [`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T8).
+in the scenarios from tasks T1–T11).
 
 ---
 
@@ -158,28 +158,30 @@ drift.
 ## 3. Refine into one segment per section  (req5, req8)
 
 There are no automatic segmentation rules — you refine by hand with
-`split`. You point at the segment to cut by **position**, not by hash:
+`split`. A file selector such as `main:queue.md` inserts several cuts
+atomically against the covering state present when the command starts.
+You can instead point at one segment by hash, `@name`, or position:
 `main:queue.md:5` means *"the segment of `queue.md` that covers line 5"*.
-Exactly one segment covers any given line, so this address is
-unambiguous — and, unlike a hash, it never changes if the content or the
-hashing does. (You can still use a hash prefix or an `@name`; position
-is just the friendliest handle while you're reading the file.)
+Exactly one segment covers any given position.
 
 The `##` headings sit at lines 5, 10, 14 (the Enqueue body wraps onto
 two lines, so the sections are *not* uniformly sized — read the line
-numbers off the file, don't assume them). `split`'s second argument is
-the line to cut at; the top keeps the first label, the bottom gets the
-second:
+numbers off the file, don't assume them). Give those starts as one cut
+set. The deliberately unsorted operands demonstrate that covmap applies
+them in file order and replaces the covering ref once:
 
 ```sh
-covmap split main:queue.md:1  5 preamble Enqueue   # cut the whole file at line 5
-covmap split main:queue.md:5  10 Enqueue Dequeue   # cut the 5.. segment at line 10
-covmap split main:queue.md:10 14 Dequeue Size      # cut the 10.. segment at line 14
+covmap split main:queue.md 14 5 10
+covmap label main:queue.md:1  preamble
+covmap label main:queue.md:5  Enqueue
+covmap label main:queue.md:10 Dequeue
+covmap label main:queue.md:14 Size
 covmap ls -l
 ```
 
-Each address names a *current* segment (`:1` the whole file, then `:5`
-and `:10` the growing bottom piece), and the cut line follows. Result:
+`split` changes geometry only: all resulting fragments begin
+`unknown`. `label`, `name`, and `annotate` compose metadata explicitly
+afterward. Result:
 
 ```
 preamble	queue.md:1..4	4	-
@@ -199,7 +201,9 @@ line 10:
 
 ```sh
 covmap merge main:queue.md:5 main:queue.md:10 "Enq+Deq"
-covmap split main:queue.md:5 10 Enqueue Dequeue
+covmap split main:queue.md:5 10
+covmap label main:queue.md:5 Enqueue
+covmap label main:queue.md:10 Dequeue
 ```
 
 `merge` requires the two segments to be adjacent; `split` puts them back.
@@ -221,9 +225,13 @@ QueueFull line is on its own. This time we'll **name** that line
 you're working on:
 
 ```sh
-covmap split main:errors.md:3 3 head qf-line   # the QueueFull line is now its own segment
+covmap split main:errors.md 3                  # the QueueFull line is now its own segment
+covmap label main:errors.md:1 head
+covmap label main:errors.md:3 qf-line
 covmap name  main:errors.md:3 qf-line          # give it a stable name
-covmap split main:@qf-line 3:17 QueueFull-code QueueFull-meaning
+covmap split main:@qf-line 3:17
+covmap label main:@qf-line QueueFull-code
+covmap label main:errors.md:3:17 QueueFull-meaning
 covmap ls -l
 ```
 
@@ -236,12 +244,14 @@ QueueFull-code	  errors.md:3..3:16	1	@qf-line
 QueueFull-meaning errors.md:3:17..4	2	-
 ```
 
-Two things to notice. The locations `errors.md:3..3:16` and
+Three things to notice. The locations `errors.md:3..3:16` and
 `errors.md:3:17..4` are character-precise — the cut is between columns
-16 and 17 of line 3. And on a split **the name stays with the top
-half** (`QueueFull-code` kept `@qf-line`); the bottom is anonymous. If
-you wanted the name on the meaning clause instead, just re-`name` it —
-which is exactly what the next step does with proper names.
+16 and 17 of line 3. Both fragments initially became `unknown`, and the
+labels were applied separately. On a split **the name and message stay
+with the first fragment** (`QueueFull-code` kept `@qf-line`); later
+fragments are anonymous and un-messaged. If you wanted the name on the
+meaning clause instead, just re-`name` it — which is exactly what the
+next step does with proper names.
 
 ## 6. Label a segment  (req4)
 
@@ -305,13 +315,13 @@ straight by *what the text is about*:
 
 | Channel | About | Hashed? |
 | ------- | ----- | ------- |
-| **label** | a coarse status category of a segment | yes |
+| **label** | a coarse status category of a segment | no |
 | **name** | a stable slug identity of a segment | no |
 | **message** | why *this segment* (rationale/provenance) | no |
 | link note | why *this mapping* (A↔B) | n/a |
 | iterator task note | *this sweep's* verdict on a segment | n/a |
 
-## 9. Connect and link by name  (req2, req10, req16)
+## 9. Connect, repair a rename, and disconnect  (req2, req10, req14, req16)
 
 A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
@@ -326,19 +336,61 @@ survives later edits.
 ```sh
 covmap connect main "$PWD/../impl_rs:main" queue_links
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
-covmap link queue_links @dequeue-op        queue.rs:1 "fn dequeue"
+covmap link queue_links @dequeue-op        queue.rs:1 \
+  "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
 covmap link queue_links @queuefull-meaning queue.rs:1 "QueueFull guard"
 covmap ls-links queue_links
 ```
 
 ```
-@enqueue-op	75db7ddb38ccc701	fn enqueue
-@dequeue-op	75db7ddb38ccc701	fn dequeue
-@queuefull-meaning	75db7ddb38ccc701	QueueFull guard
+@enqueue-op	b5368af9628e9079	fn enqueue
+@dequeue-op	b5368af9628e9079	The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.
+@queuefull-meaning	b5368af9628e9079	QueueFull guard
 ```
 
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
+
+The target may also be another covering in the current repository. Omit the
+`<repo>:` prefix to create a same-repository connection; `status` and `show`
+mark it as a self-map. This temporary connection has no links, and
+`disconnect` removes only its ref:
+
+```sh
+covmap connect main main local_preview
+covmap show local_preview
+# connection local_preview   main -> main (self-map)
+#   0 links · source 0/7 segments · target 0/7 segments
+#   degree max-out 0, max-in 0
+covmap disconnect local_preview
+# disconnected 'local_preview': removed 0 link(s) from main -> main (self-map)
+```
+
+Names are covering-local. Renaming `@queuefull-meaning` does not silently
+rewrite `queue_links`; the command reports the exact stored endpoint that is
+now broken and prints an explicit repair:
+
+```sh
+covmap name main:@queuefull-meaning queuefull-clause
+```
+
+```text
+renamed @queuefull-meaning -> @queuefull-clause in covering 'main'
+connection 'queue_links': stored source endpoint '@queuefull-meaning' is now broken
+--- covmap repair begin ---
+covmap link 'queue_links' '@queuefull-clause' 'b5368af9628e9079' 'QueueFull guard'
+covmap unlink 'queue_links' '@queuefull-meaning' 'b5368af9628e9079'
+--- covmap repair end ---
+note: inbound connections stored in another repository cannot be discovered here
+```
+
+Execute the commands between the delimiters. They add the replacement before
+removing the stale pair, so a failed `link` leaves the old record available,
+and they preserve the existing note byte-for-byte. The tutorial script runs
+this block and asserts that `QueueFull guard` is unchanged. If covmap reports
+a broken far endpoint or a replacement collision, it emits no repair block;
+do not invent one. A fan-out rename still emits one block, with every safe
+`link` before any `unlink`.
 
 ## 10. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
 
@@ -359,7 +411,7 @@ connection endpoint resolves. `status` now shows the connection with its
 covering main: segments=7 lines=21
   drift: clean
 connections:
-  queue_links -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 2/7, target 1/3
+  queue_links: main -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 3/7, target 1/1
 ```
 
 ## 10b. Bounded drill-down: understand a region  (req23)
@@ -370,14 +422,16 @@ coverings and grep — you drill down in a few calls, ending on a view that
 resolves the relation for you.
 
 ```sh
-covmap ls -l main queue.md          # narrow: just this file's segments
-covmap show main:queue.md           # understand: each segment + what it maps to
-covmap show --label reviewed main   # the label lens: a concern across files
+covmap ls -l main queue.md errors.md # narrow: union of two files
+covmap show main:queue.md            # understand: segment + mapped image
+covmap show --label reviewed main    # label lens: concern across files
+covmap show queue_links              # degree hubs + readable notes
 ```
 
-`show <C>:<file>` (a **region** — add `:a..b` for a line range) prints each
-segment with its resolved counterpart(s), so one call answers "how does this
-map?":
+`ls` accepts several file or `file:a..b` regions, unions them without
+duplicates, and prints the result in covering order. `show <C>:<file>` (add
+`:a..b` for a line range) prints each segment with its resolved
+counterpart(s), so one call answers "how does this map?":
 
 ```
 region main queue.md · 4 segment(s)
@@ -386,6 +440,22 @@ region main queue.md · 4 segment(s)
        fn enqueue
   ...
 ```
+
+The connection view reports resolved degree and bounded hubs. Here all three
+source segments map to the same implementation segment:
+
+```text
+degree max-out 1, max-in 3
+fan-in:
+     3 <- unknown queue.rs:1..15
+```
+
+Degree uses resolved content-hash identity: repeated covering locations with
+identical content form one node and one hub row.
+
+Long link notes are printed on wrapped, indented lines below the resolved
+endpoint pair. `ls-links --resolve` remains the unwrapped TAB-delimited
+plumbing form.
 
 `covmap show --label <l>` is the same view selected by label instead of
 file — the way to pull a cross-cutting concern (spread over many files) into
@@ -509,7 +579,7 @@ covmap status
 
 ```
   drift: 1 file(s) edited, 0 file(s) missing/binary
-  queue_links -> …/main : 3 links, 0 broken
+  queue_links: main -> …/main : 3 links, 0 broken
 ```
 
 Note the connection is **already 0 broken**: the link is by
@@ -585,17 +655,17 @@ for whatever remains.
 ## 15. Drop a genuinely broken link: `prune`  (req14)
 
 A link is *broken* only when its endpoint no longer resolves — for a
-named segment, when that segment is **deleted**. Clear a segment's name to
-simulate that, then prune:
+named segment, when that segment is deleted or its covering-local name is
+cleared or changed. Clear a segment's name to simulate that, then prune:
 
 ```sh
-covmap name main:@queuefull-meaning -            # clears the name
-covmap fsck --broken-links                       # queue_links  @queuefull-meaning  …
+covmap name main:@queuefull-clause -             # clears the name
+covmap fsck --broken-links                       # queue_links  @queuefull-clause  …
 covmap prune queue_links                         # drops the dead link
 ```
 
 ```
-broken: @queuefull-meaning (missing in source covering) -> … (ok): dropped
+broken: @queuefull-clause (missing in source covering) -> … (ok): dropped
 prune: 1 link(s) dropped, 2 kept
 ```
 
@@ -644,11 +714,11 @@ the List / Source views of HEAD's covering.
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
 | status, ls (metrics) | 2, 10 | req12, req20 |
-| split (line + character) | 3, 5 | req5, req8 |
+| atomic multi-cut (line + character) | 3, 5 | req4, req5, req8 |
 | merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |
 | annotate (segment message) | 8 | req22 |
-| connect / link / addressing | 9 | req2, req10, req16 |
+| connect / link / addressing / rename repair / disconnect | 9 | req2, req10, req14, req16 |
 | show / grep / diff / fsck | 10 | req15, req19, req20 |
 | iterator: freeze + sweep a worklist | 11 | req21 |
 | drift: recut (named link survives) | 12 | req13, req14 |

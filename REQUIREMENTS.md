@@ -21,7 +21,10 @@ covmap shall link two coverings by recording connections between their
 segments. The two coverings may belong to different repositories or to
 the same repository — even the same covering — enabling both cross-repo
 mapping and intra-project cross-references such as duplication audits or
-docs-to-code links within one tree.
+docs-to-code links within one tree. A connection shall have an explicit
+lifecycle: creating it records an initially empty relation, while deleting it
+removes only that connection ref and leaves coverings, segment objects, and
+derived reports untouched.
 
 ## req3 — Two-level segment identity
 Every segment shall have a hash identity: the 64-bit truncated hash
@@ -38,11 +41,16 @@ participate in the segment hash. Identity is a pure function of content,
 so identical content is one shared object regardless of label, a segment
 may carry different labels in different coverings, and re-labelling never
 changes a hash or breaks a hash-addressed connection endpoint. Labels thus
-join names (req3) and messages (req22) as non-hashed annotations.
+join names (req3) and messages (req22) as non-hashed annotations. Partition
+geometry and status metadata shall be composed explicitly: `split` accepts
+only cut positions, and every fragment created by subdivision starts
+`unknown` until separately relabelled.
 
 ## req5 — Coverings are partitions
 A covering shall partition each covered file into disjoint, complete,
 contiguous, file-confined segments, and this invariant shall be checkable.
+Inserting any finite set of valid interior cuts shall preserve the partition;
+the complete plan shall validate before the covering ref is replaced once.
 
 ## req6 — Partial, declared coverage
 A covering need not span the whole repository; it shall explicitly declare
@@ -55,7 +63,11 @@ never disturbing existing refinements.
 
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined
-solely by explicit split, merge, recut, label, and name operations.
+solely by explicit split, merge, recut, label, name, and annotate operations.
+`split` shall atomically insert one or more explicit line or character cut
+positions into one original segment or across one covered file, without
+accepting label, name, or message operands. `merge` remains the explicit
+operation that removes a cut.
 Names are assigned deliberately by the user or agent (never
 auto-generated), since their value is a stable, human-meaningful
 identity for the segments being mapped.
@@ -69,7 +81,14 @@ Connections shall be many-to-many relations between coverings, with
 optional per-link notes, supporting fan-out and fan-in between segments.
 Each endpoint shall reference its segment either by name (preferred
 for mapped segments, so the link is resilient to content edits) or by
-segment hash.
+segment hash. Renaming or clearing a segment name shall remain a
+covering-local operation: covmap shall not rewrite connection refs
+implicitly, and shall instead diagnose discoverable exact `@old` endpoints
+and offer an explicit repair using ordinary link and unlink operations when
+that repair is safe. Subdivision shall likewise diagnose discoverable local
+connection effects without rewriting refs: a name endpoint continues to
+resolve but narrows to the first fragment, while a hash endpoint to the
+original segment becomes broken.
 
 ## req11 — Connection algebra (recommended future direction)
 The model equips connections with inverse, composition, and union
@@ -82,7 +101,12 @@ code→test map to derive docs→test).
 
 ## req12 — Quantitative measures
 covmap shall report covering metrics (cardinality, line count,
-granularity) and connection coverage (source and target totality).
+granularity), connection coverage (source and target totality), and resolved
+connection degree (maximum in/out degree plus bounded non-trivial fan-in and
+fan-out hubs). Degree shall be keyed by resolved segment identity rather than
+stored endpoint spelling: covering entries with the same content hash form one
+operational node and one hub row. Links with either endpoint broken shall not
+contribute.
 Partition entropy is a defined covering measure (`theory/main.tex`) but
 is computed only, not surfaced in command output — it is not actionable
 on its own.
@@ -101,13 +125,17 @@ own. merge then split remains available as the manual fallback.
 ## req14 — Broken-link detection and pruning
 covmap shall identify connection links whose endpoints no longer
 resolve in their coverings and offer to drop (prune) them. An endpoint resolves
-by name (broken only when the named segment is deleted) or by hash
+by name (broken when the name is deleted, cleared, or renamed) or by hash
 (broken when that content no longer appears), so a content edit to a
-named segment does not, by itself, break a link.
+named segment does not, by itself, break a link. Rename diagnostics shall
+report affected connection refs stored in the current repository without
+claiming to discover inbound refs stored elsewhere. Subdivision diagnostics
+shall make the same discovery limit explicit.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition
-and that every connection endpoint resolves.
+and that every connection endpoint resolves. The same partition validator
+shall reject an invalid multi-cut plan before its covering ref is replaced.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
@@ -115,7 +143,11 @@ covering-qualified segment name (`<C>:@<name>`), by covering-qualified
 position (`<C>:<file>:<line>[:<col>]`, resolving to the unique segment
 containing that position — a stable, hash-free handle), or by connection
 name, with HEAD resolving the default covering and unique hash prefixes
-accepted.
+accepted. Within `link` and `unlink`, each endpoint operand shall accept a
+name, hash prefix, or position resolved against that side's covering.
+For `split`, an exact colon-free covered-file path shall outrank hash-prefix
+interpretation and permit cuts across that file; a selector containing `:`
+shall use positional-address syntax, and a bare file selector shall use HEAD.
 
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
@@ -131,7 +163,9 @@ covmap shall expose a small set of lower-level *plumbing* commands
 emitting machine-readable, line-oriented output, from which every
 higher-level *porcelain* command is intended to be expressible as a
 pipeline. (This is git's plumbing/porcelain split: primitives plus the
-convenience commands built over them.)
+convenience commands built over them.) Multi-cut split shall compose the
+existing position and object primitives while making one atomic covering-ref
+transition rather than exposing intermediate partitions.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
@@ -140,6 +174,11 @@ Inspection output shall resolve link endpoints to their covering, label,
 and location — not leave them as bare hashes — and `status` shall report
 per-connection source/target coverage (req12), so a reader sees a mapping's
 completeness and its relations without hand-joining separate outputs.
+Connections whose source and target repositories are the same shall be
+displayed explicitly as self-maps rather than as an absolute-path target.
+Connection link listings shall place an existing single-line note on wrapped,
+indented lines below its resolved endpoint pair while leaving
+`ls-links --resolve` unchanged.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -164,9 +203,10 @@ distinct from the segment's `label` (a status category) and its
 `name` (a slug identity, req3): like both of those it is **not** part of the
 segment hash, so
 setting, changing, or clearing it leaves the shared object store untouched
-and never causes or repairs drift. It travels with its segment across
-`split`/`merge`/`recut`/diff-remap the way a name does, is set and cleared
-with `covmap annotate` and surfaced by `show`/`ls`/`html`, and is stored
+and never causes or repairs drift. On subdivision, the first fragment keeps
+the original message and later fragments have none; merge/recut/diff-remap
+otherwise carry it with the segment the way a name does. It is set and
+cleared with `covmap annotate`, surfaced by `show`/`ls`/`html`, and stored
 additively in the covering ref with no format-version bump.
 
 ## req23 — Bounded drill-down to understanding
@@ -174,11 +214,12 @@ covmap shall let a reader reach *understanding of one region of a mapping*
 — a set of source segments together with the segments they map to — in a
 short, bounded sequence of inspection commands, without unbounded dumps or
 manual cross-referencing. Concretely: inspection shall support restricting a
-listing to a **region** (a covered file, or a line range within it) and to a
-**label**; a `show` of a region or label shall present each selected segment
-with its resolved image (req20), realizing κ(S) (the image of a subset under
-a connection); and a `show` of a single segment or link shall resolve its
-links in both directions. A large connection shall summarize (coverage plus
-the highest fan-in targets) rather than dump every link unless `--all` is
-given. This is output/query behavior over existing state; it needs no
-format-version bump.
+listing to the union of zero or more **regions** (covered files or line ranges)
+and intersecting that union with a **label** or link-status filter; a `show` of
+a region or label shall present each selected segment with its resolved image
+(req20), realizing κ(S) (the image of a subset under a connection); and a
+`show` of a single segment or link shall resolve its links in both directions.
+A connection shall report degree maxima and at most ten non-trivial fan-in and
+fan-out hubs per direction, while the existing large-connection threshold
+continues to suppress the individual link list unless `--all` is given. This
+is output/query behavior over existing state; it needs no format-version bump.

@@ -40,6 +40,12 @@ segments can be merged.
 Referable only by its segment hash, so any content edit invalidates
 references to it. Contrast **named segment**.
 
+**Atomic multi-cut** **[T][R][S]** — one `split` operation that inserts a
+finite set of interior line or character boundaries into one segment or one
+covered file. All cuts validate before any covering-ref change, and the ref is
+replaced once. New fragments are labelled `unknown`; metadata is applied
+separately. Repeating an all-existing file cut set is an idempotent no-op.
+
 **Bounded drill-down** **[T][R][S]** — the intended inspection access
 pattern (req23): understanding one **region** of a mapping takes a short,
 bounded sequence of commands (orient → narrow → understand) whose final step
@@ -55,7 +61,9 @@ A complexity measure reported by `status`.
 coverings, stored as a set of links with optional per-link notes. This
 is the "map" covmap produces. Stored separately from coverings, in the
 source repo's `.covmap/connections/<name>`. The two coverings may be in
-different repositories or the same one (even the same covering).
+different repositories or the same one (even the same covering). `connect`
+creates this ref; `disconnect` removes only this ref, not either covering,
+the segment objects, or a derived report.
 
 **Connection algebra** **[T][R]** — *(recommended future direction)* the
 derived operations the model gives connections: *inverse* (`κ⁻¹`),
@@ -101,6 +109,13 @@ overlap), **completeness** (every character lies in some segment), and
 new cut; `merge` removes one. Diff-remap carries interior cuts through an
 edit via the line map.
 
+**Degree (in / out)** **[T][R][S]** — for the resolving part of a connection,
+the number of links entering or leaving one content-hash node. Hash and
+`@name` spellings, and repeated covering entries with identical content, form
+one node; its hub is listed once at the first covering-order location. Broken
+links are excluded. A degree greater than one identifies a **fan-in** or
+**fan-out hub**.
+
 **Drift** **[T][R][S]** — divergence between a covering's recorded
 segments and the current bytes of an edited file: the *repairable* state
 that precedes **broken**. Detected without any rule by reconstructing
@@ -133,8 +148,13 @@ segment with that name still exists (following it to whatever hash the
 segment now carries); a hash endpoint resolves iff that content still
 appears in the covering.
 
+**Disconnect** **[T][R][S]** — delete one stored connection ref after
+successfully reading it. It is the lifecycle inverse of `connect`, not a
+relation-algebra operation: it leaves both coverings, every segment object,
+and derived HTML reports untouched.
+
 **Format version** **[R][S]** — the string in `.covmap/version`
-(currently `1`) recording the on-disk format. covmap refuses to operate
+(currently `2`) recording the on-disk format. covmap refuses to operate
 on a repository whose version disagrees.
 
 **fsck** **[R][S]** — integrity verification: checks that every covering
@@ -221,14 +241,21 @@ connection, optionally annotated with a note; added by `link`, removed by
 `unlink`. A connection is a set of links (the theory: the elements of the
 relation `κ ⊆ C_A × C_B`).
 
+**Migrate** **[R][S]** — the one-time `covmap migrate` upgrade from
+on-disk format 1 to format 2. It re-keys stored segments by raw content,
+rewrites affected covering hashes, connection endpoints, and frozen iterator
+tasks, then records format 2. Running it on an already-format-2 repository is
+a no-op.
+
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
 state, healable only by relinking or dropping (`covmap prune` drops
 broken links; `fsck` reports them). Contrast **link drift**, its
 repairable precursor. A name endpoint breaks only when the named segment
-is *deleted* — a content edit merely drifts it — whereas a hash endpoint,
-whose identity *is* the content, breaks on any content edit, having no
-drift state to pass through first. Sub-concept of **link**.
+is deleted or its covering-local name is cleared or changed — a content edit
+merely drifts it — whereas a hash endpoint, whose identity *is* the content,
+breaks on any content edit, having no drift state to pass through first.
+Sub-concept of **link**.
 
 **Resolved link** **[R][S]** — a link presented with its far endpoint
 expanded from a bare endpoint (hash or `@name`) to its covering, label, and
@@ -243,10 +270,10 @@ why it is (not) mapped* (`req22`). Set with `covmap annotate … -m`, shown by
 `show`/`ls -l`/`html`. Like a **segment name** it is covering-local metadata
 and **not** part of the **segment hash**, so editing it never touches the
 object store or causes **drift**, and it travels with the segment across
-**split** (top keeps it) / **merge** (surviving side) / **recut** /
-**diff-remap**. Distinct from the two **note** senses: a segment message is
-about *the segment itself*, a **link**'s note is about a *mapping*, and an
-iterator **task**'s note is about *one sweep step*.
+**split** (first fragment keeps it) / **merge** (surviving side) /
+**recut** / **diff-remap**. Distinct from the two **note** senses: a segment
+message is about *the segment itself*, a **link**'s note is about a *mapping*,
+and an iterator **task**'s note is about *one sweep step*.
 
 **Segment name** **[T][R][S]** — an optional, stable, human-meaningful
 string attached to a segment (e.g. `intro`, `req-1`), unique within its
@@ -259,8 +286,9 @@ without is **anonymous**.
 
 **Object store** **[T][R][S]** — the content-addressed store at
 `.covmap/objects/<hh>/<rest>`, mapping each **segment hash** to
-`label\0content`. Segments are shared across coverings automatically by
-that address.
+the segment's raw content. Labels, names, and messages live in covering
+refs and are not stored in the object. Segments are shared across
+coverings automatically by that address.
 
 **Partition** **[T][R]** — the decomposition a covering imposes on each
 covered file: disjoint, complete, contiguous, file-confined segments.
@@ -345,7 +373,9 @@ left to the user or agent. Sub-concept of **repair**.
 **reqmap / self-map** **[R][S]** — named connections in this repo's own
 `.covmap/`. `reqmap` links each requirement to the theory block that
 justifies it; a self-map connects a covering to another covering of the
-*same* repository (e.g. duplication audits, docs-to-code links).
+*same* repository (e.g. duplication audits, docs-to-code links). The ref
+still stores the target repository's canonical absolute path; `status` and
+`show` render the relationship as `<source> -> <target> (self-map)`.
 
 **Segment** **[T][R][S]** — a contiguous, labelled range of characters
 within a single file: `(file, a, a_col, b, b_col, label)`. The atom of a
@@ -376,9 +406,11 @@ identity** — so a connection can reference it by `@name` and survive
 content edits.
 
 **Split / Merge** **[T][S]** — the two manual refinement operations.
-`split` cuts one segment at a position into a top and a bottom; `merge`
-fuses two adjacent segments. Names follow rules: split keeps the name on
-the top segment; merge keeps the surviving (earlier, if both) name.
+`split` atomically inserts one or more interior cuts into a segment or covered
+file; `merge` removes one cut by fusing two adjacent segments. Every fragment
+created by split is `unknown`; the first keeps the original name and message,
+while later fragments are anonymous and un-messaged. Merge keeps the surviving
+(earlier, if both) name.
 
 **Successor (of an end position)** **[T][S]** — the character position
 immediately after a segment's end: the next line's start when the end

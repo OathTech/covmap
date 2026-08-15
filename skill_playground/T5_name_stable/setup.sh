@@ -11,13 +11,13 @@ set -euo pipefail
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 
-# Refine spec/auth.md at lines 5, 10, 15 (the three `##` headings).
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'auth.md' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  5 "preamble" "Login" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'auth.md:5' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 10 "Login" "Logout" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'auth.md:10' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 15 "Logout" "Expiry" ) >/dev/null
+# Refine spec/auth.md atomically at the three `##` headings, then label the
+# resulting sections explicitly.
+( cd spec && "$COVMAP_BIN" split main:auth.md 5 10 15 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:auth.md:1  preamble ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:auth.md:5  Login    ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:auth.md:10 Logout   ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:auth.md:15 Expiry   ) >/dev/null
 
 # Name the Login segment and link it to the single impl segment.
 LOGIN=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Login" | head -1 )

@@ -13,13 +13,13 @@ set -euo pipefail
 ( cd spec    && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 ( cd impl_rs && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
 
-# Refine spec/policy.md at lines 5, 9, 13 (the three `##` headings).
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'policy.md' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  5 "preamble" "Audit" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'policy.md:5' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H"  9 "Audit" "User" ) >/dev/null
-H=$( cd spec && "$COVMAP_BIN" ls main | grep -F 'policy.md:9' | cut -f1 )
-( cd spec && "$COVMAP_BIN" split "main:$H" 13 "User" "Backups" ) >/dev/null
+# Refine spec/policy.md atomically at the three `##` headings, then label the
+# resulting sections explicitly.
+( cd spec && "$COVMAP_BIN" split main:policy.md 5 9 13 ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:policy.md:1  preamble ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:policy.md:5  Audit    ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:policy.md:9  User     ) >/dev/null
+( cd spec && "$COVMAP_BIN" label main:policy.md:13 Backups  ) >/dev/null
 
 # Name the Audit logs segment and link it to the implementation.
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Audit logs' | head -1 )" audit-retention ) >/dev/null

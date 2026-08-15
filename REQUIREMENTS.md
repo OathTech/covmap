@@ -101,7 +101,12 @@ code→test map to derive docs→test).
 
 ## req12 — Quantitative measures
 covmap shall report covering metrics (cardinality, line count,
-granularity) and connection coverage (source and target totality).
+granularity), connection coverage (source and target totality), and resolved
+connection degree (maximum in/out degree plus bounded non-trivial fan-in and
+fan-out hubs). Degree shall be keyed by resolved segment identity rather than
+stored endpoint spelling: covering entries with the same content hash form one
+operational node and one hub row. Links with either endpoint broken shall not
+contribute.
 Partition entropy is a defined covering measure (`theory/main.tex`) but
 is computed only, not surfaced in command output — it is not actionable
 on its own.
@@ -171,6 +176,9 @@ per-connection source/target coverage (req12), so a reader sees a mapping's
 completeness and its relations without hand-joining separate outputs.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
+Connection link listings shall place an existing single-line note on wrapped,
+indented lines below its resolved endpoint pair while leaving
+`ls-links --resolve` unchanged.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -206,11 +214,12 @@ covmap shall let a reader reach *understanding of one region of a mapping*
 — a set of source segments together with the segments they map to — in a
 short, bounded sequence of inspection commands, without unbounded dumps or
 manual cross-referencing. Concretely: inspection shall support restricting a
-listing to a **region** (a covered file, or a line range within it) and to a
-**label**; a `show` of a region or label shall present each selected segment
-with its resolved image (req20), realizing κ(S) (the image of a subset under
-a connection); and a `show` of a single segment or link shall resolve its
-links in both directions. A large connection shall summarize (coverage plus
-the highest fan-in targets) rather than dump every link unless `--all` is
-given. This is output/query behavior over existing state; it needs no
-format-version bump.
+listing to the union of zero or more **regions** (covered files or line ranges)
+and intersecting that union with a **label** or link-status filter; a `show` of
+a region or label shall present each selected segment with its resolved image
+(req20), realizing κ(S) (the image of a subset under a connection); and a
+`show` of a single segment or link shall resolve its links in both directions.
+A connection shall report degree maxima and at most ten non-trivial fan-in and
+fan-out hubs per direction, while the existing large-connection threshold
+continues to suppress the individual link list unless `--all` is given. This
+is output/query behavior over existing state; it needs no format-version bump.

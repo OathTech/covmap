@@ -295,12 +295,13 @@ is
 the segments of $B$ that some segment of $S$ links to; the \emph{preimage}
 $\kappa^{-1}(T)$ of $T \subseteq \Cov^B$ is defined symmetrically. Selecting
 $S$ by a shared property makes $\kappa(S)$ the corresponding slice of the
-relation: when $S$ is the segments of one file (or a line range within it)
-this is the \emph{region} view, and when $S = \Cov^A \restriction \ell$ is
-the segments carrying a label $\ell$ (\S\ref{sec:complexity}) it is the
-\emph{label lens} --- one query returning a cross-cutting concern together
-with everything it maps to. This is the formal basis of covmap's
-inspection-for-understanding access pattern (\S\ref{sec:interface}).
+relation: when $S$ is the segments of one file, a line range within it, or a
+finite union of such selections, this is the \emph{region} view; when
+$S = \Cov^A \restriction \ell$ is the segments carrying a label $\ell$
+(\S\ref{sec:complexity}) it is the \emph{label lens} --- one query returning
+a cross-cutting concern together with everything it maps to. This is the
+formal basis of covmap's inspection-for-understanding access pattern
+(\S\ref{sec:interface}).
 \end{definition}
 
 \begin{definition}[Coverage]\label{def:coverage}
@@ -313,6 +314,22 @@ The \emph{source coverage} of $\kappa$ is
 \]
 The \emph{target coverage} is the symmetric quantity for $\Cov^B$. A
 connection is \emph{source-total} if $\rho_{\mathrm{src}}(\kappa) = 1$.
+\end{definition}
+
+\begin{definition}[Resolved degree]\label{def:degree}
+At inspection time, let $\kappa^\checkmark$ be the subset of stored links whose
+two endpoints both resolve in the current coverings, with each endpoint
+interpreted by its resolved content hash (so hash and name spellings, or
+several covering entries with identical content, denote the same operational
+node). The \emph{out-degree} and \emph{in-degree} are
+\[
+  d^+(s) = |\{t \mid (s,t) \in \kappa^\checkmark\}|,
+  \qquad
+  d^-(t) = |\{s \mid (s,t) \in \kappa^\checkmark\}|.
+\]
+The connection's degree maxima are $\max_s d^+(s)$ and $\max_t d^-(t)$,
+or zero when $\kappa^\checkmark$ is empty. A \emph{fan-out hub} has
+$d^+(s)>1$ and a \emph{fan-in hub} has $d^-(t)>1$.
 \end{definition}
 
 \begin{definition}[Operations]\label{def:conn-ops}
@@ -760,9 +777,9 @@ whose final step resolves the relation fully (endpoints shown as
 \texttt{covering:label loc}, not bare hashes), so no follow-up lookup is
 forced. Listing commands print one condensed line per item; a command that
 names one item prints all covmap holds about it. The region view and the
-label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a
-file/range or a label, presenting each selected segment together with its
-image.
+label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
+of file/range regions or a label, presenting each selected segment together
+with its image.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
@@ -774,10 +791,14 @@ image.
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
       link shows its resolved links, a region/label its image. \texttt{--label
-      $\ell$} runs the label lens; \texttt{--all} expands a large connection.
-\item \texttt{covmap ls [-l] [$C$] [region] [--label $\ell$] [--linked|--unlinked]}\\
-      List segments of $C$ in file-and-line order, optionally narrowed to a
-      region, a label, or link status.
+      $\ell$} runs the label lens. A connection view reports resolved degree
+      maxima and bounded non-trivial hubs (Definition~\ref{def:degree});
+      \texttt{--all} expands its link list, with link notes on wrapped lines
+      below their resolved endpoint pair.
+\item \texttt{covmap ls [-l] [$C$] [region \ldots] [--label $\ell$] [--linked|--unlinked]}\\
+      List segments of $C$ in file-and-line order, optionally narrowed to the
+      union of several file/range regions and intersected with a label or link
+      status.
 \item \texttt{covmap grep [-l] [-c $C$] <pattern>}\\
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\

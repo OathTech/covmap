@@ -103,8 +103,12 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "init" => "covmap init                                  create .covmap/ in the cwd",
         "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
         "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
-        "show" => "covmap show <addr>                           segment | covering | connection at <addr>",
-        "ls" => "covmap ls [-l] [<covering>]                  list segments",
+        "show" => {
+            "covmap show <addr> [--content] [--all]   inspect a segment, covering, region, link, or connection"
+        }
+        "ls" => {
+            "covmap ls [-l] [<covering>] [<region> ...] [--label <l>] [--linked|--unlinked]   list segments, optionally narrowed to regions"
+        }
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
@@ -154,8 +158,8 @@ PORCELAIN
   init                                create .covmap/ in the cwd
   cover [<covering>]                  add one whole-file `unknown` segment per missing file
   status [<covering>]                 cardinality, lines, drift, broken links
-  show <addr>                         segment | covering | connection at <addr>
-  ls [-l] [<covering>]                list segments
+  show <addr> [--content] [--all]     inspect a segment, covering, region, link, or connection
+  ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
@@ -580,8 +584,8 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     if let Some(cname) = &covering {
         if repo.coverings_dir().join(cname).is_file() {
             let c = Covering::read(&repo, cname)?;
-            if let Some((file, range)) = parse_region(&c, &prefix) {
-                return show_region(&repo, &c, &file, range);
+            if let Some(region) = parse_region(&c, &prefix) {
+                return show_region(&repo, &c, &region?);
             }
         }
     } else if repo.coverings_dir().join(addr).is_file() {
@@ -593,22 +597,67 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     show_segment(&repo, covering.as_deref(), &prefix, with_content)
 }
 
-/// Parse the part after `<C>:` as a region — a covered file, optionally
-/// with a `:a..b` line range — or `None` if it is a segment address.
-fn parse_region(c: &Covering, rest: &str) -> Option<(String, Option<(usize, usize)>)> {
-    if let Some((file, rng)) = rest.rsplit_once(':') {
-        if let Some((a, b)) = rng.split_once("..") {
-            if let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) {
-                if c.entries.iter().any(|e| e.file == file) {
-                    return Some((file.to_string(), Some((a, b))));
-                }
-            }
-        }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Region {
+    file: String,
+    range: Option<(usize, usize)>,
+}
+
+impl Region {
+    fn contains(&self, entry: &CoveringEntry) -> bool {
+        entry.file == self.file
+            && self
+                .range
+                .map(|(a, b)| overlaps(entry.a, entry.b, a, b))
+                .unwrap_or(true)
     }
-    if c.entries.iter().any(|e| e.file == rest) {
-        return Some((rest.to_string(), None));
+}
+
+/// Parse a covered file or `file:a..b` region. Exact covered filenames win,
+/// including filenames containing `:`. `None` means the token may instead be
+/// a segment address; a range-shaped token returns a specific error.
+fn parse_region(c: &Covering, input: &str) -> Option<io::Result<Region>> {
+    let covered = |file: &str| c.entries.iter().any(|entry| entry.file == file);
+    if covered(input) {
+        return Some(Ok(Region {
+            file: input.to_string(),
+            range: None,
+        }));
     }
-    None
+
+    let (file, bounds) = input.rsplit_once(':')?;
+    let invalid = |detail: &str| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "invalid region '{input}': {detail}; expected covered-file or covered-file:a..b"
+            ),
+        )
+    };
+    if !covered(file) {
+        return Some(Err(invalid(
+            "the prefix before the final ':' is not a covered file",
+        )));
+    }
+    let (a, b) = match bounds.split_once("..") {
+        Some(bounds) => bounds,
+        None => return Some(Err(invalid("a line range must use a..b"))),
+    };
+    let a = match a.parse::<usize>() {
+        Ok(a) if a > 0 => a,
+        _ => return Some(Err(invalid("range bounds must be positive integers"))),
+    };
+    let b = match b.parse::<usize>() {
+        Ok(b) if b > 0 => b,
+        _ => return Some(Err(invalid("range bounds must be positive integers"))),
+    };
+    if a > b {
+        return Some(Err(invalid("range start must not exceed its end")));
+    }
+    Some(Ok(Region {
+        file: file.to_string(),
+        range: Some((a, b)),
+    }))
 }
 
 /// Whether a segment (line range `[a,b]`) overlaps a region `[ra,rb]`.
@@ -794,71 +843,220 @@ fn resolved_loc(l: &crate::resolve::ResolvedEnd) -> String {
     l.loc.clone().unwrap_or_else(|| "(unresolved)".to_string())
 }
 
-/// Above this many links, `show <connection>` summarizes (coverage +
-/// fan-in hubs) instead of dumping every link; `--all` forces the full list.
+/// Above this many links, `show <connection>` summarizes instead of dumping
+/// every link; degree maxima and bounded hubs are always shown when available.
 const CONN_LIST_THRESHOLD: usize = 30;
 
-fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
+#[derive(Clone, Debug)]
+struct ResolvedConnectionLink {
+    source_hash: Option<String>,
+    target_hash: Option<String>,
+    source_display: String,
+    target_display: String,
+    note: String,
+}
+
+fn resolve_connection_endpoint(c: Option<&Covering>, endpoint: &str) -> (Option<String>, String) {
+    match c.and_then(|covering| covering::endpoint_to_hash(covering, endpoint)) {
+        Some(hash) => {
+            let display = c
+                .and_then(|covering| covering.entries.iter().find(|entry| entry.hash == hash))
+                .map(display_entry)
+                .unwrap_or_else(|| endpoint.to_string());
+            (Some(hash), display)
+        }
+        None if c.is_some() => (None, format!("{endpoint} (broken)")),
+        None => (None, endpoint.to_string()),
+    }
+}
+
+fn display_entry(entry: &CoveringEntry) -> String {
+    let label = if entry.label.is_empty() {
+        "-"
+    } else {
+        &entry.label
+    };
+    format!("{label} {}", entry.loc())
+}
+
+fn resolve_connection_links(
+    source: &Covering,
+    target: Option<&Covering>,
+    connection: &Connection,
+) -> Vec<ResolvedConnectionLink> {
+    connection
+        .links
+        .iter()
+        .map(|link| {
+            let (source_hash, source_display) = resolve_connection_endpoint(Some(source), &link.a);
+            let (target_hash, target_display) = resolve_connection_endpoint(target, &link.b);
+            ResolvedConnectionLink {
+                source_hash,
+                target_hash,
+                source_display,
+                target_display,
+                note: link.note.clone(),
+            }
+        })
+        .collect()
+}
+
+fn ranked_hubs(
+    covering: &Covering,
+    degree: &std::collections::HashMap<String, usize>,
+) -> Vec<(usize, String)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut hubs = Vec::new();
+    for (order, entry) in covering.entries.iter().enumerate() {
+        if !seen.insert(entry.hash.as_str()) {
+            continue;
+        }
+        let count = degree.get(&entry.hash).copied().unwrap_or(0);
+        if count > 1 {
+            hubs.push((count, order, display_entry(entry)));
+        }
+    }
+    hubs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    hubs.into_iter()
+        .map(|(count, _, display)| (count, display))
+        .collect()
+}
+
+fn append_hubs(lines: &mut Vec<String>, kind: &str, arrow: &str, hubs: &[(usize, String)]) {
+    if hubs.is_empty() {
+        return;
+    }
+    lines.push(format!("  {kind}:"));
+    for (degree, display) in hubs.iter().take(10) {
+        lines.push(format!("    {degree:>4} {arrow} {display}"));
+    }
+    if hubs.len() > 10 {
+        lines.push(format!("    ... {} more {kind} hubs", hubs.len() - 10));
+    }
+}
+
+const CONNECTION_NOTE_WIDTH: usize = 79;
+const CONNECTION_NOTE_INDENT: &str = "    ";
+
+fn wrap_connection_note(note: &str) -> Vec<String> {
+    let content_width = CONNECTION_NOTE_WIDTH - CONNECTION_NOTE_INDENT.chars().count();
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in note.split_whitespace() {
+        let next_len =
+            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
+        if !current.is_empty() && next_len > content_width {
+            lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
+    }
+    lines
+}
+
+fn connection_lines(repo: &Repo, k: &Connection, all: bool) -> io::Result<Vec<String>> {
     let src = Covering::read(repo, &k.source_covering)?;
     let tgt_repo = Repo {
         root: PathBuf::from(&k.target_repo),
     };
     let tgt = Covering::read(&tgt_repo, &k.target_covering).ok();
+    let resolved = resolve_connection_links(&src, tgt.as_ref(), k);
 
     // Coverage: distinct resolving endpoints over covering cardinality.
-    let (src_cov, src_tot) = coverage(&src, k.links.iter().map(|p| p.a.as_str()));
+    let src_cov = resolved
+        .iter()
+        .filter_map(|link| link.source_hash.as_ref())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let src_tot = src.entries.len();
     let (tgt_cov, tgt_tot) = match &tgt {
-        Some(t) => coverage(t, k.links.iter().map(|p| p.b.as_str())),
+        Some(t) => (
+            resolved
+                .iter()
+                .filter_map(|link| link.target_hash.as_ref())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            t.entries.len(),
+        ),
         None => (0, 0),
     };
 
-    println!("connection {}   {}", k.name, connection_route(repo, k));
-    println!(
+    let mut lines = vec![format!(
+        "connection {}   {}",
+        k.name,
+        connection_route(repo, k)
+    )];
+    lines.push(format!(
         "  {} links · source {}/{} segments · target {}/{} segments",
         k.links.len(),
         src_cov,
         src_tot,
         tgt_cov,
         tgt_tot
-    );
+    ));
 
-    // Large connections summarize by default: show the top fan-in targets
-    // (the highest-signal rows for triage — a catch-all hub stands out),
-    // and require --all for the full per-link dump.
+    if let Some(target) = &tgt {
+        let pairs: std::collections::BTreeSet<(String, String)> = resolved
+            .iter()
+            .filter_map(|link| {
+                Some((
+                    link.source_hash.as_ref()?.clone(),
+                    link.target_hash.as_ref()?.clone(),
+                ))
+            })
+            .collect();
+        let mut out_degree = std::collections::HashMap::new();
+        let mut in_degree = std::collections::HashMap::new();
+        for (source, target) in pairs {
+            *out_degree.entry(source).or_insert(0) += 1;
+            *in_degree.entry(target).or_insert(0) += 1;
+        }
+        let max_out = out_degree.values().copied().max().unwrap_or(0);
+        let max_in = in_degree.values().copied().max().unwrap_or(0);
+        lines.push(format!("  degree max-out {max_out}, max-in {max_in}"));
+        append_hubs(&mut lines, "fan-out", "->", &ranked_hubs(&src, &out_degree));
+        append_hubs(&mut lines, "fan-in", "<-", &ranked_hubs(target, &in_degree));
+    } else {
+        lines.push("  degree unavailable (target covering unavailable)".to_string());
+    }
+
+    // Large connections summarize by default and require --all for the full
+    // per-link dump.
     if k.links.len() > CONN_LIST_THRESHOLD && !all {
-        let mut degree: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for p in &k.links {
-            *degree.entry(p.b.as_str()).or_insert(0) += 1;
-        }
-        let mut ranked: Vec<(&str, usize)> = degree.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-        println!("  top targets by in-degree:");
-        for (ep, n) in ranked.iter().take(10) {
-            let disp = tgt
-                .as_ref()
-                .map(|t| resolve_display(t, ep))
-                .unwrap_or_else(|| ep.to_string());
-            println!("    {n:>4}  <- {disp}");
-        }
-        println!(
+        lines.push(format!(
             "  ({} links total — `covmap show {} --all` to list each)",
             k.links.len(),
             k.name
-        );
-        return Ok(0);
+        ));
+        return Ok(lines);
     }
 
-    for p in &k.links {
-        let a = resolve_display(&src, &p.a);
-        let b = tgt
-            .as_ref()
-            .map(|t| resolve_display(t, &p.b))
-            .unwrap_or_else(|| p.b.clone());
-        if p.note.is_empty() {
-            println!("  {a}   ->   {b}");
+    for link in resolved {
+        if link.note.is_empty() {
+            lines.push(format!(
+                "  {}   ->   {}",
+                link.source_display, link.target_display
+            ));
         } else {
-            println!("  {a}   ->   {b}   {}", p.note);
+            lines.push(format!(
+                "  {}   ->   {}",
+                link.source_display, link.target_display
+            ));
+            lines.extend(wrap_connection_note(&link.note));
         }
+    }
+    Ok(lines)
+}
+
+fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
+    for line in connection_lines(repo, k, all)? {
+        println!("{line}");
     }
     Ok(0)
 }
@@ -870,10 +1068,7 @@ fn resolve_display(c: &Covering, ep: &str) -> String {
             .entries
             .iter()
             .find(|e| e.hash == h)
-            .map(|e| {
-                let lbl = if e.label.is_empty() { "-" } else { &e.label };
-                format!("{lbl} {}", e.loc())
-            })
+            .map(display_entry)
             .unwrap_or_else(|| ep.to_string()),
         None => format!("{ep} (broken)"),
     }
@@ -957,27 +1152,17 @@ fn endpoints_match(stored: &str, given: &str) -> bool {
         || format!("@{given}") == *stored
 }
 
-fn show_region(
-    repo: &Repo,
-    c: &Covering,
-    file: &str,
-    range: Option<(usize, usize)>,
-) -> io::Result<u8> {
+fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
     let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     let mut segs: Vec<&CoveringEntry> = c
         .entries
         .iter()
-        .filter(|e| {
-            e.file == file
-                && range
-                    .map(|(ra, rb)| overlaps(e.a, e.b, ra, rb))
-                    .unwrap_or(true)
-        })
+        .filter(|entry| region.contains(entry))
         .collect();
     segs.sort_by_key(|e| e.sort_key());
-    let where_ = match range {
-        Some((a, b)) => format!("{file}:{a}..{b}"),
-        None => file.to_string(),
+    let where_ = match region.range {
+        Some((a, b)) => format!("{}:{a}..{b}", region.file),
+        None => region.file.clone(),
     };
     println!("region {} {} · {} segment(s)", c.name, where_, segs.len());
     print_region_segs(&rel, &segs);
@@ -1062,38 +1247,32 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
             }
         }
     }
-    // Positionals: an optional covering name and/or a region (a covered
-    // file, or `<file>:a..b`). `ls [<C>] [<file>[:a..b]]`.
-    if positionals.len() > 2 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "ls [-l] [<covering>] [<file>[:a..b]] [--label <l>] [--linked|--unlinked]",
-        ));
-    }
     let repo = current_repo()?;
-    // Decide which positional is the covering and which is the region.
-    let (cov_name, region) = split_ls_positionals(&repo, &positionals)?;
+    // Decide whether the first positional is a covering; all remaining
+    // positionals are regions, or every positional is a HEAD region.
+    let (cov_name, region_args, implicit_head) = split_ls_positionals(&repo, &positionals);
     let c = resolve_covering(&repo, &cov_name)?;
-
-    // Region filter (file + optional line range).
-    let region_parsed: Option<(String, Option<(usize, usize)>)> = match &region {
-        Some(r) => match r.split_once(':') {
-            Some((f, rng)) => match rng.split_once("..") {
-                Some((a, b)) => {
-                    let a: usize = a.parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
-                    })?;
-                    let b: usize = b.parse().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "region range must be a..b")
-                    })?;
-                    Some((f.to_string(), Some((a, b))))
-                }
-                None => Some((r.clone(), None)),
-            },
-            None => Some((r.clone(), None)),
-        },
-        None => None,
-    };
+    let regions: Vec<Region> = region_args
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| match parse_region(&c, arg) {
+            Some(region) => region,
+            None if implicit_head && index == 0 && !arg.contains(':') => {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "'{arg}' is neither an existing covering nor a covered file; expected [<covering>] [<covered-file>[:a..b] ...]"
+                    ),
+                ))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid region '{arg}': not a covered file or covered-file:a..b range"
+                ),
+            )),
+        })
+        .collect::<io::Result<_>>()?;
 
     // Build the link relation only when a link filter is requested.
     let rel = match link_filter {
@@ -1107,15 +1286,8 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
                 continue;
             }
         }
-        if let Some((f, rng)) = &region_parsed {
-            if &e.file != f {
-                continue;
-            }
-            if let Some((ra, rb)) = rng {
-                if !overlaps(e.a, e.b, *ra, *rb) {
-                    continue;
-                }
-            }
+        if !regions.is_empty() && !regions.iter().any(|region| region.contains(e)) {
+            continue;
         }
         if let (Some(want_linked), Some(rel)) = (link_filter, &rel) {
             if rel.is_linked(&e.hash) != want_linked {
@@ -1153,28 +1325,14 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-/// Split `ls` positionals into (covering, region). A positional that names
-/// an existing covering is the covering; anything else is a region (a
-/// covered file, optionally `file:a..b`). Defaults the covering to HEAD.
-fn split_ls_positionals(
-    repo: &Repo,
-    positionals: &[String],
-) -> io::Result<(String, Option<String>)> {
+/// Split `ls` positionals into (covering, regions). The first positional is
+/// the covering only when it names an existing covering or HEAD; otherwise
+/// every positional is a region under HEAD.
+fn split_ls_positionals(repo: &Repo, positionals: &[String]) -> (String, Vec<String>, bool) {
     let is_cov = |s: &str| repo.coverings_dir().join(s).is_file() || s == "HEAD";
-    match positionals {
-        [] => Ok(("HEAD".to_string(), None)),
-        [one] => {
-            if is_cov(one) {
-                Ok((one.clone(), None))
-            } else {
-                Ok(("HEAD".to_string(), Some(one.clone())))
-            }
-        }
-        [a, b] => {
-            // Two positionals: <covering> <region>.
-            Ok((a.clone(), Some(b.clone())))
-        }
-        _ => unreachable!("caller guards length"),
+    match positionals.first() {
+        Some(first) if is_cov(first) => (first.clone(), positionals[1..].to_vec(), false),
+        _ => ("HEAD".to_string(), positionals.to_vec(), true),
     }
 }
 
@@ -3339,6 +3497,432 @@ mod tests {
         assert_eq!(connection_route(&repo, &k), "left -> right (self-map)");
         k.target_repo = "/tmp/elsewhere".to_string();
         assert_eq!(connection_route(&repo, &k), "left -> /tmp/elsewhere/right");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn region_parser_prefers_exact_colon_filenames_and_validates_ranges() {
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: "1111111111111111".to_string(),
+                    file: "api:v1.md".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 10,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "2222222222222222".to_string(),
+                    file: "api:v1.md".to_string(),
+                    a: 11,
+                    a_col: None,
+                    b: 20,
+                    b_col: None,
+                    label: "reviewed".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "3333333333333333".to_string(),
+                    file: "other.md".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 20,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: None,
+                    message: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            parse_region(&covering, "api:v1.md").unwrap().unwrap(),
+            Region {
+                file: "api:v1.md".to_string(),
+                range: None,
+            }
+        );
+        assert_eq!(
+            parse_region(&covering, "api:v1.md:4..9").unwrap().unwrap(),
+            Region {
+                file: "api:v1.md".to_string(),
+                range: Some((4, 9)),
+            }
+        );
+        let selected = parse_region(&covering, "api:v1.md:4..12").unwrap().unwrap();
+        assert!(selected.contains(&covering.entries[0]));
+        assert!(selected.contains(&covering.entries[1]));
+        assert!(!selected.contains(&covering.entries[2]));
+        let first_only = parse_region(&covering, "api:v1.md:1..3").unwrap().unwrap();
+        assert!(first_only.contains(&covering.entries[0]));
+        assert!(!first_only.contains(&covering.entries[1]));
+        for invalid in ["api:v1.md:0..3", "api:v1.md:8..3", "missing.md:1..3"] {
+            let error = parse_region(&covering, invalid)
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(invalid));
+        }
+        assert!(parse_region(&covering, "api:v1.md:5")
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("a line range must use a..b"));
+        assert!(parse_region(&covering, "@segment").is_none());
+    }
+
+    #[test]
+    fn ls_positionals_treat_only_an_existing_first_token_as_covering() {
+        let repo = temp_repo("ls-positionals");
+        initialize_test_repo(&repo);
+        fs::write(repo.coverings_dir().join("review"), "# covered=x\n").unwrap();
+
+        let two_regions = vec!["one.md".to_string(), "two.md:4..8".to_string()];
+        assert_eq!(
+            split_ls_positionals(&repo, &two_regions),
+            ("HEAD".to_string(), two_regions, true)
+        );
+
+        let explicit = vec![
+            "review".to_string(),
+            "one.md".to_string(),
+            "two.md".to_string(),
+        ];
+        assert_eq!(
+            split_ls_positionals(&repo, &explicit),
+            (
+                "review".to_string(),
+                vec!["one.md".to_string(), "two.md".to_string()],
+                false
+            )
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn connection_degree_combines_hash_and_name_endpoint_spellings() {
+        let repo = temp_repo("degree-identity");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "one"),
+                named_entry("2222222222222222", 2, "two"),
+                named_entry("3333333333333333", 3, "three"),
+            ],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![CoveringEntry {
+                hash: "aaaaaaaaaaaaaaaa".to_string(),
+                file: "target.txt".to_string(),
+                a: 1,
+                a_col: None,
+                b: 1,
+                b_col: None,
+                label: "mapped".to_string(),
+                name: Some("hub".to_string()),
+                message: None,
+            }],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@one".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@two".to_string(),
+                    b: "@hub".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@three".to_string(),
+                    b: "@hub".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("target 1/1 segments"));
+        assert!(output.contains("degree max-out 1, max-in 3"));
+        assert_eq!(output.matches("mapped target.txt:1..1").count(), 4);
+        assert_eq!(output.matches("fan-in:").count(), 1);
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn hub_rendering_is_capped_and_reports_the_omitted_count() {
+        let covering = Covering {
+            name: "target".to_string(),
+            entries: (0..12)
+                .map(|i| CoveringEntry {
+                    hash: format!("{i:016x}"),
+                    file: "target.txt".to_string(),
+                    a: i + 1,
+                    a_col: None,
+                    b: i + 1,
+                    b_col: None,
+                    label: format!("target-{i}"),
+                    name: None,
+                    message: None,
+                })
+                .collect(),
+        };
+        let degree = covering
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let count = if i == 2 { 19 } else { 20 - i };
+                (entry.hash.clone(), count)
+            })
+            .collect();
+        let hubs = ranked_hubs(&covering, &degree);
+        let mut lines = Vec::new();
+
+        append_hubs(&mut lines, "fan-in", "<-", &hubs);
+
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], "  fan-in:");
+        assert!(lines[1].contains("20 <- target-0"));
+        assert!(lines[2].contains("19 <- target-1"));
+        assert!(lines[3].contains("19 <- target-2"));
+        assert_eq!(lines[11], "    ... 2 more fan-in hubs");
+    }
+
+    #[test]
+    fn shared_content_hash_prints_one_hub_row() {
+        let repo = temp_repo("shared-hub-hash");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("1111111111111111", 1, "one"),
+                named_entry("2222222222222222", 2, "two"),
+            ],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "x.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "first".to_string(),
+                    name: None,
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "y.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "second".to_string(),
+                    name: None,
+                    message: None,
+                },
+            ],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@one".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@two".to_string(),
+                    b: "aaaaaaaaaaaaaaaa".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree max-out 1, max-in 2"));
+        assert_eq!(output.matches("2 <- first x.txt:1..1").count(), 1);
+        assert!(!output.contains("2 <- second y.txt:1..1"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn degree_excludes_broken_links_and_reports_fan_out() {
+        let repo = temp_repo("degree-broken-fanout");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: vec![named_entry("1111111111111111", 1, "source")],
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![
+                named_entry("aaaaaaaaaaaaaaaa", 1, "one"),
+                named_entry("bbbbbbbbbbbbbbbb", 2, "two"),
+            ],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@source".to_string(),
+                    b: "@one".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@source".to_string(),
+                    b: "@two".to_string(),
+                    note: String::new(),
+                },
+                Link {
+                    a: "@source".to_string(),
+                    b: "@missing".to_string(),
+                    note: String::new(),
+                },
+            ],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree max-out 2, max-in 1"));
+        assert!(output.contains("fan-out:"));
+        assert!(output.contains("2 -> mapped file.txt:1..1"));
+        assert!(output.contains("@missing (broken)"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn unavailable_target_reports_unknown_degree_instead_of_zero() {
+        let repo = temp_repo("degree-unavailable");
+        initialize_test_repo(&repo);
+        Covering {
+            name: "main".to_string(),
+            entries: vec![named_entry("1111111111111111", 1, "source")],
+        }
+        .write(&repo)
+        .unwrap();
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.join("missing").to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: vec![Link {
+                a: "@source".to_string(),
+                b: "@target".to_string(),
+                note: String::new(),
+            }],
+        };
+
+        let output = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+
+        assert!(output.contains("degree unavailable (target covering unavailable)"));
+        assert!(!output.contains("degree max-out"));
+        assert!(!output.contains("fan-in:"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn connection_note_wrapping_is_deterministic_and_bounded() {
+        let note = "The parser normalizes escaped fields before the reader validates the decoded value, preserving the mapping rationale without stretching the resolved endpoint row across the terminal.";
+
+        let lines = wrap_connection_note(note);
+
+        assert!(lines.len() > 1);
+        assert!(lines
+            .iter()
+            .all(|line| line.chars().count() <= CONNECTION_NOTE_WIDTH));
+        assert_eq!(
+            lines
+                .iter()
+                .flat_map(|line| line.split_whitespace())
+                .collect::<Vec<_>>()
+                .join(" "),
+            note
+        );
+    }
+
+    #[test]
+    fn large_connection_wraps_notes_only_when_all_is_requested() {
+        let repo = temp_repo("connection-all-notes");
+        initialize_test_repo(&repo);
+        let source = Covering {
+            name: "main".to_string(),
+            entries: (0..31)
+                .map(|i| named_entry(&format!("{:016x}", i + 1), i + 1, &format!("source-{i}")))
+                .collect(),
+        };
+        let target = Covering {
+            name: "target".to_string(),
+            entries: vec![named_entry("aaaaaaaaaaaaaaaa", 1, "target")],
+        };
+        source.write(&repo).unwrap();
+        target.write(&repo).unwrap();
+        let note = "This long note must appear as wrapped porcelain only when the caller explicitly expands the large connection with show --all.";
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "main".to_string(),
+            target_repo: repo.root.to_string_lossy().to_string(),
+            target_covering: "target".to_string(),
+            links: (0..31)
+                .map(|i| Link {
+                    a: format!("@source-{i}"),
+                    b: "@target".to_string(),
+                    note: if i == 0 { note } else { "" }.to_string(),
+                })
+                .collect(),
+        };
+
+        let summary = connection_lines(&repo, &connection, false)
+            .unwrap()
+            .join("\n");
+        let expanded = connection_lines(&repo, &connection, true)
+            .unwrap()
+            .join("\n");
+
+        assert!(summary.contains("31 links total"));
+        assert!(!summary.contains("This long note"));
+        assert!(expanded.contains("    This long note must appear as wrapped porcelain"));
+        assert!(!expanded.contains("31 links total"));
         fs::remove_dir_all(repo.root).unwrap();
     }
 

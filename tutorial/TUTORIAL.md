@@ -336,14 +336,15 @@ survives later edits.
 ```sh
 covmap connect main "$PWD/../impl_rs:main" queue_links
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
-covmap link queue_links @dequeue-op        queue.rs:1 "fn dequeue"
+covmap link queue_links @dequeue-op        queue.rs:1 \
+  "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
 covmap link queue_links @queuefull-meaning queue.rs:1 "QueueFull guard"
 covmap ls-links queue_links
 ```
 
 ```
 @enqueue-op	b5368af9628e9079	fn enqueue
-@dequeue-op	b5368af9628e9079	fn dequeue
+@dequeue-op	b5368af9628e9079	The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.
 @queuefull-meaning	b5368af9628e9079	QueueFull guard
 ```
 
@@ -359,6 +360,8 @@ mark it as a self-map. This temporary connection has no links, and
 covmap connect main main local_preview
 covmap show local_preview
 # connection local_preview   main -> main (self-map)
+#   0 links · source 0/7 segments · target 0/7 segments
+#   degree max-out 0, max-in 0
 covmap disconnect local_preview
 # disconnected 'local_preview': removed 0 link(s) from main -> main (self-map)
 ```
@@ -419,14 +422,16 @@ coverings and grep — you drill down in a few calls, ending on a view that
 resolves the relation for you.
 
 ```sh
-covmap ls -l main queue.md          # narrow: just this file's segments
-covmap show main:queue.md           # understand: each segment + what it maps to
-covmap show --label reviewed main   # the label lens: a concern across files
+covmap ls -l main queue.md errors.md # narrow: union of two files
+covmap show main:queue.md            # understand: segment + mapped image
+covmap show --label reviewed main    # label lens: concern across files
+covmap show queue_links              # degree hubs + readable notes
 ```
 
-`show <C>:<file>` (a **region** — add `:a..b` for a line range) prints each
-segment with its resolved counterpart(s), so one call answers "how does this
-map?":
+`ls` accepts several file or `file:a..b` regions, unions them without
+duplicates, and prints the result in covering order. `show <C>:<file>` (add
+`:a..b` for a line range) prints each segment with its resolved
+counterpart(s), so one call answers "how does this map?":
 
 ```
 region main queue.md · 4 segment(s)
@@ -435,6 +440,22 @@ region main queue.md · 4 segment(s)
        fn enqueue
   ...
 ```
+
+The connection view reports resolved degree and bounded hubs. Here all three
+source segments map to the same implementation segment:
+
+```text
+degree max-out 1, max-in 3
+fan-in:
+     3 <- unknown queue.rs:1..15
+```
+
+Degree uses resolved content-hash identity: repeated covering locations with
+identical content form one node and one hub row.
+
+Long link notes are printed on wrapped, indented lines below the resolved
+endpoint pair. `ls-links --resolve` remains the unwrapped TAB-delimited
+plumbing form.
 
 `covmap show --label <l>` is the same view selected by label instead of
 file — the way to pull a cross-cutting concern (spread over many files) into

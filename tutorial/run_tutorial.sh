@@ -218,8 +218,9 @@ hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 #############################################################################
 ( cd "$WORK/spec" && run connect main "$WORK/impl_rs:main" queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
+DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
 ( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
-( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "fn dequeue" )
+( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "$DEQUEUE_NOTE" )
 ( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" "QueueFull guard" )
 ( cd "$WORK/spec" && run ls-links queue_links )
 
@@ -267,16 +268,39 @@ hr "10b. bounded drill-down: understand a region in a few calls  (REQ23)"
 # The inspection access pattern: narrow to a region, then `show` it to see
 # each segment together with what it maps to — resolved to label+loc, in one
 # self-sufficient call (no bare-hash hand-joining).
-( cd "$WORK/spec" && run ls -l main queue.md )        # narrow to one file
-( cd "$WORK/spec" && run show main:queue.md )         # region: segments + their images
-( cd "$WORK/spec" && run show --label reviewed main ) # label lens: a concern across files
+( cd "$WORK/spec" && run ls -l main queue.md errors.md ) # union of two files
+( cd "$WORK/spec" && run show main:queue.md )            # region: segments + images
+( cd "$WORK/spec" && run show --label reviewed main )    # concern across files
+( cd "$WORK/spec" && run show queue_links )               # degree hubs + notes
+
+assert "multi-region ls returns both files once in covering order" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' ls -l main errors.md queue.md:5..10 queue.md:10..10)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 5 ]] \
+    && [[ \$(printf '%s\n' \"\$out\" | grep -c 'errors.md') -eq 3 ]] \
+    && [[ \$(printf '%s\n' \"\$out\" | grep -c 'queue.md') -eq 2 ]] \
+    && ! printf '%s\n' \"\$out\" | grep -q 'queue.md:1..4'"
 
 # `show <connection>` now resolves endpoints and reports coverage.
 assert "show queue_links reports coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' show queue_links ) | grep -q 'coverage\|segments'"
+assert "show queue_links reports the resolved fan-in hub" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
+  printf '%s\n' \"\$out\" | grep -q 'degree max-out 1, max-in 3' \
+    && printf '%s\n' \"\$out\" | grep -q 'fan-in:' \
+    && printf '%s\n' \"\$out\" | grep -q '3 <- unknown queue.rs:1..15'"
+assert "show queue_links wraps the long mapping note" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
+  printf '%s\n' \"\$out\" | grep -q '^    The dequeue operation delegates empty-queue handling to the same' \
+    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review'"
+assert "ls-links --resolve keeps the long note on one TAB record" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' ls-links --resolve queue_links)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 3 ]] \
+    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_NOTE\""
 # `status` surfaces per-connection coverage.
 assert "status reports connection coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'coverage'"
+assert "status remains terse and omits degree detail" bash -c "
+  ! ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'degree'"
 # region show resolves the mapping (the enqueue op maps to the impl).
 assert "region show resolves a link to its target loc" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' show main:queue.md ) | grep -q '\->'"

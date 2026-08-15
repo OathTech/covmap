@@ -111,8 +111,8 @@ are unique.
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
-| `covmap ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to a **region** (file or line range), a label, or link status. | yes |
-| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
+| `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
+| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
@@ -247,12 +247,23 @@ Drill down in ≤3 calls, ending on a self-sufficient view:
 
 1. **Orient** — `covmap status` shows the coverings, connections, and each
    connection's coverage (how much is mapped).
-2. **Narrow** — `covmap ls -l <C> <file>` lists just that file's segments
-   (add `:a..b` for a line range; `--unlinked` to find gaps).
+2. **Narrow** — `covmap ls -l <C> <region>...` lists the union of several
+   files or `file:a..b` ranges in covering order, without duplicates
+   (`--unlinked` finds gaps; `--label` intersects the same selection).
+   If a filename also names a covering, pass the covering explicitly first,
+   such as `covmap ls -l HEAD main` to select file `main` in `HEAD`.
 3. **Understand** — `covmap show <C>:<file>[:a..b]` prints each segment in
    the region *with the segment(s) it maps to*, resolved to
    `label loc` — the combined view, in one call. For a single segment,
    `covmap show <C>:@name` shows its links both directions plus drift state.
+
+To review the relation's shape and rationale, run `covmap show <K>`. Read
+`max-out` as the widest fan-out and `max-in` as the widest fan-in; the bounded
+hub lists identify the segments responsible. Broken links are excluded from
+those degree counts. Repeated covering locations with identical content share
+one content-hash node and produce one hub row at the first covering-order
+location. Mapping notes appear on wrapped lines beneath each resolved pair;
+add `--all` when the command suppresses a large link list.
 
 You can open the files yourself, so these views never dump content (use
 `--content` if you want a segment's bytes inline).

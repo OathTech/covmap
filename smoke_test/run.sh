@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for covmap. Exercises:
 #   init -> cover -> atomic multi-cut -> merge -> connect -> link -> fsck
-#   -> label -> drift after edit -> prune -> rename repair -> disconnect
+#   -> review surfaces -> label -> drift -> prune -> rename repair -> disconnect
 #
 # Operates in a temp dir; never modifies the checked-in fixtures.
 # Set KEEP=1 to preserve the workdir for inspection.
@@ -109,23 +109,96 @@ hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
 DEC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Decrement" | head -1 )
 RS=$(  cd "$WORK/impl_rs" && "$COVMAP_BIN" ls-segments | head -1 )
+INCREMENT_NOTE="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
 echo "  inc:  $INC"
 echo "  dec:  $DEC"
 echo "  impl: $RS"
 # The Increment endpoint is given with a redundant `main:` covering prefix
 # (naming the source covering) — link accepts and strips it, like every
 # other segment-address command. Decrement uses the bare hash.
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "fn increment" )
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "$INCREMENT_NOTE" )
+# Name the target after the first link. The first stored endpoint remains the
+# resolving hash; the second is stored as @impl-widget. Degree must combine
+# both spellings into one target node.
+( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
 
 hr "re-link with a new note updates it in place (not a no-op)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
   && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
 
+hr "review surfaces: region union, resolved degree, wrapped notes, stable plumbing"
+SHOW_HELP=$( "$COVMAP_BIN" show --help )
+TOP_HELP=$( "$COVMAP_BIN" help 2>&1 )
+printf '%s\n' "$SHOW_HELP" | grep -qF "segment, covering, region, link, or connection" \
+  && printf '%s\n' "$TOP_HELP" | grep -qF "segment, covering, region, link, or connection" \
+  || { echo "  FAIL: focused and top-level show help disagree"; exit 1; }
+LS_HELP=$( "$COVMAP_BIN" ls --help )
+printf '%s\n' "$LS_HELP" | grep -qF "list segments, optionally narrowed to regions" \
+  && printf '%s\n' "$TOP_HELP" | grep -qF "list segments, optionally narrowed to regions" \
+  || { echo "  FAIL: focused and top-level ls help disagree"; exit 1; }
+
+MULTI_LS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main errors.md widget.md:10..20 widget.md:14..20 )
+printf '%s\n' "$MULTI_LS"
+[[ $(printf '%s\n' "$MULTI_LS" | wc -l | tr -d ' ') == "4" ]] \
+  || { echo "  FAIL: overlapping multi-region ls duplicated or omitted segments"; exit 1; }
+[[ $(printf '%s\n' "$MULTI_LS" | grep -c 'errors.md') == "1" \
+  && $(printf '%s\n' "$MULTI_LS" | grep -c 'widget.md') == "3" ]] \
+  && ! printf '%s\n' "$MULTI_LS" | grep -q 'widget.md:1..5' \
+  || { echo "  FAIL: multi-region ls did not restrict the union"; exit 1; }
+
+REGION_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10..13 --linked )
+[[ $(printf '%s\n' "$REGION_LINKED" | wc -l | tr -d ' ') == "1" \
+  && "$REGION_LINKED" == *$'\tIncrement\twidget.md:10..13\t'* ]] \
+  || { echo "  FAIL: linked filter did not intersect the region union"; exit 1; }
+REGION_LABEL=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:14..17 --label Increment )
+[[ -z "$REGION_LABEL" ]] \
+  || { echo "  FAIL: label filter did not intersect the region union"; exit 1; }
 IMPLICIT_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l --linked )
 [[ "$IMPLICIT_LINKED" == "$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main --linked )" ]] \
   || { echo "  FAIL: implicit HEAD changed linked-filter results"; exit 1; }
+
+if BAD_REGION=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:20..10 2>&1 ); then
+  echo "  FAIL: reversed region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_REGION" | grep -qF "invalid region 'widget.md:20..10'" \
+  || { echo "  FAIL: invalid region did not name the offending token"; exit 1; }
+
+if BAD_RANGE=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10 2>&1 ); then
+  echo "  FAIL: single-line region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_RANGE" | grep -qF "a line range must use a..b" \
+  || { echo "  FAIL: single-line region error misdiagnosed the range"; exit 1; }
+
+if BAD_COVERING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l typo 2>&1 ); then
+  echo "  FAIL: unknown covering/region unexpectedly succeeded"
+  exit 1
+fi
+printf '%s\n' "$BAD_COVERING" | grep -qF "'typo' is neither an existing covering nor a covered file" \
+  || { echo "  FAIL: covering typo did not explain the ambiguity"; exit 1; }
+
+SHOW_WIDGET_LINKS=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links )
+printf '%s\n' "$SHOW_WIDGET_LINKS"
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "degree max-out 1, max-in 2" \
+  || { echo "  FAIL: connection degree did not combine hash and @name target spellings"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "2 <- unknown widget.rs:1..28" \
+  || { echo "  FAIL: resolved fan-in hub was not reported"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    The increment contract maps to the shared widget implementation segment" \
+  || { echo "  FAIL: long link note was not wrapped beneath the endpoint pair"; exit 1; }
+
+RESOLVED_PLUMBING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links )
+[[ $(printf '%s\n' "$RESOLVED_PLUMBING" | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: resolved plumbing changed row cardinality"; exit 1; }
+printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_NOTE" \
+  || { echo "  FAIL: resolved plumbing changed the long note"; exit 1; }
+STATUS_REVIEW=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+if printf '%s\n' "$STATUS_REVIEW" | grep -q "degree"; then
+  echo "  FAIL: status gained degree detail"
+  exit 1
+fi
 
 hr "fsck (clean)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
@@ -185,7 +258,7 @@ DEC_AFTER="${RECUT_OUT##* -> }"
 [[ "$DEC_AFTER" != "$DEC" ]] \
   || { echo "  FAIL: content-changing recut preserved $DEC"; exit 1; }
 
-EXPECTED_BROKEN=$(printf 'widget_links\t%s\t%s' "$DEC" "$RS")
+EXPECTED_BROKEN=$(printf 'widget_links\t%s\t%s' "$DEC" "@impl-widget")
 if BROKEN_AFTER_RECUT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
   echo "  FAIL: expected the stale Decrement hash endpoint to be broken"
   exit 1

@@ -159,8 +159,8 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
-| `ls [-l] [<C>] [<file>[:a..b]] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to a region, label, or link status. |
-| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. `--label <l>` = label lens. |
+| `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
+| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
@@ -182,6 +182,25 @@ Run `covmap help` for the full reference. Top-level porcelain:
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
 `fsck [--broken-links]`.
+
+Several regions can be reviewed in one covering-ordered listing:
+
+```sh
+covmap ls -l main src/api.rs src/worker.rs:40..120
+```
+
+If a region filename also names a covering, make the covering explicit; for
+example, `covmap ls -l HEAD main` selects the file `main` in `HEAD`.
+
+The regions form a union; `--label`, `--linked`, and `--unlinked` further
+filter that selection. `show <connection>` reports resolved maximum in/out
+degree and bounded fan-in/fan-out hubs. Hash and `@name` endpoints resolving
+to the same content hash count as one node; repeated covering locations with
+that hash produce one hub row at the first covering-order location. Broken
+links do not contribute.
+
+Long link notes are wrapped beneath their resolved endpoint pair;
+`ls-links --resolve` remains the stable TAB-delimited form for scripts.
 
 ### Split grammar migration
 
@@ -277,9 +296,9 @@ covmap/
 ./smoke_test/run.sh
 ```
 
-Goes through init → cover → split → merge → connect → link → fsck →
-label → drift → prune → rename repair → disconnect on a small fixture
-in a temporary directory.
+Goes through init → cover → split → merge → connect → link → multi-region and
+degree review → fsck → label → drift → prune → rename repair → disconnect on
+a small fixture in a temporary directory.
 
 ## For agents
 

@@ -11,20 +11,23 @@
 >    handler realizes it, and where is it?
 > 2. Authentication is a cross-cutting concern. Which parts of the spec
 >    involve authentication, and where are they implemented?
+> 3. Review `api.md` and `errors.md` together. Which implementation segment is
+>    a fan-in hub, and what does the error-contract mapping note say?
 >
 > Answer from covmap's output — don't re-read the whole files by hand.
 
 ## Starting state
 
 - `spec/.covmap/` and `impl_rs/.covmap/` are populated.
-- `spec/main` has 5 segments: `preamble` + four named endpoints
+- `spec/main` has 6 segments: `preamble` + four named endpoints
   (`@spec-get`, `@spec-post`, `@spec-delete`, `@spec-health`). The two
   authenticated endpoints (`@spec-post`, `@spec-delete`) carry the label
-  `auth`.
+  `auth`. `errors.md` is the named `@auth-errors` segment.
 - `impl_rs/main` has 5 segments: `preamble` + four named handlers
   (`@impl-list`, `@impl-create`, `@impl-delete`, `@impl-health`).
-- Connection `apimap` links each endpoint to its handler (4 links, all by
-  `@name`). The map is complete and drift-free.
+- Connection `apimap` has 5 named links. `@spec-post` and `@auth-errors` both
+  map to `@impl-create`, forming a fan-in hub. The error-contract link has a
+  long rationale note. The map is complete and drift-free.
 
 ## Expected agent behavior
 
@@ -33,7 +36,15 @@ view that resolves the relation — not to dump whole coverings and grep.
 
 1. **Orient** (optional): `covmap status` shows `apimap` with its coverage.
 
-2. **Understand the DELETE endpoint** — a single-segment drill-down:
+2. **Narrow the review to both relevant files** — one multi-region listing:
+
+   ```sh
+   covmap ls -l main api.md errors.md
+   ```
+
+   The union is returned in covering order, with each segment printed once.
+
+3. **Understand the DELETE endpoint** — a single-segment drill-down:
 
    ```sh
    covmap show main:@spec-delete
@@ -43,7 +54,7 @@ view that resolves the relation — not to dump whole coverings and grep.
    (`@impl-delete`, `handlers.rs:19..29`) it maps to — in one call. A
    region view (`covmap show main:api.md:18..24`) works too.
 
-3. **Trace the auth concern** — the label lens, one call:
+4. **Trace the auth concern** — the label lens, one call:
 
    ```sh
    covmap show --label auth main
@@ -53,13 +64,18 @@ view that resolves the relation — not to dump whole coverings and grep.
    each with the handler it maps to, so the whole concern and its
    implementation come back together.
 
-4. **Report** the DELETE mapping and the two authenticated endpoints with
-   their handlers, citing locations from the output.
+5. **Review the connection** — `covmap show apimap` reports max-in 2 and the
+   create handler as the fan-in hub. Its link list places the long
+   error-contract note on wrapped lines below the resolved pair.
+
+6. **Report** the DELETE mapping, the two authenticated endpoints with their
+   handlers, and the error-contract hub/note, citing locations from the output.
 
 ## What this exercises
 
 - **Bounded drill-down** (req23): understanding a region in ≤3 calls, the
   last one self-sufficient (endpoints resolved to `label loc`).
+- Multi-region listing, resolved degree hubs, and readable mapping notes.
 - **The label lens**: pulling a cross-cutting concern spread across a file
   into a single command via a shared label.
 - Not building, not repair: the map is already correct.

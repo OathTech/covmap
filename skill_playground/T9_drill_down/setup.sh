@@ -3,7 +3,8 @@
 # *understanding* it: cover both repos, split each into a preamble + one
 # named segment per endpoint / handler, connect spec->impl, link each
 # endpoint to its handler, and label the two auth-bearing endpoints so a
-# cross-cutting "auth" concern exists for the label lens.
+# cross-cutting "auth" concern exists for the label lens. A separate error
+# contract maps to the create handler too, forming a small fan-in hub.
 #
 # T9 is about the inspection access pattern (bounded drill-down + label
 # lens), not building or repair: the map is already complete and clean.
@@ -21,6 +22,7 @@ set -euo pipefail
 ( cd spec && "$COVMAP_BIN" name main:api.md:11 spec-post    ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name main:api.md:18 spec-delete  ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name main:api.md:25 spec-health  ) >/dev/null
+( cd spec && "$COVMAP_BIN" name main:errors.md:1 auth-errors ) >/dev/null
 # The two endpoints that require authentication carry the `auth` label —
 # a concern that is spread across the file, not one contiguous region.
 ( cd spec && "$COVMAP_BIN" label main:@spec-post   auth ) >/dev/null
@@ -45,6 +47,8 @@ set -euo pipefail
 ( cd spec && "$COVMAP_BIN" link apimap @spec-post   @impl-create "POST create"     ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @spec-delete @impl-delete "DELETE by id"    ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @spec-health @impl-health "liveness probe"  ) >/dev/null
+( cd spec && "$COVMAP_BIN" link apimap @auth-errors @impl-create \
+  "Authentication failures from the shared error contract are returned by the create handler before request validation continues." ) >/dev/null
 
-echo "Setup done. spec/main -> impl_rs/main via 'apimap' (4 links, all named)."
+echo "Setup done. spec/main -> impl_rs/main via 'apimap' (5 links, all named)."
 echo "Two endpoints are labelled 'auth'. The map is complete and drift-free."

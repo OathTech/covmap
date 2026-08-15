@@ -109,6 +109,13 @@ overlap), **completeness** (every character lies in some segment), and
 new cut; `merge` removes one. Diff-remap carries interior cuts through an
 edit via the line map.
 
+**Degree (in / out)** **[T][R][S]** — for the resolving part of a connection,
+the number of links entering or leaving one content-hash node. Hash and
+`@name` spellings, and repeated covering entries with identical content, form
+one node; its hub is listed once at the first covering-order location. Broken
+links are excluded. A degree greater than one identifies a **fan-in** or
+**fan-out hub**.
+
 **Drift** **[T][R][S]** — divergence between a covering's recorded
 segments and the current bytes of an edited file: the *repairable* state
 that precedes **broken**. Detected without any rule by reconstructing

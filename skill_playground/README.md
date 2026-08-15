@@ -23,8 +23,9 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
   every segment exactly once, recording a per-task verdict; the
   enumeration guarantee ensures none is missed and the sweep is resumable.
 - **T9_drill_down** — understand a complete map without re-reading files:
-  drill down to how one endpoint maps (a resolved single-segment / region
-  view) and trace a cross-cutting `auth` concern with the label lens.
+  review several regions together, interpret degree hubs and wrapped notes,
+  drill down to one endpoint, and trace a cross-cutting `auth` concern with
+  the label lens.
 - **T10_connection_lifecycle** — rename a linked endpoint using the emitted
   repair block, verify its note survives, then create and delete a temporary
   same-repository connection without touching either covering.

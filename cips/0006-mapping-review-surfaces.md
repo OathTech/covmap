@@ -1,10 +1,10 @@
 # Mapping review surfaces
 
-Stage: **Accepted**
+Stage: **Landed**
 
 ## Relationship to CIPs 0007 and 0009
 
-This proposal remains an active implementation candidate and is independent of
+This proposal has landed and is independent of
 [CIP 0009](0009-atomic-multi-cut.md). Both operate on the existing complete
 covering model: CIP 0009 changes refinement, while this proposal changes
 read-only inspection.

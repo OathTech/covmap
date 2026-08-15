@@ -1097,7 +1097,7 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
 
     // Build the link relation only when a link filter is requested.
     let rel = match link_filter {
-        Some(_) => Some(crate::resolve::Relation::build(&repo, &cov_name, &c)?),
+        Some(_) => Some(crate::resolve::Relation::build(&repo, &c.name, &c)?),
         None => None,
     };
 

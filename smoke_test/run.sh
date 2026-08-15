@@ -123,6 +123,10 @@ hr "re-link with a new note updates it in place (not a no-op)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
   && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
 
+IMPLICIT_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l --linked )
+[[ "$IMPLICIT_LINKED" == "$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main --linked )" ]] \
+  || { echo "  FAIL: implicit HEAD changed linked-filter results"; exit 1; }
+
 hr "fsck (clean)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
 

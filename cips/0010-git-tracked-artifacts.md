@@ -1,5 +1,42 @@
 # Git-tracked coverings and mappings
 
+Stage: **Accepted**
+
+## Relationship to landed CIPs
+
+This proposal builds on the command and model changes already landed in
+[CIP 0006](0006-mapping-review-surfaces.md),
+[CIP 0007](0007-connection-lifecycle-workflows.md), and
+[CIP 0009](0009-atomic-multi-cut.md).
+
+- CIP 0007's bare-covering self-map syntax and `disconnect` lifecycle remain
+  intact. Peer aliases replace only the external repository component.
+- CIP 0006's TAB-delimited `ls-links` schemas remain the plumbing interface;
+  format 3 gives their rows canonical relation order.
+- CIP 0009's refinement invariant remains intact: `split` reads recorded bytes,
+  lazily hydrating them only from source that reproduces the recorded hash.
+
+## Requirement ownership
+
+This CIP is the design and implementation vehicle for
+[`req24 — Git-trackable coverings and mappings`](../REQUIREMENTS.md).
+req24 owns the end-to-end user capability and the decisions that make it
+coherent: deterministic portable refs, the project-artifact/local-state
+boundary, peer aliases and local bindings, source-backed hydration, the
+generated default ignore policy, and Git independence.
+
+The supporting requirements retain their narrower ownership:
+
+- req15 owns source, cache, and endpoint integrity verification;
+- req17 owns the plain-text, versioned on-disk substrate;
+- req2 and req10 own connection lifecycle and relation semantics;
+- req19 and req20 own stable plumbing and human inspection surfaces; and
+- req21 owns local iterator snapshot durability.
+
+Satisfying those requirements independently is necessary but not sufficient
+for req24: the tracked artifact is useful only when their guarantees compose
+across clones, paths, caches, and peer bindings.
+
 ## Idea
 
 CIP 0010 makes a repository's coverings and connections first-class project
@@ -103,7 +140,7 @@ The distinction is semantic:
 
 | State | Default | Reason |
 | ----- | ------- | ------ |
-| `version`, `HEAD`, `ignore` | tracked | defines how the project artifact is interpreted |
+| `.gitignore`, `version`, `HEAD`, `ignore` | tracked | defines the project artifact and its default publication policy |
 | `coverings/` | tracked | the covering is durable project knowledge |
 | `connections/` | tracked | the mapping is durable project knowledge |
 | `objects/` | ignored | local content cache reconstructible for every clean live segment |
@@ -140,6 +177,11 @@ missing object in one pass. A missing cache object is not corruption when the
 checked-out source reproduces its hash; an existing object whose bytes do not
 hash to its filename is corruption.
 
+A clean checkout with an empty `objects/` directory and source matching every
+covering row must therefore pass `fsck --offline`. The current
+`missing in object store` failure must not survive as a fresh-clone error; this
+is the first regression gate for the cache-tolerance implementation.
+
 Normal covering inspection opportunistically warms the cache. `status`,
 covering/segment `show`, and `ls` write a missing object whenever the inspected
 live source reproduces its hash. This is a cache-only side effect: it changes
@@ -172,6 +214,12 @@ the old bytes, such as diff-remap or fingerprint relocation, fail with a clear
 instruction to restore a matching source revision, run `covmap hydrate`, then
 return to the edited revision. This is the trade-off for not publishing raw
 source bytes twice, so the documented clone workflow hydrates before editing.
+
+This rule applies to refinement as well. On an empty cache, `split` and `merge`
+may hydrate each input only after the checked-out range reproduces its recorded
+hash; they never substitute drifted working-tree bytes for recorded bytes.
+CIP 0009's multi-cut transition remains atomic: resolve and validate every
+input, write all fragment objects, then replace the covering ref once.
 
 The resulting cases are explicit:
 
@@ -247,7 +295,7 @@ An external peer alias is resolved through `.covmap/local/peers`:
 
 ```text
 impl	/Users/alice/work/widget-impl
-spec	../widget-spec
+spec	/Users/alice/work/widget-spec
 ```
 
 Relative binding paths are resolved from the current repository root.
@@ -268,29 +316,49 @@ covmap peer bind <alias> <path>
 covmap peer ls
 covmap peer rename <old> <new>
 covmap peer unbind <alias>
-covmap connect <C_A> <peer:C_B> [<K>]
+covmap connect <C_A> [<peer>:]<C_B> [<K>]
 ```
 
 - `peer bind` discovers and version-checks the covmap repository at `<path>`,
-  then records or replaces the local binding.
-- `peer ls` prints aliases and their resolved paths, marking missing or invalid
-  checkouts.
+  then records or replaces the local binding. A non-`.` alias may temporarily
+  bind to the current repository for migration recovery, but `connect`
+  canonicalizes that target to `.` and never stores a second durable spelling
+  for self. `fsck` reports such a binding as noncanonical while refs still use
+  the alias and points to `peer rename <alias> .`.
+- `peer ls` prints the union of aliases referenced by local connection refs and
+  aliases present only in the bindings file. It marks each as bound, unbound,
+  missing, or invalid, so a fresh clone exposes every binding it needs.
 - `peer rename` is crash-resumable rather than falsely claiming cross-file
-  atomicity. It refuses `.` and an already-used `<new>`, records
-  `old -> new` in `.covmap/local/peer-rename`, installs the new binding while
-  retaining the old one, then rewrites connections one at a time in sorted
-  filename order using each file's atomic write. After every ref is rewritten
-  it removes the old binding and journal. Re-running resumes the operation;
-  `fsck` reports an unfinished local journal.
+  atomicity. It refuses `.` as `<old>` and an already-used external `<new>`.
+  Renaming to `.` is permitted only when the old binding resolves to the
+  current repository; this is the explicit recovery for a legacy self path
+  that migration could not recognize. The command records `old -> new` in
+  `.covmap/local/peer-rename`, retains the old binding, then rewrites
+  connections one at a time in sorted filename order using each file's atomic
+  write. For an external `<new>` it first installs the new binding; for `.`
+  there is no binding. After every ref is rewritten it removes the old binding
+  and journal. Re-running resumes the operation; `fsck` reports an unfinished
+  local journal.
 - `peer unbind` removes local resolution only; it never edits a connection.
-- `connect` resolves `<peer>` before creating the connection and verifies
-  `<C_B>`. A same-repository connection uses `.:<C_B>`.
+- `connect` preserves CIP 0007's bare-covering self-map form: omitting
+  `<peer>:` means `.`, so `covmap connect main main duplication` records
+  `target_peer=.`. Explicit `.:<C_B>` is accepted as the equivalent spelling.
+  An external form resolves `<peer>` before creation and verifies `<C_B>`.
 
-Commands that can still provide useful local information (`status`, connection
-`show`, `ls-links`, and `fsck --offline`) render an unbound target as
-`unavailable (peer 'impl' is not bound)`. Commands that require target content
-(`link`, target-side resolution, `prune`, HTML compare rendering, and full
-`fsck`) fail with the actionable instruction
+Read-only commands degrade without corrupting their established interfaces.
+`status` and connection `show` render an unbound target as
+`unavailable (peer 'impl' is not bound)`. Raw `ls-links` needs no binding and
+prints the stored endpoints. `ls-links --resolve` preserves its TAB-delimited
+stdout schema, leaves unavailable target label/location fields empty, and
+prints one actionable warning to stderr. This reuses the existing unresolved
+endpoint convention: both target fields empty means unresolved, while an empty
+target label with a non-empty target location means a resolved, unlabeled
+segment. `fsck --offline` reports the external side as unchecked. `disconnect`
+reads and removes the local connection ref without resolving its peer, so the
+full CIP 0007 lifecycle remains available in a clean clone.
+
+Commands that require target content (`link`, target-side resolution, `prune`,
+HTML compare rendering, and full `fsck`) fail with the actionable instruction
 `peer 'impl' is not bound; run covmap peer bind impl <path>`. In particular,
 `prune` must never interpret an unavailable target as a set of broken links.
 
@@ -318,6 +386,13 @@ Canonical ordering reduces review noise and makes independent additions more
 likely to merge cleanly. Segment message indexes are computed after covering
 entries are put in canonical order.
 
+`ls-links` and `ls-links --resolve` retain their existing TAB-delimited record
+schemas and emit rows in the connection ref's canonical order. The format-2 to
+format-3 migration may therefore reorder link rows once. This changes no
+relation semantics because a connection is a set; scripts may rely on the
+record schema, but not on historical insertion order. Diagnostics remain on
+stderr rather than contaminating plumbing stdout.
+
 After a checkout, rebase, or merge:
 
 ```sh
@@ -326,11 +401,12 @@ covmap fsck --offline
 
 validates the version, covering partitions, source content against each
 recorded hash, any cached objects that are present, connection syntax, source
-endpoints, and all self-connections without requiring external peer checkouts.
-It reports external target endpoints as unchecked, not valid. Plain `covmap
-fsck` keeps the stronger existing contract: every peer must be bound and every
-endpoint must resolve. Neither mode requires a cache object when the source
-reconstructs it exactly.
+endpoints, local binding syntax, unfinished local journals, and all
+self-connections without requiring external peer checkouts. It reports
+external target endpoints as unchecked, not valid. Plain `covmap fsck` keeps
+the stronger existing contract: every peer must be bound and every endpoint
+must resolve. Neither mode requires a cache object when the source reconstructs
+it exactly.
 
 Verification diagnostics distinguish:
 
@@ -435,36 +511,57 @@ afterward.
 
 ## Migration (format 2 to 3)
 
-`covmap migrate` upgrades a repository as follows:
+`covmap migrate` retains the existing format-1 to format-2 migration and adds a
+resumable format-2 to format-3 phase. A format-1 repository runs the phases in
+sequence and reaches format 3 in one invocation.
 
-1. Write the standard `.covmap/.gitignore`, including `/objects/`.
-2. Create `.covmap/local/` as needed.
-3. Read all connections before rewriting any. Normalize each reachable legacy
-   target through `Repo::discover`; retain the stored spelling as the fallback
-   key for an unavailable target. Sort the distinct target keys
+On entry, an existing valid manifest resumes publication at step 4. Otherwise,
+the format-2 to format-3 phase is:
+
+1. If `.covmap/.gitignore` is absent, atomically create the standard policy
+   before creating `.covmap/local/migrate-2-to-3/` and its manifest. If the
+   ignore file already exists, preserve it byte-for-byte and report any
+   standard local-state exclusions it lacks; migration never overwrites
+   user-managed ignore policy.
+2. Read all format-2 connections and coverings before replacing any live ref.
+   For reachable legacy targets, use unchecked repository discovery so a
+   format-2 peer need not already be migrated. Compare the discovered target
+   with the current repository only to recognize self. Use each exact stored
+   legacy target string as the deterministic external key and sort those keys
    lexicographically, then:
-   - if a target is the canonical current repository, assign `target_peer=.`;
-   - otherwise derive an alias from its sanitized directory basename, reusing
-     one alias for repeated normalized targets and assigning `-2`, `-3`, ...
-     in sorted-key order on collisions;
-   - write the old target path as that alias's initial local binding;
+   - if a reachable target is the canonical current repository, assign
+     `target_peer=.`;
+   - otherwise derive an alias from the stored path's sanitized directory
+     basename, assigning `-2`, `-3`, ... in sorted-key order on collisions;
+   - stage the old target path as that alias's initial local binding;
    - replace `target_repo` with `target_peer` and canonically sort links.
-4. Canonically rewrite every covering.
-5. Set `.covmap/version` to `3`.
+3. Stage the canonical format-3 connection and covering bytes and bindings
+   before publishing any replacement.
+4. Atomically publish each staged file and record its completion in the
+   manifest. While `.covmap/version` remains `2`, a repeated `migrate` resumes
+   from this manifest instead of trying to parse already-published format-3
+   refs as format 2.
+5. Set `.covmap/version` to `3` only after every replacement is complete, then
+   remove the migration staging directory and manifest.
 
 Migration prints every generated `alias -> path` binding so the user can run
 `covmap peer rename <old> <new>` before committing. It is idempotent. It does
 not add anything to Git and does not delete existing objects; they become
-ignored local cache entries. If a user had previously forced objects into the
-Git index, migration prints that removing them from the index is a separate,
-explicit Git operation.
+ignored local cache entries under the standard policy. Without inspecting Git,
+migration always notes that ignore rules do not untrack indexed files and shows
+the explicit `git rm --cached` recovery for projects that need it.
 
 An unavailable old absolute target does not prevent migration: its basename can
-still seed the alias and its path can still become the initial binding. Full
-`fsck` will report it unavailable until the binding is repaired.
+still seed the alias and its path can still become the initial binding. Because
+an unavailable path cannot safely be inferred to mean self, migration warns
+about that ambiguity. The user can confirm it explicitly with
+`covmap peer bind <alias> .` followed by `covmap peer rename <alias> .`.
+Otherwise full `fsck` reports the peer unavailable until its binding is
+repaired. External peer repositories may migrate independently; binding and
+full verification require them to support format 3.
 
-The one-time canonical rewrite in step 4 is deliberate. Format 3 promises that
-equal logical refs have equal bytes, so migration establishes the invariant
+The one-time canonical rewrite in steps 2-4 is deliberate. Format 3 promises
+that equal logical refs have equal bytes, so migration establishes the invariant
 immediately rather than leaving old refs order-dependent until their next
 mutation.
 
@@ -505,7 +602,7 @@ This hides an important publication boundary. Explicit `git add .covmap` keeps
 normal review and policy controls in charge, while the nested ignore file
 prevents operational cache bytes from being staged by default.
 
-## Landing checklist (five-artifact consistency)
+## Landing checklist (six-artifact consistency)
 
 Per `DEVELOPER.md`, this is a new capability, a connection behavior change, and
 an on-disk format change:
@@ -513,19 +610,26 @@ an on-disk format change:
 - **Theory** (`theory/main.tex`): distinguish durable serialized artifacts from
   local resolution state; define a connection's repository endpoint as a
   logical peer rather than a filesystem path. The mathematical relation
-  `κ ⊆ Seg(Cov^A) × Seg(Cov^B)` is unchanged.
-- **Requirements** (`REQUIREMENTS.md`): add a requirement that coverings,
-  connections, and project configuration form portable, deterministic,
-  source-verifiable artifacts suitable for version control; amend req15 for
-  full vs offline verification and req17 for the durable-ref/local-cache
-  boundary and format 3. Reconcile req21 so iterator durability is explicitly
-  local unless a team opts in to publishing both iterators and objects. State
-  the post-clone remap-safety condition and require diagnostics to distinguish
-  source drift from cache corruption.
+  `κ ⊆ Seg(Cov^A) × Seg(Cov^B)` is unchanged. Reconcile the iterator snapshot
+  guarantee with its default-local cache, and state that refinement may
+  reconstruct a missing recorded object only from source that reproduces its
+  hash.
+- **Requirements** (`REQUIREMENTS.md`): realize req24, which owns the
+  Git-trackable covering/mapping capability and composes portable deterministic
+  refs, source-verifiable hydration, the durable/local boundary, peer aliases,
+  default publication policy, and Git independence. Amend req15 for full vs
+  offline verification and req17 for the durable-ref/local-cache boundary and
+  format 3. Reconcile req21 so iterator durability is explicitly local unless
+  a team opts in to publishing both iterators and objects. State the post-clone
+  remap-safety condition and require diagnostics to distinguish source drift
+  from cache corruption. Amend req19/req20 to preserve `ls-links` field schemas
+  while defining canonical relation order, peer-alias presentation, and
+  unbound-peer behavior.
 - **Implementation** (`src/`): add peer binding read/write/resolution and the
   `peer` command group; replace `Connection.target_repo` with `target_peer`;
-  route every target lookup through one resolver; generate `.covmap/.gitignore`
-  in `init` with explanatory comments and
+  preserve bare-covering self-map syntax and unbound `disconnect`; route every
+  target lookup through one resolver; make `peer ls` include aliases named only
+  by refs; generate `.covmap/.gitignore` in `init` with explanatory comments and
   objects/iterators/local/report/temp exclusions; print the exact
   project-artifact/local-state boundary and `git add .covmap` next step; add
   `hydrate`; make drift/status/fsck verify clean live content directly when an
@@ -536,8 +640,10 @@ an on-disk format change:
   hash` from `resolved but recorded bytes unavailable`; distinguish source
   drift from cache corruption; retain clear failures for drift repair that
   needs missing historical bytes; make peer rename journaled and resumable;
-  canonicalize covering/connection writes; extend `migrate` from 2 to 3;
-  refresh the stale layout/version comment in `src/repo.rs`. Test
+  preserve recorded-byte semantics for `split`/`merge`; canonicalize
+  covering/connection writes and plumbing row order; chain the existing
+  format-1 migration through a resumable format-2 to format-3 migration; update
+  the layout/version comment in `src/repo.rs` for format 3. Test
   clone-location independence, hydrate success/failure/idempotence, inspection
   warming, read-only/unwritable-cache inspection success, concurrent warming
   of one hash without partial reads or locking, offline-fsck hydration, warning
@@ -545,26 +651,32 @@ an on-disk format change:
   cache fill and bare-hash resolution on an empty cache,
   resolved-but-unhydratable content fetch, unavailable unpublished source,
   ignored local state, iterator/object policy symmetry, canonical self peers,
-  interrupted peer rename recovery, missing bindings, canonical rewrites,
-  offline/full fsck, deterministic migration alias collisions, and nested
-  atomic `*.tmp` ignores including object paths. Test the exact generated
+  interrupted peer rename recovery including migration-to-self, missing
+  bindings, unbound disconnect, canonical rewrites and `ls-links` schemas,
+  multi-cut/merge with an empty cache and with drift, offline/full fsck,
+  interrupted migration resumption, format-1 chaining, deterministic migration
+  alias collisions, migration preservation of a custom nested ignore file, and
+  nested atomic `*.tmp` ignores including object paths. Test the exact generated
   ignore file and `init` guidance; document that forced adds bypass ignores and
   that already-tracked objects/iterators require an explicit index removal.
 - **Skill** (`SKILL.md` + `skill_playground/`): teach committing `.covmap/`,
   hydrating immediately after clone, optional post-checkout/post-merge hook
-  integration, binding peers, and running offline/full integrity checks. Add a
-  two-checkout task proving the same committed connection works with different
-  absolute paths and without committed objects. Show the expected staged paths
-  and the `git rm --cached` recovery for previously tracked local state.
-- **Tutorial** (`tutorial/`): commit or copy a Git-ready `.covmap/`, clone it to
-  a different path, run `fsck --offline --hydrate`, bind its peer, and verify
-  the mapping without editing the committed connection. Demonstrate the
-  edit-before-hydrate warning/recovery once. Assert that objects, iterators,
-  reports, bindings, and atomic temp files remain ignored, and show the paths
-  staged by `git add .covmap`.
+  integration, binding peers, canonical self-map syntax, and running
+  offline/full integrity checks. Add T12 as a two-checkout task proving the
+  same committed connection works with different absolute paths and without
+  committed objects. Show the expected staged paths and the
+  `git rm --cached` recovery for previously tracked local state.
+- **Tutorial** (`tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh`): commit or
+  copy a Git-ready `.covmap/`, clone it to a different path, run
+  `fsck --offline --hydrate`, bind its peer, and verify the mapping without
+  editing the committed connection. Demonstrate the edit-before-hydrate
+  warning/recovery once. Assert that objects, iterators, reports, bindings, and
+  atomic temp files remain ignored, and show the paths staged by
+  `git add .covmap`.
 - **`GLOSSARY.md`**: add *artifact*, *peer alias*, *peer binding*, *offline
   verification*, *hydration*, *object cache*, and the durable-ref/local-cache
-  distinction.
+  distinction. Amend *iterator*, *frozen segment*, and *object store* so their
+  retrieval guarantees match the default-local publication policy.
 - **`README.md`**: document the tracked ref set, ignored object cache,
   post-clone hydrate/bind workflow, optional Git hook, drift-vs-corruption
   diagnostics, ignore-policy override/already-tracked caveats, expected staged

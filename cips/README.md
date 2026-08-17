@@ -29,7 +29,7 @@ Rough stages a proposal moves through:
 
 Keep both the proposal and its index entry at **Accepted** throughout
 implementation and review. Change them to **Landed** only as part of the final
-landing commit, after the implementation and all five artifacts are complete.
+landing commit, after the implementation and all six artifacts are complete.
 
 ## Naming
 
@@ -48,7 +48,7 @@ number is an identifier, not a priority.
 | [0006](0006-mapping-review-surfaces.md) | mapping-review-surfaces | Landed | Support multi-region listings and improve existing connection output with degree hubs and wrapped notes. |
 | [0007](0007-connection-lifecycle-workflows.md) | connection-lifecycle-workflows | Landed | Complete connection deletion, formalize self-map syntax, align endpoint help, and improve iterator help. |
 | [0009](0009-atomic-multi-cut.md) | atomic-multi-cut | Landed | Keep complete coverings and generalize `split` to label-free atomic cut-set insertion with one ref write. |
-| [0010](0010-git-tracked-artifacts.md) | git-tracked-artifacts | Draft | Track portable covering and connection refs in Git while keeping reconstructible objects, peer paths, and work state local. |
+| [0010](0010-git-tracked-artifacts.md) | git-tracked-artifacts | Accepted | Track portable covering and connection refs in Git while keeping reconstructible objects, peer paths, and work state local. |
 
 ## Writing a cip
 

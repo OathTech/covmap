@@ -28,8 +28,9 @@ reference to an object, in one of five forms, mixed freely:
 - `<K>` — a connection, referred to by its name alone (no covering
   prefix, no sigil), e.g. `reqmap`.
 
-A `<h>` with no covering is short for `HEAD:<h>`; the literal `HEAD`
-resolves to the default covering.
+A bare `<h>` resolves over the distinct hashes in every local live covering
+ref plus retained cache-only objects. `<C>:<h>` constrains lookup to one
+covering. The literal `HEAD` resolves to the default covering.
 
 **Adjacency** **[T][S]** — two segments in the same file are *adjacent*
 when the successor of the first's end position equals the second's
@@ -313,7 +314,11 @@ refs and are not stored in the object. Segments are shared across coverings
 automatically by that address. A missing live object can be hydrated from
 matching source; a present object must hash to its path. Frozen iterator
 objects must be retained because their covering/source coordinates may no
-longer be available.
+longer be available. Logical bare-hash lookup searches live covering refs as
+well as retained cache-only objects, so cache population does not determine
+whether a clean live segment resolves. Normal inspection may warm missing
+verified live objects on a best-effort basis; explicit verification is
+read-only unless hydration is requested.
 
 **Partition** **[T][R]** — the decomposition a covering imposes on each
 covered file: disjoint, complete, contiguous, file-confined segments.

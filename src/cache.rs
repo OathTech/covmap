@@ -1,16 +1,83 @@
 //! Reconstruction and hydration of content-addressed segment objects.
 
-use crate::covering::CoveringEntry;
+use crate::covering::{Covering, CoveringEntry};
 use crate::repo::Repo;
 use crate::segment::{self, Segment};
 use crate::walk;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HydrateOutcome {
     Present,
     Written,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveEntry {
+    pub covering: String,
+    pub entry: CoveringEntry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedHash {
+    pub hash: String,
+    pub live_entries: Vec<LiveEntry>,
+}
+
+/// Resolve a local hash prefix over both live covering refs and cache-only
+/// objects. Repeated live references to one full hash count as one match.
+pub fn resolve_local_hash(repo: &Repo, prefix: &str) -> io::Result<ResolvedHash> {
+    if prefix.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "hash prefix must be at least 2 hex chars",
+        ));
+    }
+
+    let mut live_by_hash: BTreeMap<String, Vec<LiveEntry>> = BTreeMap::new();
+    for covering_name in Covering::list(repo)? {
+        let covering = Covering::read(repo, &covering_name)?;
+        for entry in covering.entries {
+            live_by_hash
+                .entry(entry.hash.clone())
+                .or_default()
+                .push(LiveEntry {
+                    covering: covering_name.clone(),
+                    entry,
+                });
+        }
+    }
+
+    let mut matches = BTreeSet::new();
+    for hash in live_by_hash.keys() {
+        if hash.starts_with(prefix) {
+            matches.insert(hash.clone());
+        }
+    }
+    for hash in segment::list_hashes(&repo.objects_dir())? {
+        if hash.starts_with(prefix) {
+            matches.insert(hash);
+        }
+    }
+
+    match matches.len() {
+        0 => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no segment matches '{prefix}'"),
+        )),
+        1 => {
+            let hash = matches.into_iter().next().unwrap();
+            Ok(ResolvedHash {
+                live_entries: live_by_hash.remove(&hash).unwrap_or_default(),
+                hash,
+            })
+        }
+        n => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("ambiguous: {n} segments match '{prefix}'"),
+        )),
+    }
 }
 
 /// Read one checked-out source file for verification or reconstruction.
@@ -126,6 +193,30 @@ fn recorded_bytes_unavailable(entry: &CoveringEntry, error: io::Error) -> io::Er
     )
 }
 
+fn resolved_bytes_unavailable(resolved: &ResolvedHash, errors: &[String]) -> io::Error {
+    let detail = if errors.is_empty() {
+        "the cache object is missing and no live covering entry can reconstruct it".to_string()
+    } else {
+        errors.join("; ")
+    };
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "segment {} resolved but recorded bytes are unavailable: {detail}; restore matching \
+             source and run `covmap hydrate`, then retry",
+            resolved.hash
+        ),
+    )
+}
+
+fn tolerate_best_effort_write(error: io::Error) -> io::Result<()> {
+    if error.kind() == io::ErrorKind::InvalidData {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
 /// Read recorded bytes, reconstructing a missing live object only when source
 /// still reproduces its recorded hash.
 pub fn read_recorded_content(repo: &Repo, entry: &CoveringEntry) -> io::Result<String> {
@@ -157,6 +248,124 @@ pub fn read_recorded_content(repo: &Repo, entry: &CoveringEntry) -> io::Result<S
         }
         Err(error) => Err(error),
     }
+}
+
+/// Read one live entry for inspection. Missing content is reconstructed from
+/// matching source; failure to publish the cache object does not make the read
+/// fail because inspection warming is best-effort.
+pub fn read_live_content(repo: &Repo, entry: &CoveringEntry) -> io::Result<String> {
+    match segment::read_object(&repo.objects_dir(), &entry.hash) {
+        Ok(content) => Ok(content),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let content = source_content(repo, entry)
+                .map_err(|error| recorded_bytes_unavailable(entry, error))?;
+            let segment = Segment {
+                file: entry.file.clone(),
+                a: entry.a,
+                b: entry.b,
+                label: entry.label.clone(),
+                content: content.clone(),
+            };
+            if let Err(error) = segment::write_object(&repo.objects_dir(), &segment) {
+                tolerate_best_effort_write(error)?;
+            }
+            Ok(content)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Read a hash that may be live in one or more coverings or present only in
+/// the cache. On a cache miss, try every live entry until one matching source
+/// range can reconstruct the shared content.
+pub fn read_resolved_content(repo: &Repo, resolved: &ResolvedHash) -> io::Result<String> {
+    match segment::read_object(&repo.objects_dir(), &resolved.hash) {
+        Ok(content) => return Ok(content),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    let mut errors = Vec::new();
+    for live in &resolved.live_entries {
+        match source_content(repo, &live.entry) {
+            Ok(content) => {
+                let segment = Segment {
+                    file: live.entry.file.clone(),
+                    a: live.entry.a,
+                    b: live.entry.b,
+                    label: live.entry.label.clone(),
+                    content: content.clone(),
+                };
+                if let Err(error) = segment::write_object(&repo.objects_dir(), &segment) {
+                    tolerate_best_effort_write(error)?;
+                }
+                return Ok(content);
+            }
+            Err(error) => errors.push(format!("{}:{}: {error}", live.covering, live.entry.loc())),
+        }
+    }
+    Err(resolved_bytes_unavailable(resolved, &errors))
+}
+
+/// Warm missing live objects without making cache write failures fatal.
+/// Source drift/unavailability and cache corruption are returned as warnings.
+pub fn warm_entries_best_effort<'a>(
+    repo: &Repo,
+    entries: impl IntoIterator<Item = &'a CoveringEntry>,
+) -> Vec<String> {
+    let mut missing_by_file: BTreeMap<&str, Vec<&CoveringEntry>> = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for entry in entries {
+        match segment::read_object(&repo.objects_dir(), &entry.hash) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing_by_file
+                    .entry(entry.file.as_str())
+                    .or_default()
+                    .push(entry);
+            }
+            Err(error) => warnings.push(format!("{}: {error}", entry.loc())),
+        }
+    }
+
+    for (file, missing) in missing_by_file {
+        let lines = match source_lines(repo, file) {
+            Ok(lines) => lines,
+            Err(error) => {
+                for entry in missing {
+                    warnings.push(format!(
+                        "cache missing for {}: {error}; recorded bytes unavailable",
+                        entry.loc()
+                    ));
+                }
+                continue;
+            }
+        };
+        for entry in missing {
+            match source_content_from_lines(&lines, entry) {
+                Ok(content) => {
+                    let segment = Segment {
+                        file: entry.file.clone(),
+                        a: entry.a,
+                        b: entry.b,
+                        label: entry.label.clone(),
+                        content,
+                    };
+                    if let Err(error) = segment::write_object(&repo.objects_dir(), &segment) {
+                        if let Err(error) = tolerate_best_effort_write(error) {
+                            warnings.push(format!("{}: {error}", entry.loc()));
+                        }
+                    }
+                }
+                Err(error) => warnings.push(format!(
+                    "cache missing for {} and source cannot reconstruct it: {error}; \
+                     restore matching source and run `covmap hydrate`",
+                    entry.loc()
+                )),
+            }
+        }
+    }
+    warnings
 }
 
 /// Ensure every selected iterator task has recorded bytes. Existing valid
@@ -208,6 +417,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("covmap-cache-{tag}-{}-{nonce}", std::process::id()));
         fs::create_dir_all(root.join(".covmap/objects")).unwrap();
+        fs::create_dir_all(root.join(".covmap/coverings")).unwrap();
         fs::write(root.join("source.txt"), "alpha\nbeta\n").unwrap();
         let content = "alpha\nbeta\n";
         (
@@ -224,6 +434,15 @@ mod tests {
                 message: None,
             },
         )
+    }
+
+    fn write_covering(repo: &Repo, name: &str, entries: Vec<CoveringEntry>) {
+        Covering {
+            name: name.to_string(),
+            entries,
+        }
+        .write(repo)
+        .unwrap();
     }
 
     #[test]
@@ -291,6 +510,78 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("source drift"));
+        assert!(!segment::object_path(&repo.objects_dir(), &entry.hash).exists());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn live_hash_resolves_and_reads_with_an_empty_cache() {
+        let (repo, entry) = fixture("live-resolve");
+        write_covering(&repo, "main", vec![entry.clone()]);
+
+        let resolved = resolve_local_hash(&repo, &entry.hash[..8]).unwrap();
+        let content = read_resolved_content(&repo, &resolved).unwrap();
+
+        assert_eq!(resolved.hash, entry.hash);
+        assert_eq!(resolved.live_entries.len(), 1);
+        assert_eq!(content, "alpha\nbeta\n");
+        assert!(segment::object_path(&repo.objects_dir(), &entry.hash).is_file());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn repeated_live_hashes_across_coverings_are_one_prefix_match() {
+        let (repo, entry) = fixture("live-duplicate");
+        write_covering(&repo, "main", vec![entry.clone()]);
+        write_covering(&repo, "alt", vec![entry.clone()]);
+
+        let resolved = resolve_local_hash(&repo, &entry.hash[..8]).unwrap();
+
+        assert_eq!(resolved.hash, entry.hash);
+        assert_eq!(resolved.live_entries.len(), 2);
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn distinct_live_hashes_keep_prefix_ambiguity() {
+        let (repo, mut first) = fixture("live-ambiguous");
+        first.hash = "aa00000000000000".to_string();
+        let mut second = first.clone();
+        second.hash = "aa11111111111111".to_string();
+        write_covering(&repo, "main", vec![first, second]);
+
+        let error = resolve_local_hash(&repo, "aa").unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("ambiguous: 2 segments"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn resolved_live_hash_explains_unavailable_recorded_bytes() {
+        let (repo, entry) = fixture("live-unavailable");
+        write_covering(&repo, "main", vec![entry.clone()]);
+        fs::write(repo.root.join("source.txt"), "changed\nbeta\n").unwrap();
+        let resolved = resolve_local_hash(&repo, &entry.hash).unwrap();
+
+        let error = read_resolved_content(&repo, &resolved).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("resolved but recorded bytes are unavailable"));
+        assert!(error.to_string().contains("run `covmap hydrate`"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn best_effort_warming_reports_drift_without_publishing() {
+        let (repo, entry) = fixture("warm-drift");
+        fs::write(repo.root.join("source.txt"), "changed\nbeta\n").unwrap();
+
+        let warnings = warm_entries_best_effort(&repo, [&entry]);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("source cannot reconstruct it"));
         assert!(!segment::object_path(&repo.objects_dir(), &entry.hash).exists());
         fs::remove_dir_all(repo.root).unwrap();
     }

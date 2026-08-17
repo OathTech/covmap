@@ -32,7 +32,9 @@ until the format-3 peer-alias and publication-policy slice lands.
   Live segment bytes are cached under `.covmap/objects/`. If a live object is
   missing while the checked-out range still hashes to the covering ref,
   `covmap hydrate` can reconstruct it; drifted source is never accepted as the
-  recorded bytes.
+  recorded bytes. Bare hash lookup searches live covering refs as well as the
+  cache, so a clean live segment remains addressable after the cache is
+  cleared.
 - A **covering** is a partition of (some files of) a repository into
   segments. It is a ref under `.covmap/coverings/<name>` listing one
   segment per line, prefixed by `# covered=<file>` lines. The default
@@ -153,9 +155,9 @@ are unique.
 
 ### Address forms
 
-- `<hash>` — full 16-char hex or short prefix (≥2 chars), resolved
-  against the local object cache. Run `hydrate` first when that cache was
-  cleared; covering-qualified hashes still resolve from their ref.
+- `<hash>` — full 16-char hex or short prefix (≥2 chars), resolved over
+  distinct hashes in every local live covering ref plus retained cache-only
+  objects. Repeated references to one full hash count as one match.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
 - `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` that **covers**
@@ -265,6 +267,12 @@ covering. Hydration never changes a ref. If source has drifted, it fails rather
 than recording current bytes under the old hash; restore the matching source
 revision or use the appropriate drift-repair workflow. `split` and `merge`
 apply the same rule when a required recorded object is missing.
+
+Normal `status`, `show`, and `ls` inspection opportunistically warms missing
+live objects after verifying source. `grep`, `cat-segment`, and `html` use the
+same source-backed read path. Warming is best-effort, so an unwritable cache
+does not make an otherwise valid inspection fail. `fsck` remains read-only
+unless `--hydrate` is explicit.
 
 `covmap fsck --broken-links --offline` preserves the normal three-column
 broken-link record. On an external connection, that row proves only that the
@@ -580,9 +588,12 @@ covering; repair it with `recut` / `recut --remap` (workflows B, E).
 
 - `covmap: no .covmap directory found...` → run `covmap init` (and
   ask first whether this is the right directory).
-- `covmap: no segment matches '<prefix>'` → the prefix is wrong or
-  refers to an object absent from the local cache; use a covering-qualified
-  address or run `covmap hydrate`, then retry.
+- `covmap: no segment matches '<prefix>'` → the prefix is absent from every
+  local live covering ref and from retained cache-only objects; verify the
+  address or use a covering-qualified form.
+- `segment <hash> resolved but recorded bytes are unavailable` → the hash is
+  logically present, but neither cache nor checked-out matching source can
+  supply its bytes. Restore matching source, run `covmap hydrate`, then retry.
 - `source drift at <loc> ...` during hydration → the cache is missing and the
   checked-out range no longer reproduces its recorded hash. Do not force a
   cache write; restore matching source and hydrate, or repair the covering.

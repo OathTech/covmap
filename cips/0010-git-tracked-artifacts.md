@@ -2,6 +2,11 @@
 
 Stage: **Accepted**
 
+Implementation status: **in progress**. The source-backed cache and live-object
+read paths are implemented. Format 3, peer aliases and bindings, generated Git
+policy, portable connection refs, and resumable format-2 migration are not yet
+implemented; this proposal is not Landed.
+
 ## Relationship to landed CIPs
 
 This proposal builds on the command and model changes already landed in

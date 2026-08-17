@@ -221,7 +221,43 @@ pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> io::Result<Stri
     })
 }
 
+/// List full hashes represented by object paths, ignoring temporary files.
+pub fn list_hashes(objects_dir: &std::path::Path) -> io::Result<Vec<String>> {
+    let mut hashes = Vec::new();
+    if !objects_dir.is_dir() {
+        return Ok(hashes);
+    }
+    for head_entry in fs::read_dir(objects_dir)? {
+        let head_entry = head_entry?;
+        if !head_entry.file_type()?.is_dir() {
+            continue;
+        }
+        let head = head_entry.file_name().to_string_lossy().to_string();
+        if head.len() != 2 || !head.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        for tail_entry in fs::read_dir(head_entry.path())? {
+            let tail_entry = tail_entry?;
+            if !tail_entry.file_type()?.is_file() {
+                continue;
+            }
+            let tail = tail_entry.file_name().to_string_lossy().to_string();
+            if tail.starts_with('.') || tail.ends_with(".tmp") {
+                continue;
+            }
+            let hash = format!("{head}{tail}");
+            if hash.len() == HASH_LEN && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                hashes.push(hash);
+            }
+        }
+    }
+    hashes.sort();
+    hashes.dedup();
+    Ok(hashes)
+}
+
 /// Resolve a hash prefix to a unique full hash. Errors on ambiguity / no match.
+#[cfg(test)]
 pub fn resolve_prefix(objects_dir: &std::path::Path, prefix: &str) -> std::io::Result<String> {
     if prefix.len() < 2 {
         return Err(std::io::Error::new(
@@ -511,6 +547,32 @@ mod tests {
         // No objects written.
         let err = resolve_prefix(&dir, "deadbeef").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_hashes_ignores_temporary_and_invalid_paths() {
+        let dir = tmpdir();
+        let first = Segment {
+            file: "a".into(),
+            a: 1,
+            b: 1,
+            label: "unknown".into(),
+            content: "alpha\n".into(),
+        };
+        let second = Segment {
+            file: "b".into(),
+            a: 1,
+            b: 1,
+            label: "unknown".into(),
+            content: "beta\n".into(),
+        };
+        let first_hash = write_object(&dir, &first).unwrap();
+        let second_hash = write_object(&dir, &second).unwrap();
+        fs::write(dir.join(&first_hash[..2]).join(".partial.tmp"), "partial").unwrap();
+        fs::create_dir_all(dir.join("not-a-hash")).unwrap();
+
+        assert_eq!(list_hashes(&dir).unwrap(), vec![first_hash, second_hash]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

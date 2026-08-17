@@ -4,7 +4,8 @@
 
 > covmap is initialized and `spec/service.md` is still one whole-file
 > segment, but its reconstructible object cache has been cleared. Verify that
-> the clean covering is still sound, hydrate its live object, then refine it
+> the clean covering is still sound, observe that normal inspection warms its
+> live object, confirm hydration is idempotent, then refine it
 > into a preamble plus one segment for each `##` section. Insert all section
 > boundaries atomically in one `split` command, even though I am giving you the
 > heading lines out of order: 18, 5, 14, 9. Then label the resulting segments
@@ -22,7 +23,10 @@
 
 Run every covmap command below from `spec/`.
 
-1. Inspect and verify the clean covering without relying on a cached object:
+1. Inspect and verify the clean covering without relying on a cached object.
+   `status` verifies matching source and opportunistically warms the live
+   object; `fsck --offline` remains read-only; `hydrate` then confirms the
+   object is already present:
 
    ```sh
    covmap status
@@ -61,8 +65,8 @@ pass labels as `split` operands.
 - Those ranges carry the five requested labels.
 - Concatenating the stored segment objects reconstructs `service.md`
   byte-for-byte.
-- Missing cache state was recovered with `hydrate`, without changing the
-  covering ref.
+- Missing cache state was recovered by checked inspection and confirmed with
+  idempotent `hydrate`, without changing the covering ref.
 - The repository remains format v2 and `covmap fsck` passes.
 
 ## Grading

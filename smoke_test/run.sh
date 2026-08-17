@@ -42,17 +42,46 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
+ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }' )
+WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "widget.md" { print $1 }' )
 
 hr "status (spec) — should report drift: clean"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
 hr "missing live objects are reconstructible cache misses"
 rm -rf "$WORK/spec/.covmap/objects"/*
-( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
 ( cd "$WORK/spec" && "$COVMAP_BIN" fsck --offline )
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
   || { echo "  FAIL: ordinary fsck unexpectedly populated the cache"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "${ERROR_HASH:0:8}" | grep -qF "$ERROR_HASH" )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: live hash resolution unexpectedly populated the cache"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$ERROR_HASH" --content | grep -qF "# Errors" )
+[[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
+  || { echo "  FAIL: show --content did not warm its live object"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${ERROR_HASH:0:8}" | grep -qF "# Errors" )
+[[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
+  || { echo "  FAIL: cat-segment did not reconstruct a live hash"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" grep Counter >/dev/null )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: grep did not reconstruct live covering content"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main >/dev/null )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: ls did not opportunistically warm live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: status did not opportunistically warm live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+chmod 555 "$WORK/spec/.covmap/objects"
+( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
+chmod 755 "$WORK/spec/.covmap/objects"
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: read-only cache warming unexpectedly wrote objects"; exit 1; }
 ( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe new main )
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
   || { echo "  FAIL: iter new did not retain both missing task objects"; exit 1; }
@@ -81,7 +110,6 @@ hr "ls -l (spec HEAD): two whole-file segments"
 # Refine widget.md atomically at every heading boundary. Cuts are deliberately
 # unsorted; output and covering order must still follow file position.
 hr "refine widget.md with one atomic multi-cut"
-WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'widget.md' | head -1 | cut -f1 )
 echo "  starting hash: $WIDGET_HASH"
 rm -f "$(object_file "$WORK/spec" "$WIDGET_HASH")"
 ( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 26 10 18 6 22 14 )
@@ -288,6 +316,12 @@ fi
 
 hr "iter new refuses a drifted cache miss with recovery guidance"
 rm -f "$(object_file "$WORK/spec" "$DEC")"
+if CAT_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${DEC:0:8}" 2>&1 ); then
+  echo "  FAIL: cat-segment returned drifted source for a missing live object"
+  exit 1
+fi
+printf '%s\n' "$CAT_DRIFT" | grep -qF "resolved but recorded bytes are unavailable" \
+  || { echo "  FAIL: cat-segment did not distinguish a live hash from missing bytes"; exit 1; }
 if ITER_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter drift_probe new main --label Decrement 2>&1 ); then
   echo "  FAIL: iter new froze a task whose recorded bytes were unavailable"
   exit 1

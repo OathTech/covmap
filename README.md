@@ -68,7 +68,9 @@ There are no runtime dependencies beyond `sha2`.
   covering-local metadata and not part of the hash.
 - `.covmap/objects/` is the local content cache. A missing live object is
   reconstructible when the checked-out range still hashes to its covering
-  ref; `hydrate` restores it atomically and rejects drifted source.
+  ref; `hydrate` restores it atomically and rejects drifted source. Logical
+  hash lookup also searches live covering refs, so clearing the cache does not
+  make a clean live segment unaddressable.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
@@ -235,6 +237,13 @@ so covmap refuses to substitute those edited bytes. `split` and `merge` use the
 same checked reconstruction rule when their recorded inputs are absent. These
 cache semantics do not change the format-2 encoding.
 
+Normal inspection also reconstructs checked live bytes. `status`, `show`, and
+`ls` opportunistically warm missing selected objects; `grep`, `cat-segment`,
+and HTML generation use the same source-backed read path. Cache publication is
+best-effort, so inspection still succeeds with a read-only cache, but drift,
+unavailable source, and corrupt objects are reported. `fsck` does not populate
+the cache unless `--hydrate` is present.
+
 `fsck --broken-links --offline` keeps the existing three-column broken-link
 schema. For an external connection, such a row asserts only that the local
 source endpoint is broken; stderr reports that the target endpoint was not
@@ -272,8 +281,9 @@ offer other ways in.)*
 
 ## Address forms
 
-- `<hash>` — full or short hex prefix (≥2 chars). Resolved against
-  the local object cache; hydrate first if it was cleared.
+- `<hash>` — full or short hex prefix (≥2 chars). Resolved over distinct
+  hashes in all local covering refs plus retained cache-only objects; repeated
+  references to one full hash count once.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
 - `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` covering that

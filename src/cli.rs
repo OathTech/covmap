@@ -419,8 +419,9 @@ fn cmd_hydrate(args: &[String]) -> io::Result<u8> {
                     Ok(HydrateOutcome::Present) => present += 1,
                     Ok(HydrateOutcome::Written) => written += 1,
                     Err(error) => {
+                        let hint = hydrate_recovery_hint(&error);
                         eprintln!(
-                            "hydrate: covering {} {}: {error}",
+                            "hydrate: covering {} {}: {error}{hint}",
                             covering.name,
                             entry.loc()
                         );
@@ -436,6 +437,23 @@ fn cmd_hydrate(args: &[String]) -> io::Result<u8> {
     } else {
         eprintln!("hydrate: {errors} issue(s)");
         Ok(1)
+    }
+}
+
+fn hydrate_recovery_hint(error: &io::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("source drift") || message.contains("source range") {
+        "; restore matching source, or repair the covering with `covmap recut` or `covmap recut --remap`"
+    } else if message.contains("cannot read source") || message.contains("is not UTF-8") {
+        "; restore the covered source, or deliberately remove it from the covering"
+    } else {
+        ""
+    }
+}
+
+fn print_cache_warnings(covering: &str, warnings: Vec<String>) {
+    for warning in warnings {
+        eprintln!("warning: covering {covering}: {warning}");
     }
 }
 
@@ -484,6 +502,10 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
             "covering {}: segments={} lines={}",
             c.name, st.cardinality, st.total_lines
         );
+        print_cache_warnings(
+            &c.name,
+            cache::warm_entries_best_effort(&repo, c.entries.iter()),
+        );
         // Per-file drift: are the bytes on disk still consistent with
         // the recorded segments?
         let mut by_file: std::collections::BTreeMap<&str, Vec<&CoveringEntry>> =
@@ -511,6 +533,7 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
             println!("  drift: clean");
         } else {
             println!("  drift: {drifted} file(s) edited, {missing} file(s) missing/binary");
+            println!("  details: run `covmap fsck --offline`");
         }
     }
 
@@ -650,7 +673,7 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
         }
     } else if repo.coverings_dir().join(addr).is_file() {
         let c = Covering::read(&repo, addr)?;
-        return show_covering(&c);
+        return show_covering(&repo, &c);
     }
 
     // Otherwise a single segment — DETAIL.
@@ -727,7 +750,11 @@ fn overlaps(a: usize, b: usize, ra: usize, rb: usize) -> bool {
 
 // ---- show sub-renderers ---------------------------------------------------
 
-fn show_covering(c: &Covering) -> io::Result<u8> {
+fn show_covering(repo: &Repo, c: &Covering) -> io::Result<u8> {
+    print_cache_warnings(
+        &c.name,
+        cache::warm_entries_best_effort(repo, c.entries.iter()),
+    );
     let st = covering::stats(c);
     println!(
         "covering {}: {} segments, {} lines",
@@ -759,23 +786,24 @@ fn show_segment(
     // Label, name and message are covering-local, so they are available
     // only when addressed through a covering; a bare hash names content
     // across every covering that shares it.
-    let (full, cname, entry) = match covering {
+    let (full, cname, entry, content) = match covering {
         Some(cname) => {
             let c = resolve_covering(repo, cname)?;
             let idx = covering::resolve_segment(&c, prefix)?;
+            let entry = c.entries[idx].clone();
             (
-                c.entries[idx].hash.clone(),
+                entry.hash.clone(),
                 Some(cname.to_string()),
-                Some(c.entries[idx].clone()),
+                Some(entry.clone()),
+                cache::read_live_content(repo, &entry)?,
             )
         }
-        None => (
-            segment::resolve_prefix(&repo.objects_dir(), prefix)?,
-            None,
-            None,
-        ),
+        None => {
+            let resolved = cache::resolve_local_hash(repo, prefix)?;
+            let content = cache::read_resolved_content(repo, &resolved)?;
+            (resolved.hash, None, None, content)
+        }
     };
-    let content = segment::read_object(&repo.objects_dir(), &full)?;
     println!("segment {full}");
     if let Some(cn) = &cname {
         println!("  covering  {cn}");
@@ -1213,13 +1241,17 @@ fn endpoints_match(stored: &str, given: &str) -> bool {
 }
 
 fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
-    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     let mut segs: Vec<&CoveringEntry> = c
         .entries
         .iter()
         .filter(|entry| region.contains(entry))
         .collect();
     segs.sort_by_key(|e| e.sort_key());
+    print_cache_warnings(
+        &c.name,
+        cache::warm_entries_best_effort(repo, segs.iter().copied()),
+    );
+    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     let where_ = match region.range {
         Some((a, b)) => format!("{}:{a}..{b}", region.file),
         None => region.file.clone(),
@@ -1230,9 +1262,13 @@ fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
 }
 
 fn show_label(repo: &Repo, c: &Covering, label: &str) -> io::Result<u8> {
-    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     let mut segs: Vec<&CoveringEntry> = c.entries.iter().filter(|e| e.label == label).collect();
     segs.sort_by_key(|e| e.sort_key());
+    print_cache_warnings(
+        &c.name,
+        cache::warm_entries_best_effort(repo, segs.iter().copied()),
+    );
+    let rel = crate::resolve::Relation::build(repo, &c.name, c)?;
     println!(
         "label \"{}\" in {} · {} segment(s)",
         label,
@@ -1340,20 +1376,25 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
         None => None,
     };
 
-    for e in &c.entries {
-        if let Some(l) = &label_filter {
-            if &e.label != l {
-                continue;
-            }
-        }
-        if !regions.is_empty() && !regions.iter().any(|region| region.contains(e)) {
-            continue;
-        }
-        if let (Some(want_linked), Some(rel)) = (link_filter, &rel) {
-            if rel.is_linked(&e.hash) != want_linked {
-                continue;
-            }
-        }
+    let selected: Vec<&CoveringEntry> = c
+        .entries
+        .iter()
+        .filter(|e| match &label_filter {
+            Some(label) => &e.label == label,
+            None => true,
+        })
+        .filter(|e| regions.is_empty() || regions.iter().any(|region| region.contains(e)))
+        .filter(|e| match (link_filter, rel.as_ref()) {
+            (Some(want_linked), Some(rel)) => rel.is_linked(&e.hash) == want_linked,
+            _ => true,
+        })
+        .collect();
+    print_cache_warnings(
+        &c.name,
+        cache::warm_entries_best_effort(&repo, selected.iter().copied()),
+    );
+
+    for e in selected {
         if long {
             // Columns: hash, label, loc, lines, name, [message]. The name
             // keeps its historical position; the message's FIRST line is a
@@ -1433,7 +1474,7 @@ fn cmd_grep(args: &[String]) -> io::Result<u8> {
     let repo = current_repo()?;
     let c = resolve_covering(&repo, &covering_name)?;
     for e in &c.entries {
-        let content = segment::read_object(&repo.objects_dir(), &e.hash)?;
+        let content = cache::read_live_content(&repo, e)?;
         if !(e.label.contains(&pattern) || content.contains(&pattern)) {
             continue;
         }
@@ -2186,16 +2227,16 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
         let mut ordered = old_entries.clone();
         ordered.sort_by_key(|e| e.sort_key());
         let mut o_lines: Vec<String> = Vec::new();
-        let mut reconstruct_ok = true;
+        let mut reconstruct_error: Option<io::Error> = None;
         for oe in &ordered {
-            match segment::read_object(&repo.objects_dir(), &oe.hash) {
+            match cache::read_recorded_content(&repo, oe) {
                 Ok(content) => {
                     for piece in content.split_inclusive('\n') {
                         o_lines.push(piece.to_string());
                     }
                 }
-                Err(_) => {
-                    reconstruct_ok = false;
+                Err(error) => {
+                    reconstruct_error = Some(error);
                     break;
                 }
             }
@@ -2209,8 +2250,8 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                 continue;
             }
         };
-        if !reconstruct_ok {
-            eprintln!("{file}: object store incomplete — skipped");
+        if let Some(error) = reconstruct_error {
+            eprintln!("{file}: {error} — skipped");
             new_entries.extend(old_entries);
             continue;
         }
@@ -2286,10 +2327,10 @@ fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
                         });
                     // Read the segment's recorded content and rank candidate
                     // locations in the new file. Propose-only.
-                    let target = match segment::read_object(&repo.objects_dir(), &it.hash) {
+                    let target = match cache::read_recorded_content(&repo, it) {
                         Ok(c) => c,
-                        Err(_) => {
-                            eprintln!("  {who}: (content unavailable)");
+                        Err(error) => {
+                            eprintln!("  {who}: {error}");
                             continue;
                         }
                     };
@@ -3323,8 +3364,8 @@ fn cmd_cat_segment(args: &[String]) -> io::Result<u8> {
         .first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cat-segment <hash>"))?;
     let repo = current_repo()?;
-    let full = segment::resolve_prefix(&repo.objects_dir(), prefix)?;
-    let content = segment::read_object(&repo.objects_dir(), &full)?;
+    let resolved = cache::resolve_local_hash(&repo, prefix)?;
+    let content = cache::read_resolved_content(&repo, &resolved)?;
     let mut out = io::stdout().lock();
     out.write_all(content.as_bytes())?;
     Ok(0)
@@ -3441,7 +3482,7 @@ fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {
             let c = resolve_covering(&repo, &cn)?;
             covering::resolve_segment_hash(&c, &prefix)?
         }
-        None => segment::resolve_prefix(&repo.objects_dir(), &prefix)?,
+        None => cache::resolve_local_hash(&repo, &prefix)?.hash,
     };
     println!("{full}");
     Ok(0)

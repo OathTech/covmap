@@ -113,11 +113,24 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 ( cd "$WORK/spec" && run status )
 ( cd "$WORK/spec" && run ls -l )
 
+SPEC_HASH="$(cd "$WORK/spec" && "$COVMAP" ls main | head -1 | cut -f1)"
 echo "  (clearing reconstructible live object caches)"
 rm -rf "$WORK/spec/.covmap/objects"/* "$WORK/impl_rs/.covmap/objects"/*
 ( cd "$WORK/spec" && run fsck --offline )
 assert "offline fsck accepts clean refs with an empty cache" \
   bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 0 ]]"
+
+( cd "$WORK/spec" && run rev-parse "${SPEC_HASH:0:8}" )
+assert "a bare live hash resolves with an empty cache" \
+  bash -c "[[ \$(cd '$WORK/spec' && '$COVMAP' rev-parse '${SPEC_HASH:0:8}') = '$SPEC_HASH' ]]"
+( cd "$WORK/spec" && run cat-segment "${SPEC_HASH:0:8}" | sed -n '1,3p' )
+assert "cat-segment reconstructs and warms one live object" \
+  bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 1 ]]"
+( cd "$WORK/spec" && run status )
+assert "normal inspection warms the remaining live object" \
+  bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 2 ]]"
+
+rm -rf "$WORK/spec/.covmap/objects"/*
 ( cd "$WORK/spec" && run hydrate main )
 assert "hydrate restores both spec objects" \
   bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 2 ]]"

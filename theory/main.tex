@@ -202,6 +202,9 @@ reconstruct the stored content from that range. An undefined cache entry is
 therefore not corruption by itself; a defined entry whose content does not
 hash to its key is corruption. Any operation that needs the recorded bytes
 may reconstruct them only after this hash check, never from drifted source.
+Logical hash lookup ranges over the union of hashes named by live covering
+refs and hashes retained only in $\sigma_A$; cache population therefore does
+not determine whether a clean live segment has an address.
 \end{definition}
 
 \begin{definition}[DAG of coverings and segments]\label{def:dag}
@@ -743,13 +746,16 @@ throughout the interface and can be mixed freely.
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
-A bare \texttt{$h$} is short for \texttt{HEAD:$h$}. Where a covering
-is expected, the literal \texttt{HEAD} resolves to the default
+A bare \texttt{$h$} resolves over the distinct hashes in every local live
+covering ref together with cache-only retained hashes. A
+\texttt{$C$:$h$} address restricts the search to covering $C$. Where a
+covering is expected, the literal \texttt{HEAD} resolves to the default
 covering recorded in \texttt{.covmap/HEAD}. Hash prefixes follow
-\texttt{git}-style disambiguation: any unique prefix works,
-ambiguity is an error. An \texttt{@$\nu$} address selects a segment by
-its name; connection endpoints store \texttt{@$\nu$} for named segments
-so that links survive content edits.
+\texttt{git}-style disambiguation: any unique prefix works and repeated
+references to the same full hash count as one match; ambiguity between
+distinct full hashes is an error. An \texttt{@$\nu$} address selects a segment
+by its name; connection endpoints store \texttt{@$\nu$} for named segments so
+that links survive content edits.
 
 \subsection{Initial cover and refinement}\label{sec:initial-cover}
 
@@ -847,6 +853,13 @@ names one item prints all covmap holds about it. The region view and the
 label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
 of file/range regions or a label, presenting each selected segment together
 with its image.
+When inspection needs live segment bytes whose cache entry is absent, it
+reconstructs them only from source that reproduces the recorded hash.
+\texttt{status}, \texttt{show}, and \texttt{ls} may publish those verified
+bytes to the operational cache on a best-effort basis; an unwritable cache
+does not invalidate otherwise successful inspection. Drift, unavailable
+source, and present corrupt objects remain observable. Verification itself is
+read-only unless hydration is requested explicitly.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\

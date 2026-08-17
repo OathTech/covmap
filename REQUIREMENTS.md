@@ -158,8 +158,13 @@ covering-qualified segment name (`<C>:@<name>`), by covering-qualified
 position (`<C>:<file>:<line>[:<col>]`, resolving to the unique segment
 containing that position — a stable, hash-free handle), or by connection
 name, with HEAD resolving the default covering and unique hash prefixes
-accepted. Within `link` and `unlink`, each endpoint operand shall accept a
-name, hash prefix, or position resolved against that side's covering.
+accepted. A bare hash prefix shall resolve over the union of hashes in every
+local covering ref and retained cache objects, deduplicating repeated
+references to the same full hash; it shall therefore remain usable for a clean
+live segment when the cache is empty. A covering-qualified hash shall constrain
+resolution to that covering. Within `link` and `unlink`, each endpoint operand
+shall accept a name, hash prefix, or position resolved against that side's
+covering.
 For `split`, an exact colon-free covered-file path shall outrank hash-prefix
 interpretation and permit cuts across that file; a selector containing `:`
 shall use positional-address syntax, and a bare file selector shall use HEAD.
@@ -183,7 +188,9 @@ higher-level *porcelain* command is intended to be expressible as a
 pipeline. (This is git's plumbing/porcelain split: primitives plus the
 convenience commands built over them.) Multi-cut split shall compose the
 existing position and object primitives while making one atomic covering-ref
-transition rather than exposing intermediate partitions.
+transition rather than exposing intermediate partitions. `rev-parse` and
+`cat-segment` shall use the same logical local hash index as porcelain readers,
+so cache population does not change whether a clean live hash resolves.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
@@ -196,7 +203,14 @@ Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
 Connection link listings shall place an existing single-line note on wrapped,
 indented lines below its resolved endpoint pair while leaving
-`ls-links --resolve` unchanged.
+`ls-links --resolve` unchanged. Inspection that reads live segment bytes shall
+reconstruct them from matching source when absent and may publish them to the
+cache on a best-effort basis. `status`, `show`, and `ls` shall opportunistically
+warm selected live objects without failing solely because the cache is
+read-only; source drift, unavailable bytes, and cache corruption shall remain
+visible. `grep`, `cat-segment`, and HTML generation shall use the same checked
+source-backed read behavior. Verification shall remain read-only unless
+hydration is explicitly requested.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —

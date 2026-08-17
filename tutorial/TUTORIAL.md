@@ -157,12 +157,19 @@ drift.
 
 The script now clears both repositories' live object caches to model a clean
 checkout that has refs and matching source but no cached content. Verification
-accepts that state without silently populating it:
+accepts that state without silently populating it. Bare hash lookup still
+searches the live refs, so plumbing can resolve and read a clean live segment;
+content inspection warms its object, and normal `status` warms the remaining
+selected objects:
 
 ```sh
 rm -rf .covmap/objects/*
 covmap fsck --offline
 find .covmap/objects -type f          # still empty
+covmap rev-parse 327ef5a1             # resolves from the live covering ref
+covmap cat-segment 327ef5a1           # verified source read; warms one object
+covmap status                         # best-effort warming fills the other
+rm -rf .covmap/objects/*
 covmap hydrate main                   # verify source hashes, then fill main
 ```
 
@@ -180,7 +187,9 @@ Likewise, a valid cache entry does not make unavailable covered source healthy:
 live verification still fails until that source is restored or the covering is
 changed. Hydration changes only the local cache, not the covering ref. `split`
 and `merge` use this same verified reconstruction rule when recorded input
-objects are absent.
+objects are absent. Inspection warming is best-effort: an unwritable cache
+does not make otherwise-valid inspection fail, but drift, unavailable bytes,
+and corrupt objects remain visible.
 
 ## 3. Refine into one segment per section  (req5, req8)
 

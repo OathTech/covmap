@@ -2,10 +2,10 @@
 //! click-through navigation between connections. Ported from the
 //! specov design.
 
+use crate::cache;
 use crate::connection::Connection;
 use crate::covering::{self, Covering, CoveringEntry};
 use crate::repo::Repo;
-use crate::segment;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
@@ -501,8 +501,8 @@ fn render_source_view(
             esc(fname)
         ));
         for (i, e) in entries.iter().enumerate() {
-            let content = segment::read_object(&repo.objects_dir(), &e.hash)
-                .unwrap_or_else(|_| String::from("(missing)\n"));
+            let content =
+                cache::read_live_content(repo, e).unwrap_or_else(|_| String::from("(missing)\n"));
             let status = seg_status(outgoing, &e.hash);
             let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
             let inline = if e.is_line_aligned() { "" } else { " inline" };
@@ -582,7 +582,7 @@ fn render_target_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))
@@ -706,7 +706,7 @@ fn render_compare_view(
                 esc(fname)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let content = segment::read_object(&repo.objects_dir(), &e.hash)
+                let content = cache::read_live_content(repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let status = seg_status(outgoing, &e.hash);
                 let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
@@ -761,7 +761,7 @@ fn render_compare_view(
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
-                let content = segment::read_object(&cv.tgt_repo.objects_dir(), &e.hash)
+                let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
                     .get(&(cv.k.target_repo.clone(), e.hash.clone()))

@@ -6,7 +6,7 @@
 //!     version             # on-disk format version (currently "2")
 //!     HEAD                # default covering name
 //!     ignore              # optional gitignore-lite patterns
-//!     objects/<hh>/<rest> # segment object: raw content
+//!     objects/<hh>/<rest> # local segment-content cache
 //!     coverings/<name>    # covered files + segment list
 //!     connections/<name>  # connection metadata + links
 //!     iterators/<name>    # frozen worklist + per-task state + cursor

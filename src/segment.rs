@@ -6,13 +6,17 @@
 //! metadata, like the segment name and message), so re-labelling a segment
 //! never changes its identity. With a few thousand segments the collision
 //! probability is around 2^-44, and the shorter hash is what every command
-//! prints and accepts. The object body is the raw content bytes.
+//! prints and accepts. The object body is the raw content bytes. Live objects
+//! form a reconstructible local cache; frozen iterator objects remain retained
+//! append-only.
 
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const HASH_LEN: usize = 16;
+static OBJECT_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct Segment {
@@ -97,8 +101,12 @@ pub fn extract_content(
 /// is deliberately excluded (see the module docs), so identical content is
 /// always one shared object regardless of label.
 pub fn hash_of(content: &str) -> String {
+    hash_bytes(content.as_bytes())
+}
+
+pub fn hash_bytes(content: &[u8]) -> String {
     let mut h = Sha256::new();
-    h.update(content.as_bytes());
+    h.update(content);
     let out = h.finalize();
     let mut s = String::with_capacity(HASH_LEN);
     for b in &out[..HASH_LEN / 2] {
@@ -112,30 +120,105 @@ pub fn object_path(objects_dir: &std::path::Path, hash: &str) -> std::path::Path
     objects_dir.join(&hash[..2]).join(&hash[2..])
 }
 
-/// Persist a segment as an object file. Idempotent.
-pub fn write_object(objects_dir: &std::path::Path, seg: &Segment) -> std::io::Result<String> {
+fn verify_existing_object(path: &std::path::Path, hash: &str, expected: &[u8]) -> io::Result<()> {
+    let bytes = fs::read(path)?;
+    let actual = hash_bytes(&bytes);
+    if actual != hash {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "cache corruption at {}: filename hash {hash}, content hash {actual}",
+                path.display()
+            ),
+        ));
+    }
+    if bytes != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("segment hash collision at {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn unique_object_tmp(path: &std::path::Path) -> io::Result<(std::path::PathBuf, fs::File)> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("object path has no parent: {}", path.display()),
+        )
+    })?;
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    loop {
+        let seq = OBJECT_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), seq));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Persist a segment atomically as an object file. Concurrent writers either
+/// publish one complete object or verify the identical winner.
+pub fn write_object(objects_dir: &std::path::Path, seg: &Segment) -> io::Result<String> {
     let h = seg.hash();
     let path = object_path(objects_dir, &h);
     if path.exists() {
+        verify_existing_object(&path, &h, seg.content.as_bytes())?;
         return Ok(h);
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    // Object body is the raw content — the label is ref-local metadata and
-    // is not stored in (or hashed into) the object.
-    fs::write(path, &seg.content)?;
-    Ok(h)
+    let (tmp, mut file) = unique_object_tmp(&path)?;
+    let write_result = file
+        .write_all(seg.content.as_bytes())
+        .and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+
+    let publish = fs::hard_link(&tmp, &path);
+    let _ = fs::remove_file(&tmp);
+    match publish {
+        Ok(()) => Ok(h),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            verify_existing_object(&path, &h, seg.content.as_bytes())?;
+            Ok(h)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Read an object's content from the store. The object body is exactly the
 /// segment's content (the label lives in the covering ref, not here).
-pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> std::io::Result<String> {
+pub fn read_object(objects_dir: &std::path::Path, hash: &str) -> io::Result<String> {
     let path = object_path(objects_dir, hash);
-    let mut f = fs::File::open(path)?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).to_string())
+    let bytes = fs::read(&path)?;
+    let actual = hash_bytes(&bytes);
+    if actual != hash {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "cache corruption at {}: filename hash {hash}, content hash {actual}",
+                path.display()
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("object {} is not UTF-8: {error}", path.display()),
+        )
+    })
 }
 
 /// Resolve a hash prefix to a unique full hash. Errors on ambiguity / no match.
@@ -269,6 +352,65 @@ mod tests {
         let h2 = write_object(&dir, &seg).unwrap();
         assert_eq!(h1, h2);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_object_rejects_an_existing_corrupt_cache_entry() {
+        let dir = tmpdir();
+        let seg = Segment {
+            file: "x.md".into(),
+            a: 1,
+            b: 1,
+            label: "".into(),
+            content: "expected\n".into(),
+        };
+        let hash = seg.hash();
+        let path = object_path(&dir, &hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "corrupt\n").unwrap();
+
+        let error = write_object(&dir, &seg).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("cache corruption"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn concurrent_object_writers_publish_one_complete_object() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = Arc::new(tmpdir());
+        let barrier = Arc::new(Barrier::new(8));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let dir = Arc::clone(&dir);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                let seg = Segment {
+                    file: "x.md".into(),
+                    a: 1,
+                    b: 2,
+                    label: "".into(),
+                    content: "alpha\nbeta\n".into(),
+                };
+                barrier.wait();
+                write_object(&dir, &seg).unwrap()
+            }));
+        }
+        let hashes: Vec<String> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+
+        assert!(hashes.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(read_object(&dir, &hashes[0]).unwrap(), "alpha\nbeta\n");
+        let object_dir = object_path(&dir, &hashes[0])
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert_eq!(fs::read_dir(object_dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir.as_ref()).ok();
     }
 
     #[test]

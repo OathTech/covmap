@@ -113,6 +113,18 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 ( cd "$WORK/spec" && run status )
 ( cd "$WORK/spec" && run ls -l )
 
+echo "  (clearing reconstructible live object caches)"
+rm -rf "$WORK/spec/.covmap/objects"/* "$WORK/impl_rs/.covmap/objects"/*
+( cd "$WORK/spec" && run fsck --offline )
+assert "offline fsck accepts clean refs with an empty cache" \
+  bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 0 ]]"
+( cd "$WORK/spec" && run hydrate main )
+assert "hydrate restores both spec objects" \
+  bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 2 ]]"
+( cd "$WORK/impl_rs" && run fsck --offline --hydrate )
+assert "offline fsck hydration restores the implementation object" \
+  bash -c "[[ \$(find '$WORK/impl_rs/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 1 ]]"
+
 #############################################################################
 hr "3. refine queue.md into one segment per section  (REQ5, REQ8)"
 #############################################################################

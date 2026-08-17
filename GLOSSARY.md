@@ -57,6 +57,12 @@ and **resolved link** output; see also the **HTML report / Compare view**.
 **Cardinality** **[T][S]** — `|C|`, the number of segments in a covering.
 A complexity measure reported by `status`.
 
+**Cache corruption** **[T][R][S]** — a present object whose bytes do not
+hash to the hash encoded by its `.covmap/objects/` path. Distinct from a
+missing cache entry, which is valid for a live segment when checked-out source
+reconstructs the recorded hash. Hydration never overwrites corruption; delete
+the offending cache file, then hydrate it again from matching source.
+
 **Connection** **[T][R][S]** — a many-to-many relation between two
 coverings, stored as a set of links with optional per-link notes. This
 is the "map" covmap produces. Stored separately from coverings, in the
@@ -157,9 +163,13 @@ and derived HTML reports untouched.
 (currently `2`) recording the on-disk format. covmap refuses to operate
 on a repository whose version disagrees.
 
-**fsck** **[R][S]** — integrity verification: checks that every covering
-is a valid partition of its covered set and that every connection
-endpoint resolves. `--broken-links` lists just the broken links.
+**fsck** **[R][S]** — integrity verification: checks covering partitions,
+live source against recorded hashes, every present cache object, and
+connection endpoints. A missing reconstructible live object is valid, but
+unavailable covered source is an integrity failure even when its cached object
+is valid.
+`--offline` leaves external repositories unchecked; `--hydrate` fills missing
+local objects during that pass; `--broken-links` lists just broken links.
 
 **Granularity** **[T][S]** — `g(C) = |C| / N_C ∈ (0, 1]`, where `N_C` is
 the total covered line-spans. Near 0 for a freshly-covered repository, 1
@@ -174,6 +184,11 @@ by `covmap html`, with List, Source, Target, and Compare views. Compare
 shows the two coverings of a connection side by side for navigating
 segment ↔ segment.
 
+**Hydration** **[T][R][S]** — atomically recreating a missing live
+**object cache** entry from its checked-out source range after verifying that
+the range reproduces the covering ref's recorded hash. Realized by `hydrate`
+and `fsck --offline --hydrate`; it never changes refs or accepts drifted bytes.
+
 **Ignore (gitignore-lite)** **[R][S]** — patterns in `.covmap/ignore`
 (one per line, `#` comments) that keep build output, vendored, or
 generated files out of coverings. Dot-directories are always skipped.
@@ -183,8 +198,9 @@ generated files out of coverings. Dot-directories are always skipped.
 a human, a script) pulls one at a time, works against, and marks resolved.
 A snapshot layered *over* a covering — it records a per-task state and a
 **cursor** but never mutates segments, coverings, or connections; because
-the object store is append-only, each frozen task's content stays
-retrievable even after the covering is edited or deleted. Stored at
+iterator creation ensures each task object is present and those objects are
+retained append-only, each frozen task's content stays retrievable even after
+the covering is edited or deleted. Stored at
 `.covmap/iterators/<name>`, a purely additive directory (no format-version
 bump). Driven by `covmap iter <name> <verb>`. Has several sub-concepts
 (below).
@@ -199,7 +215,7 @@ the line numbers are a hint to the current position. Sub-concept of
 resolved), `done` (worked), or `skipped` (deliberately passed over). There
 is no stored `active` state — a task is *active* exactly when the **cursor**
 points at a still-`pending` task — and no `stale` state, since freezing plus
-the immortal object store pins a task's content. Sub-concept of
+the retained task object pins its content. Sub-concept of
 **iterator**.
 
 **Cursor** **[T][R][S]** — the one task an **iterator**'s consumer is
@@ -240,6 +256,12 @@ residual middle. The position-carry-forward primitive behind **diff-remap**.
 connection, optionally annotated with a note; added by `link`, removed by
 `unlink`. A connection is a set of links (the theory: the elements of the
 relation `κ ⊆ C_A × C_B`).
+
+**Local state** **[T][R]** — covmap operational state excluded from the
+default project artifact: the reconstructible object cache,
+checkout-specific peer bindings, iterator work state and retained objects,
+generated reports, and temporary files. It may differ across checkouts without
+changing the meaning of their coverings or mappings.
 
 **Migrate** **[R][S]** — the one-time `covmap migrate` upgrade from
 on-disk format 1 to format 2. It re-keys stored segments by raw content,
@@ -284,11 +306,14 @@ by name and survive edits to its bytes. Assigned deliberately, never
 auto-generated. A segment that carries one is a **named segment**; one
 without is **anonymous**.
 
-**Object store** **[T][R][S]** — the content-addressed store at
-`.covmap/objects/<hh>/<rest>`, mapping each **segment hash** to
-the segment's raw content. Labels, names, and messages live in covering
-refs and are not stored in the object. Segments are shared across
-coverings automatically by that address.
+**Object cache** *(also: object store)* **[T][R][S]** — the
+content-addressed cache at `.covmap/objects/<hh>/<rest>`, mapping each
+**segment hash** to raw content. Labels, names, and messages live in covering
+refs and are not stored in the object. Segments are shared across coverings
+automatically by that address. A missing live object can be hydrated from
+matching source; a present object must hash to its path. Frozen iterator
+objects must be retained because their covering/source coordinates may no
+longer be available.
 
 **Partition** **[T][R]** — the decomposition a covering imposes on each
 covered file: disjoint, complete, contiguous, file-confined segments.
@@ -302,6 +327,11 @@ distinct from cardinality and granularity. Defined in the theory and
 still computed by `stats()`, but **not surfaced in any command output** —
 it is not actionable on its own, so it was dropped from `status` (kept in
 code, `allow(dead_code)`, for a possible future evenness heuristic).
+
+**Peer alias / peer binding** **[T][R]** — a peer alias is the stable,
+project-local name a durable external connection uses instead of an absolute
+checkout path. A peer binding is ignored **local state** that resolves that
+alias to a repository in one checkout. `.` is the reserved self alias.
 
 **Plumbing / Porcelain** **[T][R][S]** — covmap has a small set of *core
 primitives*: scriptable, line-oriented commands (`hash-segment`,
@@ -324,6 +354,17 @@ each segment in the slice with the segments it maps to (the image `κ(S)` for
 absent column (`⊥` / `None`) means the first character of the line for a
 start, and the last character (through the trailing newline) for an end;
 `(i,1)` and `(i,⊥)` name the same start boundary.
+
+**Project artifact** **[T][R]** — the portable covmap state intended for
+publication beside project source: format version, default covering,
+covering-input policy, covering refs, connection refs, and the default
+publication policy. Together with matching checked-out source, it is sufficient
+to verify and reconstruct clean live segments.
+
+**Publication boundary** **[T][R]** — the distinction between a
+**project artifact**, which is tracked by default, and **local state**, which
+is ignored by default. The ignore policy is repository hygiene rather than an
+enforcement fence; publication remains an explicit external action.
 
 **Repair** **[T][R][S]** — bringing a covering's segments back in line
 with edited files (drift repair): a *layered fallback chain*, each layer

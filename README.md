@@ -40,6 +40,10 @@ not supported.
 The on-disk format is **version 2**. A `.covmap/` created by an older
 covmap (format 1) is upgraded with `covmap migrate`, which re-keys every
 object under the content-only segment hash (see *Layout on disk*).
+CIP 0010 and req24, Git-trackable coverings and mappings, are Accepted and
+being implemented in slices. Until the format-3 slice lands, connection refs
+still contain checkout paths and the current `.covmap/` layout is not yet the
+portable publication artifact req24 specifies.
 
 ## Install
 
@@ -62,6 +66,9 @@ There are no runtime dependencies beyond `sha2`.
   inclusive character column (omitted = line boundary). Its identity is
   the first 16 hex chars of `sha256(content)` — content only; the label is
   covering-local metadata and not part of the hash.
+- `.covmap/objects/` is the local content cache. A missing live object is
+  reconstructible when the checked-out range still hashes to its covering
+  ref; `hydrate` restores it atomically and rejects drifted source.
 - A **covering** of a repository is a partition of (some files of)
   the repository into segments. Refs live at
   `.covmap/coverings/<name>`. The default covering is `main`.
@@ -89,7 +96,9 @@ There are no runtime dependencies beyond `sha2`.
 - An **iterator** freezes a covering into an ordered, stateful worklist
   (`covmap iter <name> new <C>`): each segment becomes a task you pull one
   at a time and mark `done`/`skipped`. It is a resumable, on-disk work
-  plan layered over the covering — it never mutates it.
+  plan layered over the covering — it never mutates it. Creation retains every
+  selected task object; a missing clean object is reconstructed, while a
+  drifted cache miss refuses the freeze with restore-and-hydrate guidance.
 
 There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
@@ -158,6 +167,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
 | `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
+| `hydrate [<C>]` | Reconstruct missing live cache objects from source that matches the covering hash. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
 | `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
 | `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
@@ -181,7 +191,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
-`fsck [--broken-links]`.
+`fsck [--broken-links] [--offline [--hydrate]]`.
 
 Several regions can be reviewed in one covering-ordered listing:
 
@@ -201,6 +211,34 @@ links do not contribute.
 
 Long link notes are wrapped beneath their resolved endpoint pair;
 `ls-links --resolve` remains the stable TAB-delimited form for scripts.
+
+### Live object cache
+
+Covering refs record each source range and its content hash. If a live object
+is missing, verification reads that range and accepts the cache miss only when
+the bytes reproduce the recorded hash:
+
+```sh
+covmap fsck --offline            # verify without filling the cache
+covmap hydrate main              # fill one covering
+covmap fsck --offline --hydrate  # verify and fill every local covering
+```
+
+Hydration never changes refs. A present object whose content does not hash to
+its filename is corruption. Neither `hydrate` nor
+`fsck --offline --hydrate` overwrites a corrupt object; remove that cache file,
+then hydrate it again from matching source. A valid cached object does not make
+an unavailable covered source healthy: source remains part of the live
+covering, so `fsck` fails until it is restored or the covering is changed. A
+missing object plus drifted source is unrecoverable from the current checkout,
+so covmap refuses to substitute those edited bytes. `split` and `merge` use the
+same checked reconstruction rule when their recorded inputs are absent. These
+cache semantics do not change the format-2 encoding.
+
+`fsck --broken-links --offline` keeps the existing three-column broken-link
+schema. For an external connection, such a row asserts only that the local
+source endpoint is broken; stderr reports that the target endpoint was not
+checked.
 
 ### Split grammar migration
 
@@ -235,7 +273,7 @@ offer other ways in.)*
 ## Address forms
 
 - `<hash>` — full or short hex prefix (≥2 chars). Resolved against
-  the object store.
+  the local object cache; hydrate first if it was cleared.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
 - `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` covering that
@@ -260,7 +298,7 @@ one per line. Supported syntax:
   version              # on-disk format version (currently "2")
   HEAD                 # default covering name (one line)
   ignore               # optional gitignore-lite patterns
-  objects/<hh>/<rest>  # segment objects: raw <content> (hash = sha256(content))
+  objects/<hh>/<rest>  # local cache: raw <content> (hash = sha256(content))
   coverings/<name>     # covered files + one segment hash per line
   connections/<name>   # connection metadata + links
   iterators/<name>     # a covering frozen into an ordered, stateful worklist

@@ -6,6 +6,7 @@
 use std::env;
 use std::process::ExitCode;
 
+mod cache;
 mod cli;
 mod connection;
 mod covering;

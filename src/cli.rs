@@ -3,12 +3,14 @@
 //! See covmap/theory/main.tex §5 for the model. Output is line-oriented
 //! and pipe-friendly.
 
+use crate::cache::{self, HydrateOutcome};
 use crate::connection::{Connection, Link};
 use crate::covering::{self, Covering, CoveringEntry};
 use crate::iterator::{self, Iter, Order, Task, TaskState};
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
 use crate::walk::{self, DEFAULT_LABEL};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -40,6 +42,7 @@ pub fn dispatch(args: Vec<String>) -> io::Result<u8> {
     match cmd {
         "init" => cmd_init(&rest),
         "cover" => cmd_cover(&rest),
+        "hydrate" => cmd_hydrate(&rest),
         "status" => cmd_status(&rest),
         "show" => cmd_show(&rest),
         "ls" => cmd_ls(&rest),
@@ -102,6 +105,9 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         "init" => "covmap init                                  create .covmap/ in the cwd",
         "cover" => "covmap cover [<covering>]                    add one whole-file `unknown` segment per missing file",
+        "hydrate" => {
+            "covmap hydrate [<covering>]                  reconstruct missing live objects from matching source"
+        }
         "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
         "show" => {
             "covmap show <addr> [--content] [--all]   inspect a segment, covering, region, link, or connection"
@@ -142,7 +148,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "ls-segments" => "covmap ls-segments <covering>",
         "ls-links" => "covmap ls-links <connection>",
         "rev-parse" => "covmap rev-parse <addr>",
-        "fsck" => "covmap fsck [--broken-links]",
+        "fsck" => "covmap fsck [--broken-links] [--offline [--hydrate]]",
         _ => return None,
     })
 }
@@ -157,6 +163,7 @@ Run `covmap --version` to print the version.
 PORCELAIN
   init                                create .covmap/ in the cwd
   cover [<covering>]                  add one whole-file `unknown` segment per missing file
+  hydrate [<covering>]                reconstruct missing live objects from matching source
   status [<covering>]                 cardinality, lines, drift, broken links
   show <addr> [--content] [--all]     inspect a segment, covering, region, link, or connection
   ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
@@ -193,7 +200,7 @@ PLUMBING
   ls-segments <covering>
   ls-links <connection>
   rev-parse <addr>
-  fsck [--broken-links]
+  fsck [--broken-links] [--offline [--hydrate]]
 ",
         env!("CARGO_PKG_VERSION")
     );
@@ -364,6 +371,74 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
+// ---- hydrate --------------------------------------------------------------
+
+fn cmd_hydrate(args: &[String]) -> io::Result<u8> {
+    if args.len() > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "hydrate [<covering>]",
+        ));
+    }
+    let repo = current_repo()?;
+    let coverings = match args.first() {
+        Some(name) => vec![resolve_covering(&repo, name)?],
+        None => Covering::list(&repo)?
+            .into_iter()
+            .map(|name| Covering::read(&repo, &name))
+            .collect::<io::Result<Vec<_>>>()?,
+    };
+    if coverings.is_empty() {
+        println!("hydrate: no coverings");
+        return Ok(0);
+    }
+
+    let mut present = 0usize;
+    let mut written = 0usize;
+    let mut errors = 0usize;
+    for covering in coverings {
+        for issue in covering::partition_issues(&covering) {
+            eprintln!("hydrate: covering {} {issue}", covering.name);
+            errors += 1;
+        }
+        let mut by_file: BTreeMap<&str, Vec<&CoveringEntry>> = BTreeMap::new();
+        for entry in &covering.entries {
+            by_file.entry(entry.file.as_str()).or_default().push(entry);
+        }
+        for (file, entries) in by_file {
+            let lines = match cache::source_lines(&repo, file) {
+                Ok(lines) => lines,
+                Err(error) => {
+                    eprintln!("hydrate: covering {}: {error}", covering.name);
+                    errors += 1;
+                    continue;
+                }
+            };
+            for entry in entries {
+                match cache::hydrate_entry_from_lines(&repo, entry, &lines) {
+                    Ok(HydrateOutcome::Present) => present += 1,
+                    Ok(HydrateOutcome::Written) => written += 1,
+                    Err(error) => {
+                        eprintln!(
+                            "hydrate: covering {} {}: {error}",
+                            covering.name,
+                            entry.loc()
+                        );
+                        errors += 1;
+                    }
+                }
+            }
+        }
+    }
+    if errors == 0 {
+        println!("hydrate: {written} written, {present} already present");
+        Ok(0)
+    } else {
+        eprintln!("hydrate: {errors} issue(s)");
+        Ok(1)
+    }
+}
+
 // ---- status ---------------------------------------------------------------
 
 /// Render a connection's two coverings without exposing the repository's
@@ -428,7 +503,7 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
                     continue;
                 }
             };
-            if !file_matches_segments(&lines, &entries, &repo)? {
+            if !file_matches_segments(&lines, &entries) {
                 drifted += 1;
             }
         }
@@ -484,13 +559,9 @@ fn cmd_status(args: &[String]) -> io::Result<u8> {
 }
 
 /// Check that the recorded segments for `file` reconstruct its current
-/// content byte-for-byte (and that each segment's hash still matches
-/// the object store).
-fn file_matches_segments(
-    lines: &[String],
-    entries: &[&CoveringEntry],
-    repo: &Repo,
-) -> io::Result<bool> {
+/// content byte-for-byte using the hashes in the covering ref. Cache objects
+/// are not required for drift detection.
+fn file_matches_segments(lines: &[String], entries: &[&CoveringEntry]) -> bool {
     let mut sorted: Vec<&&CoveringEntry> = entries.iter().collect();
     sorted.sort_by_key(|e| e.sort_key());
     // The next start position the partition must supply, beginning at
@@ -498,30 +569,19 @@ fn file_matches_segments(
     let mut expected = covering::Pos { line: 1, col: None };
     for e in &sorted {
         if !covering::same_start(expected, e.start_pos()) {
-            return Ok(false);
+            return false;
         }
         let on_disk = match segment::extract_content(lines, e.a, e.a_col, e.b, e.b_col) {
             Some(c) => c,
-            None => return Ok(false),
+            None => return false,
         };
-        let recorded = match segment::read_object(&repo.objects_dir(), &e.hash) {
-            Ok(c) => c,
-            Err(_) => return Ok(false),
-        };
-        if on_disk != recorded {
-            return Ok(false);
+        if segment::hash_of(&on_disk) != e.hash {
+            return false;
         }
         expected = covering::successor_of_end(e.end_pos());
     }
     // The covering must reach exactly one past the end of the file.
-    Ok(covering::same_start(
-        expected,
-        covering::file_end(lines.len()),
-    ))
-}
-
-fn object_exists(repo: &Repo, hash: &str) -> bool {
-    segment::object_path(&repo.objects_dir(), hash).exists()
+    covering::same_start(expected, covering::file_end(lines.len()))
 }
 
 // ---- show -----------------------------------------------------------------
@@ -2736,6 +2796,17 @@ fn cmd_iter_new(name: &str, args: &[String]) -> io::Result<u8> {
     // Resolve the covering now (accepting HEAD), but store its given name so
     // a later reader sees what the user asked for.
     let cov = resolve_covering(&repo, &covering)?;
+    let selected: Vec<&CoveringEntry> = cov
+        .entries
+        .iter()
+        .filter(|entry| {
+            label
+                .as_deref()
+                .map(|value| entry.label == value)
+                .unwrap_or(true)
+        })
+        .collect();
+    cache::ensure_recorded_entries(&repo, &selected)?;
     let tasks = iterator::freeze(&cov, order, label.as_deref());
     if tasks.is_empty() {
         eprintln!(
@@ -3378,39 +3449,114 @@ fn cmd_rev_parse(args: &[String]) -> io::Result<u8> {
 
 fn cmd_fsck(args: &[String]) -> io::Result<u8> {
     let mut broken_only = false;
+    let mut offline = false;
+    let mut hydrate = false;
     for a in args {
-        if a == "--broken-links" {
-            broken_only = true;
+        match a.as_str() {
+            "--broken-links" => broken_only = true,
+            "--offline" => offline = true,
+            "--hydrate" => hydrate = true,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("fsck: unexpected argument '{other}'"),
+                ))
+            }
         }
     }
+    if hydrate && !offline {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fsck --hydrate requires --offline",
+        ));
+    }
+    if hydrate && broken_only {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fsck --hydrate cannot be combined with --broken-links",
+        ));
+    }
+
     let repo = current_repo()?;
     let mut errs = 0usize;
-    for cn in Covering::list(&repo)? {
-        let c = Covering::read(&repo, &cn)?;
-        for issue in covering::partition_issues(&c) {
-            if !broken_only {
+    if !broken_only {
+        for cn in Covering::list(&repo)? {
+            let c = Covering::read(&repo, &cn)?;
+            for issue in covering::partition_issues(&c) {
                 eprintln!("fsck: covering {cn} {issue}");
-            }
-            errs += 1;
-        }
-        for e in &c.entries {
-            if !object_exists(&repo, &e.hash) {
-                if !broken_only {
-                    eprintln!(
-                        "fsck: covering {} hash {} missing in object store",
-                        cn, e.hash
-                    );
-                }
                 errs += 1;
+            }
+
+            let mut by_file: BTreeMap<&str, Vec<&CoveringEntry>> = BTreeMap::new();
+            for entry in &c.entries {
+                by_file.entry(entry.file.as_str()).or_default().push(entry);
+            }
+            for (file, entries) in by_file {
+                let lines = match cache::source_lines(&repo, file) {
+                    Ok(lines) => Some(lines),
+                    Err(error) => {
+                        eprintln!("fsck: covering {cn}: {error}");
+                        errs += 1;
+                        None
+                    }
+                };
+                for entry in entries {
+                    let object = segment::read_object(&repo.objects_dir(), &entry.hash);
+                    let missing =
+                        matches!(&object, Err(error) if error.kind() == io::ErrorKind::NotFound);
+
+                    if let Some(lines) = &lines {
+                        let source_result = if hydrate && missing {
+                            cache::hydrate_entry_from_lines(&repo, entry, lines).map(|_| ())
+                        } else {
+                            cache::source_content_from_lines(lines, entry).map(|_| ())
+                        };
+                        if let Err(error) = source_result {
+                            if hydrate && missing {
+                                eprintln!(
+                                    "fsck: covering {cn} {}: cannot hydrate: {error}",
+                                    entry.loc()
+                                );
+                            } else {
+                                eprintln!("fsck: covering {cn} {}: {error}", entry.loc());
+                            }
+                            errs += 1;
+                        }
+                    }
+
+                    match object {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            eprintln!("fsck: covering {cn} {}: {error}", entry.loc());
+                            errs += 1;
+                        }
+                    }
+                }
             }
         }
     }
+
+    let mut unchecked = 0usize;
     for kn in Connection::list(&repo)? {
         let k = Connection::read(&repo, &kn)?;
         let src = Covering::read(&repo, &k.source_covering)?;
-        let tgt_repo = Repo {
-            root: PathBuf::from(&k.target_repo),
-        };
+        let target_root = PathBuf::from(&k.target_repo);
+        if offline && target_root != repo.root {
+            for link in &k.links {
+                if !covering::endpoint_resolves(&src, &link.a) {
+                    println!("{}\t{}\t{}", kn, link.a, link.b);
+                    errs += 1;
+                }
+            }
+            eprintln!(
+                "fsck: connection {kn} target unchecked in --offline mode: {}/{}",
+                k.target_repo, k.target_covering
+            );
+            unchecked += 1;
+            continue;
+        }
+        let tgt_repo = Repo { root: target_root };
         let tgt = Covering::read(&tgt_repo, &k.target_covering)?;
         for p in &k.links {
             let a_ok = covering::endpoint_resolves(&src, &p.a);
@@ -3423,7 +3569,11 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
     }
     if !broken_only {
         if errs == 0 {
-            println!("fsck: ok");
+            if unchecked == 0 {
+                println!("fsck: ok");
+            } else {
+                println!("fsck: ok ({unchecked} external connection(s) unchecked)");
+            }
         } else {
             eprintln!("fsck: {errs} issue(s)");
         }
@@ -3481,6 +3631,27 @@ mod tests {
         fs::create_dir_all(repo.coverings_dir()).unwrap();
         fs::create_dir_all(repo.connections_dir()).unwrap();
         fs::write(repo.head_file(), "main\n").unwrap();
+    }
+
+    #[test]
+    fn drift_check_uses_covering_hashes_without_cache_objects() {
+        let lines = vec!["alpha\n".to_string(), "beta\n".to_string()];
+        let entry = CoveringEntry {
+            hash: segment::hash_of("alpha\nbeta\n"),
+            file: "file.txt".to_string(),
+            a: 1,
+            a_col: None,
+            b: 2,
+            b_col: None,
+            label: "unknown".to_string(),
+            name: None,
+            message: None,
+        };
+
+        assert!(file_matches_segments(&lines, &[&entry]));
+
+        let changed = vec!["changed\n".to_string(), "beta\n".to_string()];
+        assert!(!file_matches_segments(&changed, &[&entry]));
     }
 
     #[test]

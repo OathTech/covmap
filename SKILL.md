@@ -14,6 +14,11 @@ The mathematical model is in `covmap/theory/main.tex`; the source is
 `covmap/src/`. Build with `cargo build --release` from `covmap/`. The
 binary path is `covmap/target/release/covmap`.
 
+Git-trackable coverings and mappings (req24 / CIP 0010) are Accepted but still
+in progress. The current format-2 connection ref stores an absolute target
+path; do not present the current `.covmap/` as a portable committed artifact
+until the format-3 peer-alias and publication-policy slice lands.
+
 ## Mental model
 
 - A **segment** is a contiguous range of one file `(file, a, b, label)`
@@ -24,7 +29,10 @@ binary path is `covmap/target/release/covmap`.
   boundary (start of the line for `a`, through the newline for `b`).
   Its identity is the first 16 hex chars (64 bits) of `sha256(content)` —
   content only; the label is ref-local metadata, not part of the hash.
-  Segments are stored under `.covmap/objects/`.
+  Live segment bytes are cached under `.covmap/objects/`. If a live object is
+  missing while the checked-out range still hashes to the covering ref,
+  `covmap hydrate` can reconstruct it; drifted source is never accepted as the
+  recorded bytes.
 - A **covering** is a partition of (some files of) a repository into
   segments. It is a ref under `.covmap/coverings/<name>` listing one
   segment per line, prefixed by `# covered=<file>` lines. The default
@@ -95,7 +103,7 @@ A covmap-managed repository contains:
 .covmap/
   HEAD                    default covering name (default: main)
   ignore                  optional gitignore-lite patterns
-  objects/<hh>/<rest>     content-addressed segment objects
+  objects/<hh>/<rest>     local content-addressed segment cache
   coverings/<name>        covering refs (one per name)
   connections/<name>      connection refs (one per name)
 ```
@@ -110,6 +118,7 @@ are unique.
 | ------- | ------- | ------------ |
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
+| `covmap hydrate [<C>]` | Verify live source against covering hashes and atomically recreate missing cache objects; omitted `<C>` means every covering. | **yes** |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
 | `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
 | `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
@@ -128,7 +137,7 @@ are unique.
 | `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
-| `covmap fsck` | Verify partitions and connection endpoints. | yes |
+| `covmap fsck [--offline [--hydrate]]` | Verify partitions, source hashes, present cache objects, and connection endpoints. Missing clean live objects are valid; offline mode skips external repositories and may hydrate. | yes |
 | `covmap html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser. For humans, not you. Shows one connection at a time: auto-selected when only one exists, otherwise `--connection K` is required (with no connections, shows List/Source of HEAD's covering). `--covering`/`--connection` select what it shows independent of HEAD/cwd; `--connection K` fixes the source to K's source covering and renders K's target side in the Target/Compare views (run it from the connection's *source* repo). | no |
 
 ### Plumbing (for scripts and pipelines)
@@ -145,7 +154,8 @@ are unique.
 ### Address forms
 
 - `<hash>` — full 16-char hex or short prefix (≥2 chars), resolved
-  against the object store.
+  against the local object cache. Run `hydrate` first when that cache was
+  cleared; covering-qualified hashes still resolve from their ref.
 - `<C>:<h>` — segment hash `<h>` inside covering `<C>`.
 - `<C>:@<name>` — the segment named `<name>` in covering `<C>`.
 - `<C>:<file>:<line>[:<col>]` — the segment of `<file>` that **covers**
@@ -239,6 +249,27 @@ that first.
 5. Run `covmap status` and report cardinality back.
 6. Optionally `covmap connect <C_A> [<repo>:]<C_B> <K>` to create the
    empty connection — but do not start linking yet.
+
+### A1. Recover a missing live object cache
+
+An absent object is not corruption when the live source range still hashes to
+the covering ref. Verify without populating the cache, then hydrate explicitly:
+
+```sh
+covmap fsck --offline
+covmap hydrate main
+```
+
+Use `covmap fsck --offline --hydrate` to combine those steps for every local
+covering. Hydration never changes a ref. If source has drifted, it fails rather
+than recording current bytes under the old hash; restore the matching source
+revision or use the appropriate drift-repair workflow. `split` and `merge`
+apply the same rule when a required recorded object is missing.
+
+`covmap fsck --broken-links --offline` preserves the normal three-column
+broken-link record. On an external connection, that row proves only that the
+local source endpoint is broken; the target remains unchecked and is reported
+as such on stderr.
 
 ### A2. Understand how a part of the software maps (bounded drill-down)
 
@@ -447,11 +478,15 @@ matters for you specifically: the plan is durable and resumable, not
 context-window-bound.
 
 An iterator is a **snapshot**: `new` records the segments at freeze time,
-so later edits to the files or covering don't change the enumeration. And
-because the object store is append-only, each frozen task's content is
-always recoverable with `covmap cat-segment <hash>` (or `iter ... peek
---content`) even if the covering is later edited or deleted. It never
-mutates segments, coverings, or connections.
+so later edits to the files or covering don't change the enumeration.
+Iterator creation ensures every frozen task object is cached; retaining those
+objects append-only keeps each task's content recoverable with
+`covmap cat-segment <hash>` (or `iter ... peek --content`) even if the
+covering is later edited or deleted. It never mutates segments, coverings, or
+connections. On an empty cache, `iter new` reads each selected source file once
+and reconstructs only entries whose bytes reproduce their recorded hashes. If
+a selected entry has drifted, it refuses to create the iterator and prints the
+restore-and-hydrate recovery rather than freezing an unretrievable task.
 
 **Setup — freeze the covering:**
 
@@ -546,8 +581,21 @@ covering; repair it with `recut` / `recut --remap` (workflows B, E).
 - `covmap: no .covmap directory found...` → run `covmap init` (and
   ask first whether this is the right directory).
 - `covmap: no segment matches '<prefix>'` → the prefix is wrong or
-  refers to an object that's been removed; widen the prefix or
-  `covmap ls -l` to find a current one.
+  refers to an object absent from the local cache; use a covering-qualified
+  address or run `covmap hydrate`, then retry.
+- `source drift at <loc> ...` during hydration → the cache is missing and the
+  checked-out range no longer reproduces its recorded hash. Do not force a
+  cache write; restore matching source and hydrate, or repair the covering.
+- `recorded bytes unavailable for <loc> ...` → an operation such as
+  `split`, `merge`, or `iter new` needs an absent historical object. Restore a
+  source revision matching the recorded hash, run `covmap hydrate`, then
+  return to the edit and retry.
+- `cache corruption at ...` → an object exists under the wrong hash. Remove
+  that cache file and hydrate it again from matching source. `hydrate` and
+  `fsck --offline --hydrate` deliberately do not overwrite corrupt objects.
+- `cannot read source '<file>' ...` during `fsck` → restore the covered source
+  or deliberately remove it from the covering. A valid cached object does not
+  make unavailable live source healthy.
 - `covmap: ambiguous: N segments match '<prefix>'` → use a longer
   prefix.
 - `covmap: split cut=<n> out of range for segment <file:a..b>` → you

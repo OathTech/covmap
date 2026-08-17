@@ -155,6 +155,33 @@ covering main: segments=2 lines=20
 name (`-` when anonymous). `status` reports cardinality, line count, and
 drift.
 
+The script now clears both repositories' live object caches to model a clean
+checkout that has refs and matching source but no cached content. Verification
+accepts that state without silently populating it:
+
+```sh
+rm -rf .covmap/objects/*
+covmap fsck --offline
+find .covmap/objects -type f          # still empty
+covmap hydrate main                   # verify source hashes, then fill main
+```
+
+On the implementation side it demonstrates the combined form:
+
+```sh
+covmap fsck --offline --hydrate
+```
+
+A missing live object is not corruption when source reproduces the covering
+hash. A present object with the wrong content is corruption, and drifted source
+is never written under the old hash. Hydration does not overwrite corruption;
+delete the offending cache entry before hydrating it from matching source.
+Likewise, a valid cache entry does not make unavailable covered source healthy:
+live verification still fails until that source is restored or the covering is
+changed. Hydration changes only the local cache, not the covering ref. `split`
+and `merge` use this same verified reconstruction rule when recorded input
+objects are absent.
+
 ## 3. Refine into one segment per section  (req5, req8)
 
 There are no automatic segmentation rules — you refine by hand with
@@ -474,6 +501,12 @@ review current` re-establishes exactly where you were. It is a **snapshot**
 layered *over* the covering: it never mutates a segment, so we run it here,
 on the clean refined covering, before the drift edits below.
 
+`iter new` first ensures every selected task has recorded bytes. On an empty
+cache it reads each selected source file once and reconstructs only ranges that
+still match their covering hashes. If a selected range has drifted, iterator
+creation fails with restore-and-hydrate guidance and leaves no partial
+worklist.
+
 Freeze `main` in reading order, then check the tally:
 
 ```sh
@@ -552,9 +585,10 @@ covmap iter review rm
 covmap iter backfill rm
 ```
 
-(This is playground task T8. Note an iterator is *not* a drift tracker: a
-frozen task never goes stale — its content is pinned by hash — so drift
-stays a property of the covering, repaired below with `recut`.)
+(This is playground task T8. Note an iterator is *not* a drift tracker:
+`iter new` ensures every frozen task object is cached and retained, so a task
+never goes stale; drift stays a property of the covering, repaired below with
+`recut`.)
 
 ---
 
@@ -713,7 +747,7 @@ the List / Source views of HEAD's covering.
 | Feature | Step | Requirement |
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
-| status, ls (metrics) | 2, 10 | req12, req20 |
+| status, ls, cache verification / hydration | 2, 10 | req12, req15, req17, req20 |
 | atomic multi-cut (line + character) | 3, 5 | req4, req5, req8 |
 | merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |

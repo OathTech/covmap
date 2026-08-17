@@ -28,6 +28,10 @@ fi
 cp -R "$HERE/spec" "$HERE/impl_rs" "$WORK/"
 
 hr() { printf "\n===== %s =====\n" "$1"; }
+object_file() {
+  local repo="$1" hash="$2"
+  printf '%s/.covmap/objects/%s/%s' "$repo" "${hash:0:2}" "${hash:2}"
+}
 
 # Each "repo" gets its own .covmap/.
 hr "init repo A (spec)"
@@ -42,6 +46,35 @@ hr "cover both (one whole-file unknown segment per file)"
 hr "status (spec) — should report drift: clean"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
 
+hr "missing live objects are reconstructible cache misses"
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --offline )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: ordinary fsck unexpectedly populated the cache"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe new main )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: iter new did not retain both missing task objects"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe rm )
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --offline --hydrate )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: offline fsck did not hydrate both live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" hydrate main )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: hydrate did not restore both live objects"; exit 1; }
+mv "$WORK/spec/errors.md" "$WORK/spec/errors.md.unavailable"
+if MISSING_SOURCE_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck 2>&1 ); then
+  mv "$WORK/spec/errors.md.unavailable" "$WORK/spec/errors.md"
+  echo "  FAIL: fsck accepted unavailable covered source backed by a valid cache"
+  exit 1
+fi
+mv "$WORK/spec/errors.md.unavailable" "$WORK/spec/errors.md"
+printf '%s\n' "$MISSING_SOURCE_OUT" | grep -qF "cannot read source 'errors.md'" \
+  || { echo "  FAIL: unavailable-source diagnostic was not explicit"; exit 1; }
+
 hr "ls -l (spec HEAD): two whole-file segments"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 
@@ -50,6 +83,7 @@ hr "ls -l (spec HEAD): two whole-file segments"
 hr "refine widget.md with one atomic multi-cut"
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'widget.md' | head -1 | cut -f1 )
 echo "  starting hash: $WIDGET_HASH"
+rm -f "$(object_file "$WORK/spec" "$WIDGET_HASH")"
 ( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 26 10 18 6 22 14 )
 
 # Geometry and status metadata compose explicitly.
@@ -91,6 +125,7 @@ hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
 hr "merge Increment + Decrement back, then split again at line 14"
 INC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Increment" | head -1 )
 DEC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Decrement" | head -1 )
+rm -f "$(object_file "$WORK/spec" "$INC")" "$(object_file "$WORK/spec" "$DEC")"
 ( cd "$WORK/spec" && "$COVMAP_BIN" merge "main:$INC" "main:$DEC" "Inc+Dec" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 # split it back at line 14
@@ -250,6 +285,18 @@ else
   printf '%s\n' "$BROKEN_AFTER_EDIT"
   exit 1
 fi
+
+hr "iter new refuses a drifted cache miss with recovery guidance"
+rm -f "$(object_file "$WORK/spec" "$DEC")"
+if ITER_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter drift_probe new main --label Decrement 2>&1 ); then
+  echo "  FAIL: iter new froze a task whose recorded bytes were unavailable"
+  exit 1
+fi
+printf '%s\n' "$ITER_DRIFT" | grep -qF "recorded bytes unavailable" \
+  && printf '%s\n' "$ITER_DRIFT" | grep -qF 'run `covmap hydrate`' \
+  || { echo "  FAIL: iter new did not explain missing-recorded-byte recovery"; exit 1; }
+[[ ! -e "$WORK/spec/.covmap/iterators/drift_probe" ]] \
+  || { echo "  FAIL: failed iter new left a frozen worklist"; exit 1; }
 
 hr "recut Decrement (the old hash-addressed endpoint now breaks)"
 RECUT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" recut "main:$DEC" )

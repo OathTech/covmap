@@ -29,9 +29,9 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
 - **T10_connection_lifecycle** — rename a linked endpoint using the emitted
   repair block, verify its note survives, then create and delete a temporary
   same-repository connection without touching either covering.
-- **T11_atomic_multi_cut** — refine one file at several unsorted heading
-  boundaries in one atomic split, then apply labels explicitly and verify the
-  resulting complete partition.
+- **T11_atomic_multi_cut** — verify and hydrate an empty live object cache,
+  refine one file at several unsorted heading boundaries in one atomic split,
+  then apply labels explicitly and verify the resulting complete partition.
 
 ## Running a task
 

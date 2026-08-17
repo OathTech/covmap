@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ( cd spec && "$COVMAP_BIN" init && "$COVMAP_BIN" cover ) >/dev/null
+rm -rf spec/.covmap/objects/*
 
 echo "Setup done. spec/service.md is one whole-file unknown segment."
-echo "Refine it with one atomic multi-cut, then apply labels separately."
+echo "The live object cache is empty; verify and hydrate it before refinement."

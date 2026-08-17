@@ -866,7 +866,7 @@ pub fn plan_split_many(
     let mut groups_by_index = BTreeMap::new();
     for (idx, segment_cuts) in &by_index {
         let entry = &c.entries[*idx];
-        let content = segment::read_object(&repo.objects_dir(), &entry.hash)?;
+        let content = crate::cache::read_recorded_content(repo, entry)?;
         groups_by_index.insert(*idx, plan_segment_split(entry, &content, segment_cuts)?);
     }
 
@@ -952,8 +952,8 @@ pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> 
             format!("segments are not adjacent: {} and {}", e1.loc(), e2.loc()),
         ));
     }
-    let c1 = segment::read_object(&repo.objects_dir(), &e1.hash)?;
-    let c2 = segment::read_object(&repo.objects_dir(), &e2.hash)?;
+    let c1 = crate::cache::read_recorded_content(repo, &e1)?;
+    let c2 = crate::cache::read_recorded_content(repo, &e2)?;
     let merged_content = format!("{c1}{c2}");
     let merged = Segment {
         file: e1.file.clone(),

@@ -110,11 +110,17 @@ rm -rf "$WORK/spec/.covmap/objects"/*
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
   || { echo "  FAIL: status did not opportunistically warm live objects"; exit 1; }
 rm -rf "$WORK/spec/.covmap/objects"/*
-chmod 555 "$WORK/spec/.covmap/objects"
+# Directory mode bits do not make a cache unwritable when CI runs as root.
+# A regular file at the cache path makes nested publication fail portably.
+mv "$WORK/spec/.covmap/objects" "$WORK/spec/.covmap/objects.available"
+: > "$WORK/spec/.covmap/objects"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
-chmod 755 "$WORK/spec/.covmap/objects"
+[[ -f "$WORK/spec/.covmap/objects" ]] \
+  || { echo "  FAIL: best-effort warming replaced the unavailable cache"; exit 1; }
+rm "$WORK/spec/.covmap/objects"
+mv "$WORK/spec/.covmap/objects.available" "$WORK/spec/.covmap/objects"
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
-  || { echo "  FAIL: read-only cache warming unexpectedly wrote objects"; exit 1; }
+  || { echo "  FAIL: unavailable-cache warming unexpectedly wrote objects"; exit 1; }
 ( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe new main )
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
   || { echo "  FAIL: iter new did not retain both missing task objects"; exit 1; }

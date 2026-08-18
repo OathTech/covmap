@@ -6,10 +6,8 @@ command interface (`covmap --help`). Intentionally coarse: the list stayed
 at 20 for a long time, and the count is a deliberate ceiling, lifted only
 for a genuinely distinct capability. req21 through req24 are such lifts.
 All are realized today except req11 (connection algebra), which is explicitly
-kept as a recommended future direction, and req24, which is Accepted in
-CIP 0010 and is being implemented in slices. The current format-2
-implementation already provides req24's source-backed cache foundation; its
-portable tracked-artifact boundary requires format 3.
+kept as a recommended future direction. req24 is realized by on-disk format 3
+and CIP 0010.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -150,7 +148,9 @@ project artifact. Offline verification shall check local state and
 self-connections while reporting external targets as unchecked, with an option
 to hydrate reconstructible objects during the pass. The same partition
 validator shall reject an invalid multi-cut plan before its covering ref is
-replaced.
+replaced. Verification shall reject malformed peer bindings, unfinished peer
+renames, invalid peer aliases, and external aliases that resolve back to the
+current repository instead of using the canonical self peer `.`.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
@@ -172,10 +172,11 @@ shall use positional-address syntax, and a bare file selector shall use HEAD.
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
 object cache plus plain-text covering and connection refs, carrying a format
-version so mismatched repositories are rejected. For live covering entries,
-the ref and matching checked-out source are sufficient to reconstruct a
-missing object; an existing object whose bytes do not hash to its filename is
-corrupt. This cache interpretation does not change the format-2 encoding.
+version so mismatched repositories are rejected. Format 3 shall separate
+portable project artifacts from checkout-local state and store connection
+targets as peer aliases rather than paths. For live covering entries, the ref
+and matching checked-out source are sufficient to reconstruct a missing
+object; an existing object whose bytes do not hash to its filename is corrupt.
 
 ## req18 — Tracked-file control via ignore
 covmap shall honor gitignore-lite patterns in `.covmap/ignore` so users
@@ -191,14 +192,17 @@ existing position and object primitives while making one atomic covering-ref
 transition rather than exposing intermediate partitions. `rev-parse` and
 `cat-segment` shall use the same logical local hash index as porcelain readers,
 so cache population does not change whether a clean live hash resolves.
+Covering rows, connection rows, and peer bindings shall serialize in canonical
+order so repeated writes of equal logical state produce equal bytes.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
 connections (status, show, ls, grep, diff, and a static HTML browser).
 Inspection output shall resolve link endpoints to their covering, label,
 and location — not leave them as bare hashes — and `status` shall report
-per-connection source/target coverage (req12), so a reader sees a mapping's
-completeness and its relations without hand-joining separate outputs.
+the path of each edited or unreadable covered file plus per-connection
+source/target coverage (req12), so a reader sees a mapping's integrity,
+completeness, and relations without hand-joining separate outputs.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
 Connection link listings shall place an existing single-line note on wrapped,
@@ -210,7 +214,11 @@ warm selected live objects without failing solely because the cache is
 read-only; source drift, unavailable bytes, and cache corruption shall remain
 visible. `grep`, `cat-segment`, and HTML generation shall use the same checked
 source-backed read behavior. Verification shall remain read-only unless
-hydration is explicitly requested.
+hydration is explicitly requested. When an external peer is unavailable,
+read-only inspection shall preserve the local source-side result and mark the
+target unchecked rather than misclassifying every target endpoint as broken;
+commands that need target bytes or mutate the relation shall fail with binding
+recovery guidance.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -277,4 +285,8 @@ both the worklist and its retained objects.
 
 Git is the publication mechanism, not a runtime dependency: covmap shall not
 invoke Git, inspect its index, stage files, or commit changes, and the same
-artifact semantics shall work outside a Git repository.
+artifact semantics shall work outside a Git repository. `covmap init` shall
+create a commented repository-scoped default ignore policy and report the
+durable/local boundary. `covmap migrate` shall upgrade format 1 or 2
+repositories to format 3 through resumable staging, preserving a user-managed
+publication policy while warning when it omits required local-state patterns.

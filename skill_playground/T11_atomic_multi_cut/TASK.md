@@ -14,7 +14,7 @@
 
 ## Starting state
 
-- `spec/.covmap/` exists with format version 2.
+- `spec/.covmap/` exists with format version 3.
 - Covering `main` has one `unknown` whole-file segment for `service.md`.
 - `.covmap/objects/` is empty; `service.md` still matches the covering ref.
 - The `##` headings begin at lines 5, 9, 14, and 18.
@@ -67,7 +67,7 @@ pass labels as `split` operands.
   byte-for-byte.
 - Missing cache state was recovered by checked inspection and confirmed with
   idempotent `hydrate`, without changing the covering ref.
-- The repository remains format v2 and `covmap fsck` passes.
+- The repository remains format v3 and `covmap fsck` passes.
 
 ## Grading
 

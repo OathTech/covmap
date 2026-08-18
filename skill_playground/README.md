@@ -32,6 +32,9 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
 - **T11_atomic_multi_cut** — verify and hydrate an empty live object cache,
   refine one file at several unsorted heading boundaries in one atomic split,
   then apply labels explicitly and verify the resulting complete partition.
+- **T12_git_tracked_mapping** — restore a committed cross-repository mapping
+  in a differently arranged clone by hydrating source-backed objects and
+  binding its stable peer alias without changing tracked bytes.
 
 ## Running a task
 

@@ -114,6 +114,7 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 ( cd "$WORK/spec" && run ls -l )
 
 SPEC_HASH="$(cd "$WORK/spec" && "$COVMAP" ls main | head -1 | cut -f1)"
+QUEUE_HASH="$(cd "$WORK/spec" && "$COVMAP" ls-segments -l main | awk -F '\t' '$2 == "queue.md" { print $1 }')"
 echo "  (clearing reconstructible live object caches)"
 rm -rf "$WORK/spec/.covmap/objects"/* "$WORK/impl_rs/.covmap/objects"/*
 ( cd "$WORK/spec" && run fsck --offline )
@@ -131,6 +132,16 @@ assert "normal inspection warms the remaining live object" \
   bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 2 ]]"
 
 rm -rf "$WORK/spec/.covmap/objects"/*
+cp "$WORK/spec/queue.md" "$WORK/spec/queue.md.clean"
+perl -0pi -e 's/# Task Queue Spec/# Edited Task Queue Spec/' \
+  "$WORK/spec/queue.md"
+if EARLY_EDIT=$( cd "$WORK/spec" && "$COVMAP" cat-segment "${QUEUE_HASH:0:8}" 2>&1 ); then
+  echo "  FAIL: edit-before-hydrate returned drifted bytes"
+  exit 1
+fi
+printf '%s\n' "$EARLY_EDIT" | grep -qF "resolved but recorded bytes are unavailable" \
+  || { echo "  FAIL: edit-before-hydrate lacked recovery guidance"; exit 1; }
+mv "$WORK/spec/queue.md.clean" "$WORK/spec/queue.md"
 ( cd "$WORK/spec" && run hydrate main )
 assert "hydrate restores both spec objects" \
   bash -c "[[ \$(find '$WORK/spec/.covmap/objects' -type f | wc -l | tr -d ' ') -eq 2 ]]"
@@ -241,7 +252,8 @@ assert "the message is stored on the segment (shown by ls -l)" \
 #############################################################################
 hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 #############################################################################
-( cd "$WORK/spec" && run connect main "$WORK/impl_rs:main" queue_links )
+( cd "$WORK/spec" && run peer bind impl ../impl_rs )
+( cd "$WORK/spec" && run connect main impl:main queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
 DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
 ( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
@@ -251,6 +263,37 @@ DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same i
 
 assert "connection has 3 links, all by @name" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' ls-links queue_links | grep -c '^@' ) ) -eq 3 ]]"
+
+echo "  clone portability:"
+( cd "$WORK/spec" && mkdir -p .covmap/iterators \
+  && : > .covmap/iterators/tutorial-session \
+  && : > .covmap/report.html \
+  && : > .covmap/nested.tmp )
+( cd "$WORK/spec" && git init -q && git add queue.md errors.md .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "tutorial spec" )
+( cd "$WORK/impl_rs" && git init -q && git add queue.rs .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "tutorial impl" )
+mkdir -p "$WORK/review/deps"
+git clone -q "$WORK/spec" "$WORK/review/spec"
+git clone -q "$WORK/impl_rs" "$WORK/review/deps/implementation"
+assert "clone contains no object cache" \
+  bash -c "[[ \$(find '$WORK/review/spec/.covmap/objects' -type f 2>/dev/null | wc -l | tr -d ' ') -eq 0 ]]"
+assert "clone contains no peer binding" \
+  bash -c "[[ ! -e '$WORK/review/spec/.covmap/local/peers' ]]"
+assert "clone contains no iterator, report, or temporary state" \
+  bash -c "[[ ! -e '$WORK/review/spec/.covmap/iterators/tutorial-session' \
+    && ! -e '$WORK/review/spec/.covmap/report.html' \
+    && ! -e '$WORK/review/spec/.covmap/nested.tmp' ]]"
+( cd "$WORK/review/spec" && run fsck --offline --hydrate )
+( cd "$WORK/review/spec" && run peer bind impl ../deps/implementation )
+( cd "$WORK/review/spec" && run fsck )
+assert "clone reuses identical committed connection bytes" \
+  cmp "$WORK/spec/.covmap/connections/queue_links" \
+      "$WORK/review/spec/.covmap/connections/queue_links"
+assert "clone-local hydration and binding stay ignored" \
+  bash -c "[[ -z \$(cd '$WORK/review/spec' && git status --short) ]]"
+rm -f "$WORK/spec/.covmap/iterators/tutorial-session" \
+  "$WORK/spec/.covmap/nested.tmp"
 
 echo "  same-repository shorthand and lifecycle:"
 ( cd "$WORK/spec" && run connect main main local_preview )

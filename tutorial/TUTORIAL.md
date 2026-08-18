@@ -173,6 +173,12 @@ rm -rf .covmap/objects/*
 covmap hydrate main                   # verify source hashes, then fill main
 ```
 
+If source is edited before that first hydration, a live hash still resolves
+but its historical bytes are unavailable. The tutorial temporarily edits
+`queue.md`, verifies that `cat-segment` refuses the drifted bytes with
+restore-and-hydrate guidance, restores the clean file, and hydrates before
+continuing.
+
 On the implementation side it demonstrates the combined form:
 
 ```sh
@@ -363,14 +369,16 @@ A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
 by `@name` (resilient), not by hash.
 
-`connect` names the target repo by absolute path (here the sibling
-`impl_rs`). The impl side is a single whole-file segment, which we
-address positionally as `queue.rs:1`. Link each named spec segment to it:
+Bind the durable peer alias `impl` to the sibling `impl_rs` checkout, then
+store that alias in the connection. The machine-specific path stays in ignored
+local state. The impl side is a single whole-file segment, which we address
+positionally as `queue.rs:1`. Link each named spec segment to it:
 because the spec side is named, the link is stored by `@name` and
 survives later edits.
 
 ```sh
-covmap connect main "$PWD/../impl_rs:main" queue_links
+covmap peer bind impl ../impl_rs
+covmap connect main impl:main queue_links
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
 covmap link queue_links @dequeue-op        queue.rs:1 \
   "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
@@ -387,8 +395,27 @@ covmap ls-links queue_links
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
 
+The script commits each repository's sources and `.covmap/` artifact, then
+clones them into a different directory layout. It also creates local iterator,
+report, and temporary files before the commit to prove that the default policy
+excludes them. The clone contains the covering and connection refs but no
+object cache, peer binding, iterator state, report, or temporary file:
+
+```sh
+git add queue.md errors.md .covmap
+git commit -m "tutorial spec"
+# clone spec and impl elsewhere
+cd <spec-clone>
+covmap fsck --offline --hydrate
+covmap peer bind impl ../deps/implementation
+covmap fsck
+```
+
+The connection bytes are identical in both checkouts. Hydration and the new
+binding change only ignored local state, so `git status --short` remains empty.
+
 The target may also be another covering in the current repository. Omit the
-`<repo>:` prefix to create a same-repository connection; `status` and `show`
+`<peer>:` prefix to create a same-repository connection; `status` and `show`
 mark it as a self-map. This temporary connection has no links, and
 `disconnect` removes only its ref:
 
@@ -447,7 +474,7 @@ connection endpoint resolves. `status` now shows the connection with its
 covering main: segments=7 lines=21
   drift: clean
 connections:
-  queue_links: main -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 3/7, target 1/1
+  queue_links: main -> impl:main : 3 links, 0 broken · coverage source 3/7, target 1/1
 ```
 
 ## 10b. Bounded drill-down: understand a region  (req23)
@@ -622,6 +649,7 @@ covmap status
 
 ```
   drift: 1 file(s) edited, 0 file(s) missing/binary
+    edited: queue.md
   queue_links: main -> …/main : 3 links, 0 broken
 ```
 

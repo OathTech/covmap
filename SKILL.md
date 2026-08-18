@@ -14,10 +14,9 @@ The mathematical model is in `covmap/theory/main.tex`; the source is
 `covmap/src/`. Build with `cargo build --release` from `covmap/`. The
 binary path is `covmap/target/release/covmap`.
 
-Git-trackable coverings and mappings (req24 / CIP 0010) are Accepted but still
-in progress. The current format-2 connection ref stores an absolute target
-path; do not present the current `.covmap/` as a portable committed artifact
-until the format-3 peer-alias and publication-policy slice lands.
+Git-trackable coverings and mappings (req24 / CIP 0010) use on-disk format 3.
+Durable refs are portable and canonical; cache objects, peer paths, iterator
+state, reports, and temporary files are ignored local state by default.
 
 ## Mental model
 
@@ -53,8 +52,9 @@ until the format-3 peer-alias and publication-policy slice lands.
 - A **connection** is a relation between segments of one covering and
   segments of another. It is a ref under
   `.covmap/connections/<name>`. A connection lives in the source repo
-  and references the target repo by absolute path, including for a
-  same-repository self-map. Each endpoint is either a segment name
+  and references an external target by stable peer alias. The ignored
+  `.covmap/local/peers` file binds that alias to a path in one checkout;
+  `.` is the implicit same-repository peer. Each endpoint is a segment name
   (`@name`, resilient to content edits) or a segment hash (legacy /
   anonymous). `disconnect` deletes only the connection ref.
 - **Segment hash identity is content-only.** Equal content has the same hash
@@ -103,11 +103,15 @@ A covmap-managed repository contains:
 
 ```
 .covmap/
+  .gitignore              tracked default publication policy
+  version                 format version (3)
   HEAD                    default covering name (default: main)
   ignore                  optional gitignore-lite patterns
   objects/<hh>/<rest>     local content-addressed segment cache
   coverings/<name>        covering refs (one per name)
   connections/<name>      connection refs (one per name)
+  local/peers             checkout-local peer bindings
+  iterators/<name>        local frozen worklists
 ```
 
 ## Core commands
@@ -133,7 +137,8 @@ are unique.
 | `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
 | `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
 | `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
-| `covmap connect <C_A> [<repo>:]<C_B> [<K>]` | Create an empty connection. Omit `<repo>:` for a same-repository target (`connect main main audit`). | yes |
+| `covmap peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local resolution for stable peer aliases. | yes |
+| `covmap connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection. Omit `<peer>:` for a same-repository target (`connect main main audit`). | yes |
 | `covmap disconnect <K>` | Delete only connection ref `K`; coverings and objects are untouched. Regenerate the default HTML report if warned that it may be stale. | yes |
 | `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
@@ -249,8 +254,63 @@ that first.
    inclusive character. Every resulting fragment is `unknown`, so apply
    deliberate metadata afterward with `label`, `name`, and `annotate`.
 5. Run `covmap status` and report cardinality back.
-6. Optionally `covmap connect <C_A> [<repo>:]<C_B> <K>` to create the
-   empty connection — but do not start linking yet.
+6. For an external target, run `covmap peer bind <alias> <path>`, then
+   `covmap connect <C_A> <alias>:<C_B> <K>`. Omit the alias only for a
+   self-map. Do not start linking until both coverings have deliberate names.
+
+### A0. Publish or restore a Git-tracked mapping
+
+`covmap init` creates a repository-scoped `.covmap/.gitignore`. Ordinary
+`git add .covmap` includes `HEAD`, `version`, `.covmap/ignore`, covering refs,
+connection refs, and the publication policy while excluding:
+
+```text
+.covmap/local/       checkout paths and recovery journals
+.covmap/objects/     reconstructible live cache
+.covmap/iterators/   local worklists and retained task objects
+.covmap/*.html       generated reports
+*.tmp                temporary writes
+```
+
+This is repository hygiene, not a fence: forced additions can override it,
+and already tracked local files must be removed from the index explicitly.
+covmap never invokes Git or inspects its index.
+
+```sh
+git rm -r --cached --ignore-unmatch \
+  .covmap/objects .covmap/iterators .covmap/local
+```
+
+In an author's checkout:
+
+```sh
+covmap peer bind impl ../impl
+covmap connect main impl:main spec_to_impl
+git add .covmap
+```
+
+In a clone with a different directory layout:
+
+```sh
+covmap peer ls
+covmap fsck --offline --hydrate
+covmap peer bind impl ../deps/implementation
+covmap fsck
+git status --short
+```
+
+The committed connection must remain byte-identical. Binding and hydration
+write only ignored local state. `peer ls` reports aliases referenced by refs
+even when they are unbound. This is evaluated directly by T12.
+
+An optional `post-checkout` or `post-merge` hook may run:
+
+```sh
+covmap fsck --offline --hydrate
+```
+
+Never install or edit Git hooks unless the user explicitly asks; covmap itself
+does not do so.
 
 ### A1. Recover a missing live object cache
 
@@ -460,17 +520,22 @@ connection endpoint — by hash or by name — keeps resolving.
 ```
 covering main: segments=7 lines=29
   drift: 1 file(s) edited, 0 file(s) missing/binary
+    edited: spec/widget.md
 connections:
-  widget_links: main -> /tmp/impl/main : 2 links, 1 broken
+  widget_links: main -> impl:main : 2 links, 1 broken
 ```
 
 - `drift: clean` — every covered file's bytes still match the
   recorded segments.
 - `drift: N file(s) edited` — N files have been modified since their
-  segments were recorded. Use `recut` (or merge+split if boundaries
-  moved) to refresh.
-- `<conn>: <source-C> -> <repo>/<target-C> : N links, M broken` — relink
+  segments were recorded. The following `edited:` lines name them. Use
+  `recut` (or merge+split if boundaries moved) to refresh. Likewise,
+  `missing/binary:` lines name paths that cannot be checked as text.
+- `<conn>: <source-C> -> <peer>:<target-C> : N links, M broken` — relink
   or `prune` if `M > 0`. Same-repository targets display `(self-map)`.
+- `unavailable: peer '<alias>' is not bound` — source-side inspection remains
+  valid, but the target is unchecked. Run `covmap peer bind <alias> <path>`
+  before mutation, HTML target rendering, or full `fsck`.
 
 ### F. Work a covering as a worklist (iterators)
 

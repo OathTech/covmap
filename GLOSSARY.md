@@ -161,7 +161,7 @@ relation-algebra operation: it leaves both coverings, every segment object,
 and derived HTML reports untouched.
 
 **Format version** **[R][S]** — the string in `.covmap/version`
-(currently `2`) recording the on-disk format. covmap refuses to operate
+(currently `3`) recording the on-disk format. covmap refuses to operate
 on a repository whose version disagrees.
 
 **fsck** **[R][S]** — integrity verification: checks covering partitions,
@@ -258,17 +258,18 @@ connection, optionally annotated with a note; added by `link`, removed by
 `unlink`. A connection is a set of links (the theory: the elements of the
 relation `κ ⊆ C_A × C_B`).
 
-**Local state** **[T][R]** — covmap operational state excluded from the
+**Local state** **[T][R][S]** — covmap operational state excluded from the
 default project artifact: the reconstructible object cache,
 checkout-specific peer bindings, iterator work state and retained objects,
 generated reports, and temporary files. It may differ across checkouts without
 changing the meaning of their coverings or mappings.
 
-**Migrate** **[R][S]** — the one-time `covmap migrate` upgrade from
-on-disk format 1 to format 2. It re-keys stored segments by raw content,
-rewrites affected covering hashes, connection endpoints, and frozen iterator
-tasks, then records format 2. Running it on an already-format-2 repository is
-a no-op.
+**Migrate** **[R][S]** — `covmap migrate` upgrades on-disk format 1 or 2
+to format 3. The format-1 phase re-keys stored segments by raw content and
+rewrites affected references. The format-2 phase stages canonical covering
+and connection refs, replaces checkout paths with peer aliases, records local
+bindings, then publishes the version last so an interrupted migration can be
+resumed.
 
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
@@ -320,6 +321,13 @@ whether a clean live segment resolves. Normal inspection may warm missing
 verified live objects on a best-effort basis; explicit verification is
 read-only unless hydration is requested.
 
+**Offline verification** **[T][R][S]** — `covmap fsck --offline`: verify
+local coverings, checked-out source, present cache objects, peer-binding
+syntax, recovery journals, source endpoints, and self-connections without
+requiring external peer checkouts. External targets are reported as unchecked,
+not valid or broken. Adding `--hydrate` reconstructs missing clean local
+objects during the same pass.
+
 **Partition** **[T][R]** — the decomposition a covering imposes on each
 covered file: disjoint, complete, contiguous, file-confined segments.
 See **covering invariants**.
@@ -333,10 +341,12 @@ still computed by `stats()`, but **not surfaced in any command output** —
 it is not actionable on its own, so it was dropped from `status` (kept in
 code, `allow(dead_code)`, for a possible future evenness heuristic).
 
-**Peer alias / peer binding** **[T][R]** — a peer alias is the stable,
+**Peer alias / peer binding** **[T][R][S]** — a peer alias is the stable,
 project-local name a durable external connection uses instead of an absolute
 checkout path. A peer binding is ignored **local state** that resolves that
 alias to a repository in one checkout. `.` is the reserved self alias.
+`covmap peer bind`, `ls`, `rename`, and `unbind` manage the local resolution;
+renames are journaled and resumable.
 
 **Plumbing / Porcelain** **[T][R][S]** — covmap has a small set of *core
 primitives*: scriptable, line-oriented commands (`hash-segment`,
@@ -360,13 +370,13 @@ absent column (`⊥` / `None`) means the first character of the line for a
 start, and the last character (through the trailing newline) for an end;
 `(i,1)` and `(i,⊥)` name the same start boundary.
 
-**Project artifact** **[T][R]** — the portable covmap state intended for
+**Project artifact** **[T][R][S]** — the portable covmap state intended for
 publication beside project source: format version, default covering,
 covering-input policy, covering refs, connection refs, and the default
 publication policy. Together with matching checked-out source, it is sufficient
 to verify and reconstruct clean live segments.
 
-**Publication boundary** **[T][R]** — the distinction between a
+**Publication boundary** **[T][R][S]** — the distinction between a
 **project artifact**, which is tracked by default, and **local state**, which
 is ignored by default. The ignore policy is repository hygiene rather than an
 enforcement fence; publication remains an explicit external action.
@@ -419,9 +429,9 @@ left to the user or agent. Sub-concept of **repair**.
 **reqmap / self-map** **[R][S]** — named connections in this repo's own
 `.covmap/`. `reqmap` links each requirement to the theory block that
 justifies it; a self-map connects a covering to another covering of the
-*same* repository (e.g. duplication audits, docs-to-code links). The ref
-still stores the target repository's canonical absolute path; `status` and
-`show` render the relationship as `<source> -> <target> (self-map)`.
+*same* repository (e.g. duplication audits, docs-to-code links). A format-3
+self-map stores the reserved peer `.` and `status`/`show` render the
+relationship as `<source> -> <target> (self-map)`.
 
 **Segment** **[T][R][S]** — a contiguous, labelled range of characters
 within a single file: `(file, a, a_col, b, b_col, label)`. The atom of a

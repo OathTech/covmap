@@ -658,22 +658,25 @@ A repository under \texttt{covmap} acquires a \texttt{.covmap/}
 directory:
 \begin{verbatim}
 .covmap/
-  version             on-disk format version (currently 2)
+  .gitignore          default publication policy
+  version             on-disk format version (currently 3)
   HEAD                default covering name
   ignore              optional gitignore-lite patterns
   objects/<hh>/<rest> local raw-content cache, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
+  local/peers         checkout-local peer bindings
   iterators/<name>    one file per iterator (frozen worklist + cursor)
 \end{verbatim}
-The format-2 object body is exactly the segment content. Labels, names,
+The object body is exactly the segment content. Labels, names,
 and messages live in covering refs and are not stored in or hashed into
 objects. Missing live objects can be reconstructed from checked-out source
 only while the recorded range reproduces the ref's hash; \texttt{hydrate}
-performs that reconstruction explicitly. This cache behavior changes no
-format-2 bytes and needs no format-version bump. Since checked-out source is
-part of the live project state, unavailable covered source fails integrity
-verification even when a valid object remains in the cache.
+performs that reconstruction explicitly. Since checked-out source is part of
+the live project state, unavailable covered source fails integrity verification
+even when a valid object remains in the cache. Format 3 separates the portable
+project artifact from ignored local state and replaces connection target paths
+with portable peer aliases.
 The \texttt{iterators/} directory is purely additive: an older
 \texttt{covmap} simply never reads it, so introducing it needs no
 format-version change, mirroring how the character column and segment name
@@ -865,8 +868,9 @@ read-only unless hydration is requested explicitly.
 \item \texttt{covmap status [$C$]}\\
       One-line summary per covering: cardinality and line count. A drift
       line reports the number of files whose bytes have changed since
-      their segments were recorded. Per connection: link count, broken
-      count, and source/target coverage (Definition~\ref{def:coverage}).
+      their segments were recorded and names each edited or unreadable
+      path. Per connection: link count, broken count, and source/target
+      coverage (Definition~\ref{def:coverage}).
 \item \texttt{covmap show <addr>}\\
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
@@ -883,10 +887,17 @@ read-only unless hydration is requested explicitly.
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
       Segments only in $C_1$, only in $C_2$, and shared.
-\item \texttt{covmap connect $C_A$ [repo$_B$:]$C_B$ [$K$]}\\
-      Create an empty connection between two coverings. Omitting repo$_B$
-      selects another covering in the source repository, including $C_A$
-      itself; inspection marks this case as a self-map.
+\item \texttt{covmap peer bind $p$ <path>}\\
+      \texttt{covmap peer ls | rename <old> <new> | unbind $p$}\\
+      Manage the checkout-local partial binding $\pi_A$. Renaming a peer
+      rewrites every local connection ref that names it through a
+      crash-resumable journal. The reserved alias \texttt{.} is implicit and
+      cannot be bound or unbound.
+\item \texttt{covmap connect $C_A$ [$p$:]$C_B$ [$K$]}\\
+      Create an empty connection between two coverings. Omitting $p$ selects
+      the reserved self peer \texttt{.}, including $C_A$ itself. An external
+      $p$ must be locally bound and its target covering must exist before the
+      connection is created.
 \item \texttt{covmap disconnect $K$}\\
       Delete the stored connection ref $K$ without deleting either covering,
       any segment object, or a derived report.
@@ -906,6 +917,12 @@ read-only unless hydration is requested explicitly.
       leaves external repositories unchecked; adding \texttt{--hydrate}
       recreates missing local objects during the same pass.
 \end{itemize}
+
+Read-only inspection degrades explicitly when an external peer is unavailable:
+the source side remains inspectable and the target is marked unchecked.
+Operations that need target content or mutate the relation fail with peer
+binding recovery guidance. Raw connection rows remain readable without a
+binding.
 
 \subsection{Iterators}\label{sec:iter-interface}
 

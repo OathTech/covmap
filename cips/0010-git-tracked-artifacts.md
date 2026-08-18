@@ -1,11 +1,11 @@
 # Git-tracked coverings and mappings
 
-Stage: **Accepted**
+Stage: **Landed**
 
-Implementation status: **in progress**. The source-backed cache and live-object
-read paths are implemented. Format 3, peer aliases and bindings, generated Git
-policy, portable connection refs, and resumable format-2 migration are not yet
-implemented; this proposal is not Landed.
+Format 3 provides source-backed cache reconstruction, deterministic portable
+refs, peer aliases with ignored local bindings, a generated Git publication
+policy, resumable migration from formats 1 and 2, and clean-clone
+verification/hydration workflows.
 
 ## Relationship to landed CIPs
 
@@ -542,10 +542,10 @@ the format-2 to format-3 phase is:
    - replace `target_repo` with `target_peer` and canonically sort links.
 3. Stage the canonical format-3 connection and covering bytes and bindings
    before publishing any replacement.
-4. Atomically publish each staged file and record its completion in the
-   manifest. While `.covmap/version` remains `2`, a repeated `migrate` resumes
-   from this manifest instead of trying to parse already-published format-3
-   refs as format 2.
+4. Atomically publish each staged file. While `.covmap/version` remains `2`,
+   a repeated `migrate` sees the ready manifest and idempotently republishes
+   the complete staged snapshot instead of trying to parse already-published
+   format-3 refs as format 2; per-file completion records are unnecessary.
 5. Set `.covmap/version` to `3` only after every replacement is complete, then
    remove the migration staging directory and manifest.
 

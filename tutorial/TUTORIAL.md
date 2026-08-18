@@ -155,6 +155,48 @@ covering main: segments=2 lines=20
 name (`-` when anonymous). `status` reports cardinality, line count, and
 drift.
 
+The script now clears both repositories' live object caches to model a clean
+checkout that has refs and matching source but no cached content. Verification
+accepts that state without silently populating it. Bare hash lookup still
+searches the live refs, so plumbing can resolve and read a clean live segment;
+content inspection warms its object, and normal `status` warms the remaining
+selected objects:
+
+```sh
+rm -rf .covmap/objects/*
+covmap fsck --offline
+find .covmap/objects -type f          # still empty
+covmap rev-parse 327ef5a1             # resolves from the live covering ref
+covmap cat-segment 327ef5a1           # verified source read; warms one object
+covmap status                         # best-effort warming fills the other
+rm -rf .covmap/objects/*
+covmap hydrate main                   # verify source hashes, then fill main
+```
+
+If source is edited before that first hydration, a live hash still resolves
+but its historical bytes are unavailable. The tutorial temporarily edits
+`queue.md`, verifies that `cat-segment` refuses the drifted bytes with
+restore-and-hydrate guidance, restores the clean file, and hydrates before
+continuing.
+
+On the implementation side it demonstrates the combined form:
+
+```sh
+covmap fsck --offline --hydrate
+```
+
+A missing live object is not corruption when source reproduces the covering
+hash. A present object with the wrong content is corruption, and drifted source
+is never written under the old hash. Hydration does not overwrite corruption;
+delete the offending cache entry before hydrating it from matching source.
+Likewise, a valid cache entry does not make unavailable covered source healthy:
+live verification still fails until that source is restored or the covering is
+changed. Hydration changes only the local cache, not the covering ref. `split`
+and `merge` use this same verified reconstruction rule when recorded input
+objects are absent. Inspection warming is best-effort: an unwritable cache
+does not make otherwise-valid inspection fail, but drift, unavailable bytes,
+and corrupt objects remain visible.
+
 ## 3. Refine into one segment per section  (req5, req8)
 
 There are no automatic segmentation rules — you refine by hand with
@@ -327,14 +369,16 @@ A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
 by `@name` (resilient), not by hash.
 
-`connect` names the target repo by absolute path (here the sibling
-`impl_rs`). The impl side is a single whole-file segment, which we
-address positionally as `queue.rs:1`. Link each named spec segment to it:
+Bind the durable peer alias `impl` to the sibling `impl_rs` checkout, then
+store that alias in the connection. The machine-specific path stays in ignored
+local state. The impl side is a single whole-file segment, which we address
+positionally as `queue.rs:1`. Link each named spec segment to it:
 because the spec side is named, the link is stored by `@name` and
 survives later edits.
 
 ```sh
-covmap connect main "$PWD/../impl_rs:main" queue_links
+covmap peer bind impl ../impl_rs
+covmap connect main impl:main queue_links
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
 covmap link queue_links @dequeue-op        queue.rs:1 \
   "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
@@ -351,8 +395,27 @@ covmap ls-links queue_links
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
 
+The script commits each repository's sources and `.covmap/` artifact, then
+clones them into a different directory layout. It also creates local iterator,
+report, and temporary files before the commit to prove that the default policy
+excludes them. The clone contains the covering and connection refs but no
+object cache, peer binding, iterator state, report, or temporary file:
+
+```sh
+git add queue.md errors.md .covmap
+git commit -m "tutorial spec"
+# clone spec and impl elsewhere
+cd <spec-clone>
+covmap fsck --offline --hydrate
+covmap peer bind impl ../deps/implementation
+covmap fsck
+```
+
+The connection bytes are identical in both checkouts. Hydration and the new
+binding change only ignored local state, so `git status --short` remains empty.
+
 The target may also be another covering in the current repository. Omit the
-`<repo>:` prefix to create a same-repository connection; `status` and `show`
+`<peer>:` prefix to create a same-repository connection; `status` and `show`
 mark it as a self-map. This temporary connection has no links, and
 `disconnect` removes only its ref:
 
@@ -411,7 +474,7 @@ connection endpoint resolves. `status` now shows the connection with its
 covering main: segments=7 lines=21
   drift: clean
 connections:
-  queue_links: main -> <workspace>/impl_rs/main : 3 links, 0 broken · coverage source 3/7, target 1/1
+  queue_links: main -> impl:main : 3 links, 0 broken · coverage source 3/7, target 1/1
 ```
 
 ## 10b. Bounded drill-down: understand a region  (req23)
@@ -473,6 +536,12 @@ durable and resumable — after a crash or a context compaction, `covmap iter
 review current` re-establishes exactly where you were. It is a **snapshot**
 layered *over* the covering: it never mutates a segment, so we run it here,
 on the clean refined covering, before the drift edits below.
+
+`iter new` first ensures every selected task has recorded bytes. On an empty
+cache it reads each selected source file once and reconstructs only ranges that
+still match their covering hashes. If a selected range has drifted, iterator
+creation fails with restore-and-hydrate guidance and leaves no partial
+worklist.
 
 Freeze `main` in reading order, then check the tally:
 
@@ -552,9 +621,10 @@ covmap iter review rm
 covmap iter backfill rm
 ```
 
-(This is playground task T8. Note an iterator is *not* a drift tracker: a
-frozen task never goes stale — its content is pinned by hash — so drift
-stays a property of the covering, repaired below with `recut`.)
+(This is playground task T8. Note an iterator is *not* a drift tracker:
+`iter new` ensures every frozen task object is cached and retained, so a task
+never goes stale; drift stays a property of the covering, repaired below with
+`recut`.)
 
 ---
 
@@ -579,6 +649,7 @@ covmap status
 
 ```
   drift: 1 file(s) edited, 0 file(s) missing/binary
+    edited: queue.md
   queue_links: main -> …/main : 3 links, 0 broken
 ```
 
@@ -713,7 +784,7 @@ the List / Source views of HEAD's covering.
 | Feature | Step | Requirement |
 | ------- | ---- | ----------- |
 | init / cover / ignore | 1 | req1, req6, req7, req18 |
-| status, ls (metrics) | 2, 10 | req12, req20 |
+| status, ls, cache verification / hydration | 2, 10 | req12, req15, req17, req20 |
 | atomic multi-cut (line + character) | 3, 5 | req4, req5, req8 |
 | merge / recut / label | 4, 6, 12 | req8, req4, req13 |
 | names (segments) | 7 | req3, req8 |

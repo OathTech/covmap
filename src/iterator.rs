@@ -5,9 +5,10 @@
 //! connections. It records, at freeze time, one **task** per included
 //! segment — plus a per-task state and a cursor — so an external consumer
 //! (an agent, a human, a script) can pull one task at a time, work it, and
-//! mark it resolved. Because the object store is append-only, each frozen
-//! task's content stays retrievable (`cat-segment`) no matter how the files
-//! or the covering are later changed.
+//! mark it resolved. Iterator creation ensures every selected object is
+//! cached; retaining those task objects append-only keeps their content
+//! retrievable (`cat-segment`) no matter how the files or covering later
+//! change.
 //!
 //! Stored at `.covmap/iterators/<name>`:
 //!

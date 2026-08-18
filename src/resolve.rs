@@ -19,9 +19,9 @@
 
 use crate::connection::Connection;
 use crate::covering::{self, Covering};
+use crate::peer;
 use crate::repo::Repo;
 use std::io;
-use std::path::PathBuf;
 
 /// One end of a resolved link — the segment on the *far* side, described
 /// well enough to read and to address, or marked broken when it no longer
@@ -45,6 +45,8 @@ pub struct ResolvedEnd {
     pub note: String,
     /// Did the far endpoint resolve in its covering?
     pub resolved: bool,
+    /// Was the far covering available for endpoint verification?
+    pub checked: bool,
 }
 
 /// The resolved links of one segment: outgoing (this segment is a source)
@@ -80,10 +82,10 @@ impl Relation {
             if k.source_covering != src_name {
                 continue;
             }
-            let tgt_repo = Repo {
-                root: PathBuf::from(&k.target_repo),
-            };
-            let tgt_cov = Covering::read(&tgt_repo, &k.target_covering).ok();
+            let tgt_cov = peer::resolve(repo, &k.target_peer)
+                .ok()
+                .and_then(|target| Covering::read(&target, &k.target_covering).ok());
+            let target_checked = tgt_cov.is_some();
 
             for p in &k.links {
                 // Resolve each endpoint to a current hash (so links follow
@@ -107,6 +109,7 @@ impl Relation {
                     hash: b_key.clone(),
                     note: p.note.clone(),
                     resolved: a_in && b_in,
+                    checked: target_checked,
                 };
                 outgoing.entry(a_key.clone()).or_default().push(target_end);
 
@@ -120,6 +123,7 @@ impl Relation {
                     hash: a_key.clone(),
                     note: p.note.clone(),
                     resolved: a_in && b_in,
+                    checked: true,
                 };
                 incoming.entry(b_key.clone()).or_default().push(source_end);
             }

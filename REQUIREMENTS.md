@@ -4,9 +4,10 @@ High-level requirements for covmap. Each captures a capability the tool
 provides, derived from the formal model (`theory/main.tex`) and the
 command interface (`covmap --help`). Intentionally coarse: the list stayed
 at 20 for a long time, and the count is a deliberate ceiling, lifted only
-when a genuinely new capability lands — req21 (iterators) and req22 (segment
-messages) are such lifts. All are realized today except req11 (connection
-algebra), which is explicitly kept as a recommended future direction.
+for a genuinely distinct capability. req21 through req24 are such lifts.
+All are realized today except req11 (connection algebra), which is explicitly
+kept as a recommended future direction. req24 is realized by on-disk format 3
+and CIP 0010.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -67,7 +68,9 @@ solely by explicit split, merge, recut, label, name, and annotate operations.
 `split` shall atomically insert one or more explicit line or character cut
 positions into one original segment or across one covered file, without
 accepting label, name, or message operands. `merge` remains the explicit
-operation that removes a cut.
+operation that removes a cut. Refinement shall use recorded segment bytes;
+when their cache object is absent it may reconstruct those bytes only from a
+checked-out range whose content reproduces the recorded hash.
 Names are assigned deliberately by the user or agent (never
 auto-generated), since their value is a stable, human-meaningful
 identity for the segments being mapped.
@@ -134,8 +137,20 @@ shall make the same discovery limit explicit.
 
 ## req15 — Integrity verification
 covmap shall verify on demand that every covering is a valid partition
-and that every connection endpoint resolves. The same partition validator
-shall reject an invalid multi-cut plan before its covering ref is replaced.
+and that every connection endpoint resolves. Verification shall compare live
+source ranges with their recorded hashes and validate every cache object that
+is present. A missing live cache object is not corruption when source
+reconstructs it exactly; `hydrate` shall atomically restore such objects
+without changing refs and shall reject unavailable or drifted source.
+Unavailable covered source is an integrity failure even when a valid object
+remains cached: the live source and covering ref together define the current
+project artifact. Offline verification shall check local state and
+self-connections while reporting external targets as unchecked, with an option
+to hydrate reconstructible objects during the pass. The same partition
+validator shall reject an invalid multi-cut plan before its covering ref is
+replaced. Verification shall reject malformed peer bindings, unfinished peer
+renames, invalid peer aliases, and external aliases that resolve back to the
+current repository instead of using the canonical self peer `.`.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
@@ -143,16 +158,25 @@ covering-qualified segment name (`<C>:@<name>`), by covering-qualified
 position (`<C>:<file>:<line>[:<col>]`, resolving to the unique segment
 containing that position — a stable, hash-free handle), or by connection
 name, with HEAD resolving the default covering and unique hash prefixes
-accepted. Within `link` and `unlink`, each endpoint operand shall accept a
-name, hash prefix, or position resolved against that side's covering.
+accepted. A bare hash prefix shall resolve over the union of hashes in every
+local covering ref and retained cache objects, deduplicating repeated
+references to the same full hash; it shall therefore remain usable for a clean
+live segment when the cache is empty. A covering-qualified hash shall constrain
+resolution to that covering. Within `link` and `unlink`, each endpoint operand
+shall accept a name, hash prefix, or position resolved against that side's
+covering.
 For `split`, an exact colon-free covered-file path shall outrank hash-prefix
 interpretation and permit cuts across that file; a selector containing `:`
 shall use positional-address syntax, and a bare file selector shall use HEAD.
 
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
-object store plus plain-text covering and connection refs, carrying a
-format version so mismatched repositories are rejected.
+object cache plus plain-text covering and connection refs, carrying a format
+version so mismatched repositories are rejected. Format 3 shall separate
+portable project artifacts from checkout-local state and store connection
+targets as peer aliases rather than paths. For live covering entries, the ref
+and matching checked-out source are sufficient to reconstruct a missing
+object; an existing object whose bytes do not hash to its filename is corrupt.
 
 ## req18 — Tracked-file control via ignore
 covmap shall honor gitignore-lite patterns in `.covmap/ignore` so users
@@ -165,20 +189,36 @@ higher-level *porcelain* command is intended to be expressible as a
 pipeline. (This is git's plumbing/porcelain split: primitives plus the
 convenience commands built over them.) Multi-cut split shall compose the
 existing position and object primitives while making one atomic covering-ref
-transition rather than exposing intermediate partitions.
+transition rather than exposing intermediate partitions. `rev-parse` and
+`cat-segment` shall use the same logical local hash index as porcelain readers,
+so cache population does not change whether a clean live hash resolves.
+Covering rows, connection rows, and peer bindings shall serialize in canonical
+order so repeated writes of equal logical state produce equal bytes.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
 connections (status, show, ls, grep, diff, and a static HTML browser).
 Inspection output shall resolve link endpoints to their covering, label,
 and location — not leave them as bare hashes — and `status` shall report
-per-connection source/target coverage (req12), so a reader sees a mapping's
-completeness and its relations without hand-joining separate outputs.
+the path of each edited or unreadable covered file plus per-connection
+source/target coverage (req12), so a reader sees a mapping's integrity,
+completeness, and relations without hand-joining separate outputs.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
 Connection link listings shall place an existing single-line note on wrapped,
 indented lines below its resolved endpoint pair while leaving
-`ls-links --resolve` unchanged.
+`ls-links --resolve` unchanged. Inspection that reads live segment bytes shall
+reconstruct them from matching source when absent and may publish them to the
+cache on a best-effort basis. `status`, `show`, and `ls` shall opportunistically
+warm selected live objects without failing solely because the cache is
+read-only; source drift, unavailable bytes, and cache corruption shall remain
+visible. `grep`, `cat-segment`, and HTML generation shall use the same checked
+source-backed read behavior. Verification shall remain read-only unless
+hydration is explicitly requested. When an external peer is unavailable,
+read-only inspection shall preserve the local source-side result and mark the
+target unchecked rather than misclassifying every target endpoint as broken;
+commands that need target bytes or mutate the relation shall fail with binding
+recovery guidance.
 
 ## req21 — Coverings as consumable work plans (iterators)
 covmap shall freeze a covering — optionally filtered to a single label —
@@ -188,7 +228,10 @@ marks `done` or `skipped`. An iterator is a snapshot layered over the
 covering: it records a per-task state and a cursor but never mutates
 segments, coverings, or connections, and — because the object store is
 append-only — each frozen task's content stays retrievable even after the
-covering is edited or deleted. It shall guarantee **complete enumeration**:
+covering is edited or deleted. Iterator creation shall ensure every frozen
+task object is present; unlike a live covering entry, a deleted covering
+cannot later reconstruct that task from source coordinates. It shall
+guarantee **complete enumeration**:
 `next` advances to the first pending task in the frozen order and is
 refused while the current task is still pending, so no task is stepped over
 unresolved and iteration is exhausted exactly when every task is `done` or
@@ -223,3 +266,27 @@ A connection shall report degree maxima and at most ten non-trivial fan-in and
 fan-out hubs per direction, while the existing large-connection threshold
 continues to suppress the individual link list unless `--all` is given. This
 is output/query behavior over existing state; it needs no format-version bump.
+
+## req24 — Git-trackable coverings and mappings
+covmap shall make coverings, connections, and project configuration portable,
+deterministic, source-verifiable plain-text artifacts suitable for ordinary
+Git tracking, review, branching, merging, and recovery. Equal logical state
+shall serialize to equal bytes, and durable refs shall not contain
+machine-specific checkout paths. An external connection shall name a stable
+peer alias whose checkout path is supplied by ignored local binding state.
+
+The default publication policy shall make ordinary `git add .covmap` include
+covering refs, connection refs, and project metadata while excluding the
+reconstructible object cache, peer bindings, iterator work state, generated
+reports, and temporary files. Checked-out source plus the tracked artifact
+shall be sufficient for offline verification and hydration of every clean live
+segment. Iterator snapshots remain local unless a team deliberately publishes
+both the worklist and its retained objects.
+
+Git is the publication mechanism, not a runtime dependency: covmap shall not
+invoke Git, inspect its index, stage files, or commit changes, and the same
+artifact semantics shall work outside a Git repository. `covmap init` shall
+create a commented repository-scoped default ignore policy and report the
+durable/local boundary. `covmap migrate` shall upgrade format 1 or 2
+repositories to format 3 through resumable staging, preserving a user-managed
+publication policy while warning when it omits required local-state patterns.

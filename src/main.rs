@@ -6,6 +6,7 @@
 use std::env;
 use std::process::ExitCode;
 
+mod cache;
 mod cli;
 mod connection;
 mod covering;
@@ -13,6 +14,7 @@ mod diff;
 mod fingerprint;
 mod html;
 mod iterator;
+mod peer;
 mod repo;
 mod resolve;
 mod segment;

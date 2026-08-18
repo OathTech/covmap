@@ -1,0 +1,50 @@
+# source_covering=main
+# target_peer=.
+# target_covering=theory
+@req1	@covering_partition	covering as the partitioned unit
+@req1	@repository	repository model
+@req10	@connection_relation	many-to-many annotated relation
+@req10	@named_identity	name endpoint resolution and explicit rename repair
+@req10	@refinement	subdivision preserves name resolution, breaks old hash endpoints, and reports local effects
+@req11	@connection_algebra	inverse, composition, and union
+@req12	@complexity	cardinality, granularity, and entropy
+@req12	@coverage	source and target connection coverage
+@req12	@degree	resolved content-hash degree, bounded hubs, and one row per node
+@req13	@diff_remap	deterministic boundary remapping
+@req13	@drift	segment drift and layered repair
+@req13	@fingerprint	propose-only relocation by similarity
+@req14	@drift	broken endpoints after content or name-identity changes
+@req14	@inspection	broken-link reporting and prune
+@req14	@refinement	subdivision diagnostics expose narrowed name and broken hash endpoints
+@req15	@covering_partition	the partition invariant validates the complete cut plan before ref replacement
+@req15	@inspection	fsck verifies partitions and endpoints
+@req16	@addressing	hash, name, position, connection, and endpoint operand forms
+@req16	@named_identity	name endpoint semantics
+@req16	@refinement	split-specific segment, position, and exact-file selector precedence
+@req17	@state_on_disk	versioned object store and text refs
+@req18	@discipline	explicit tracked-state discipline
+@req18	@refinement	ignore-controlled initial cover
+@req19	@discipline	porcelain composed over primitives
+@req19	@plumbing	line-oriented plumbing commands
+@req19	@refinement	multi-cut composes position and object primitives into one atomic ref transition
+@req2	@connection_relation	same-repository connection lifecycle
+@req20	@coverage	coverage surfaced during inspection
+@req20	@inspection	resolved inspection, wrapped connection notes, self-map presentation, and visualization
+@req21	@iterator_interface	iterator command surface
+@req21	@iterators	frozen worklist and enumeration invariant
+@req22	@plumbing	message field in covering records
+@req22	@refinement	the first fragment inherits the message and later fragments do not
+@req22	@state_on_disk	messages are non-hashed covering metadata
+@req23	@inspection	bounded multi-region drill-down and connection hub summaries
+@req23	@relation_image	finite unions of region selections and label images under a connection
+@req24	@project_artifacts	publication boundary, peer portability, deterministic refs, and checkout invariance
+@req24	@state_on_disk	source-verifiable refs and the reconstructible live object cache
+@req3	@named_identity	stable covering-local name identity
+@req3	@segment_identity	content-only hash identity
+@req4	@refinement	split changes geometry; fragment status metadata is composed separately
+@req4	@segment_identity	label is ref-local, non-hashed metadata
+@req5	@covering_partition	finite cut-set insertion preserves a complete disjoint confined partition
+@req6	@covering_partition	explicit covered set
+@req7	@refinement	additive idempotent initial cover
+@req8	@refinement	label-free atomic multi-cut, explicit merge, and separate metadata operations
+@req9	@sharing	automatic sharing by content address

@@ -51,8 +51,8 @@ check "stored segments reconstruct service.md byte-for-byte" bash -c "
   cmp -s \"\$tmp\" service.md
 "
 
-check "repository format remains v2" bash -c "
-  [[ \"\$(tr -d '\\n' < spec/.covmap/version)\" == 2 ]]
+check "repository format remains v3" bash -c "
+  [[ \"\$(tr -d '\\n' < spec/.covmap/version)\" == 3 ]]
 "
 
 check "status reports clean drift" bash -c "

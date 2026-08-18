@@ -1,0 +1,12 @@
+target/
+theory/main.pdf
+theory/*.aux
+theory/*.fdb_latexmk
+theory/*.fls
+theory/*.log
+theory/*.out
+theory/*.toc
+output.log
+*.html
+Cargo.lock
+smoke_test/_out/

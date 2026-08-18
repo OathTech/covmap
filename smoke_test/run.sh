@@ -28,6 +28,10 @@ fi
 cp -R "$HERE/spec" "$HERE/impl_rs" "$WORK/"
 
 hr() { printf "\n===== %s =====\n" "$1"; }
+object_file() {
+  local repo="$1" hash="$2"
+  printf '%s/.covmap/objects/%s/%s' "$repo" "${hash:0:2}" "${hash:2}"
+}
 
 # Each "repo" gets its own .covmap/.
 hr "init repo A (spec)"
@@ -38,9 +42,106 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
+[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
+  || { echo "  FAIL: init did not create format 3"; exit 1; }
+cmp -s "$WORK/spec/.covmap/.gitignore" <(printf '%s' \
+"# Local and reconstructible covmap state.
+# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+/local/
+/objects/
+/iterators/
+/*.html
+*.tmp
+") || { echo "  FAIL: generated .covmap/.gitignore differs from policy"; exit 1; }
+
+hr "default Git publication policy stages refs but not local state"
+( cd "$WORK/spec" && mkdir -p .covmap/objects/aa .covmap/iterators .covmap/local \
+  && : > .covmap/objects/aa/.partial.tmp \
+  && : > .covmap/iterators/session \
+  && : > .covmap/local/peers \
+  && : > .covmap/report.html )
+( cd "$WORK/spec" && git init -q && git add .covmap )
+STAGED=$( cd "$WORK/spec" && git diff --cached --name-only )
+for path in .covmap/.gitignore .covmap/HEAD .covmap/version .covmap/coverings/main; do
+  printf '%s\n' "$STAGED" | grep -qxF "$path" \
+    || { echo "  FAIL: durable artifact '$path' was not staged"; exit 1; }
+done
+if printf '%s\n' "$STAGED" | grep -qE '^\.covmap/(objects|iterators|local)/'; then
+  echo "  FAIL: local covmap state was staged"
+  exit 1
+fi
+if ( cd "$WORK/spec" && git ls-files .covmap/report.html .covmap/objects/aa/.partial.tmp \
+  .covmap/iterators/session .covmap/local/peers | grep -q . ); then
+  echo "  FAIL: generated report, nested temp, iterator, or binding was staged"
+  exit 1
+fi
+ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }' )
+WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "widget.md" { print $1 }' )
 
 hr "status (spec) — should report drift: clean"
 ( cd "$WORK/spec" && "$COVMAP_BIN" status )
+
+hr "missing live objects are reconstructible cache misses"
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck )
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --offline )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: ordinary fsck unexpectedly populated the cache"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "${ERROR_HASH:0:8}" | grep -qF "$ERROR_HASH" )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: live hash resolution unexpectedly populated the cache"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$ERROR_HASH" --content | grep -qF "# Errors" )
+[[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
+  || { echo "  FAIL: show --content did not warm its live object"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${ERROR_HASH:0:8}" | grep -qF "# Errors" )
+[[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
+  || { echo "  FAIL: cat-segment did not reconstruct a live hash"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" grep Counter >/dev/null )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: grep did not reconstruct live covering content"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main >/dev/null )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: ls did not opportunistically warm live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: status did not opportunistically warm live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+# Directory mode bits do not make a cache unwritable when CI runs as root.
+# A regular file at the cache path makes nested publication fail portably.
+mv "$WORK/spec/.covmap/objects" "$WORK/spec/.covmap/objects.available"
+: > "$WORK/spec/.covmap/objects"
+( cd "$WORK/spec" && "$COVMAP_BIN" status | grep -qF "drift: clean" )
+[[ -f "$WORK/spec/.covmap/objects" ]] \
+  || { echo "  FAIL: best-effort warming replaced the unavailable cache"; exit 1; }
+rm "$WORK/spec/.covmap/objects"
+mv "$WORK/spec/.covmap/objects.available" "$WORK/spec/.covmap/objects"
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: unavailable-cache warming unexpectedly wrote objects"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe new main )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: iter new did not retain both missing task objects"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter cache_probe rm )
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" fsck --offline --hydrate )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: offline fsck did not hydrate both live objects"; exit 1; }
+rm -rf "$WORK/spec/.covmap/objects"/*
+( cd "$WORK/spec" && "$COVMAP_BIN" hydrate main )
+[[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "2" ]] \
+  || { echo "  FAIL: hydrate did not restore both live objects"; exit 1; }
+mv "$WORK/spec/errors.md" "$WORK/spec/errors.md.unavailable"
+if MISSING_SOURCE_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck 2>&1 ); then
+  mv "$WORK/spec/errors.md.unavailable" "$WORK/spec/errors.md"
+  echo "  FAIL: fsck accepted unavailable covered source backed by a valid cache"
+  exit 1
+fi
+mv "$WORK/spec/errors.md.unavailable" "$WORK/spec/errors.md"
+printf '%s\n' "$MISSING_SOURCE_OUT" | grep -qF "cannot read source 'errors.md'" \
+  || { echo "  FAIL: unavailable-source diagnostic was not explicit"; exit 1; }
 
 hr "ls -l (spec HEAD): two whole-file segments"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
@@ -48,8 +149,8 @@ hr "ls -l (spec HEAD): two whole-file segments"
 # Refine widget.md atomically at every heading boundary. Cuts are deliberately
 # unsorted; output and covering order must still follow file position.
 hr "refine widget.md with one atomic multi-cut"
-WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls main | grep -F 'widget.md' | head -1 | cut -f1 )
 echo "  starting hash: $WIDGET_HASH"
+rm -f "$(object_file "$WORK/spec" "$WIDGET_HASH")"
 ( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md 26 10 18 6 22 14 )
 
 # Geometry and status metadata compose explicitly.
@@ -82,7 +183,7 @@ REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
   || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
 printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
   || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
-[[ $(cat "$WORK/spec/.covmap/version") == "2" ]] \
+[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
   || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
@@ -91,6 +192,7 @@ hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
 hr "merge Increment + Decrement back, then split again at line 14"
 INC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Increment" | head -1 )
 DEC=$( cd "$WORK/spec" && "$COVMAP_BIN" grep -l -c main "Decrement" | head -1 )
+rm -f "$(object_file "$WORK/spec" "$INC")" "$(object_file "$WORK/spec" "$DEC")"
 ( cd "$WORK/spec" && "$COVMAP_BIN" merge "main:$INC" "main:$DEC" "Inc+Dec" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls -l )
 # split it back at line 14
@@ -103,7 +205,15 @@ hr "grep 'increment' in spec"
 ( cd "$WORK/spec" && "$COVMAP_BIN" grep increment )
 
 hr "connect spec/main -> impl_rs/main"
-( cd "$WORK/spec" && "$COVMAP_BIN" connect main "$WORK/impl_rs:main" widget_links )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer bind impl ../impl_rs )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer ls | grep -q $'^impl\tbound\t' )
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main widget_links )
+grep -qF "# target_peer=impl" "$WORK/spec/.covmap/connections/widget_links" \
+  || { echo "  FAIL: connection did not store the peer alias"; exit 1; }
+if grep -qF "$WORK/impl_rs" "$WORK/spec/.covmap/connections/widget_links"; then
+  echo "  FAIL: connection leaked an absolute checkout path"
+  exit 1
+fi
 
 hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
@@ -122,6 +232,51 @@ echo "  impl: $RS"
 # both spellings into one target node.
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
+
+hr "unbound peer degrades inspection but blocks target mutation"
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main disposable_peer_ref )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer unbind impl )
+UNBOUND_STATUS=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+printf '%s\n' "$UNBOUND_STATUS" | grep -qF "unavailable: peer 'impl' is not bound"
+printf '%s\n' "$UNBOUND_STATUS" | grep -qF "0 source-broken, target unchecked"
+( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links | grep -qF "target unchecked" )
+( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" | grep -qF "(unchecked)" )
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links >/dev/null )
+RESOLVE_ERR="$WORK/resolve.err"
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links 2>"$RESOLVE_ERR" \
+  | awk -F '\t' 'NF == 5 && $3 == "" && $4 == "" { ok++ } END { exit ok == 2 ? 0 : 1 }' )
+grep -qF "peer 'impl' is unavailable" "$RESOLVE_ERR" \
+  || { echo "  FAIL: resolved plumbing did not warn about the unbound peer"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" disconnect disposable_peer_ref )
+[[ ! -e "$WORK/spec/.covmap/connections/disposable_peer_ref" ]] \
+  || { echo "  FAIL: disconnect required an external peer binding"; exit 1; }
+if ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$INC" "$RS" >/dev/null 2>&1 ); then
+  echo "  FAIL: link accepted an unbound target peer"
+  exit 1
+fi
+( cd "$WORK/spec" && "$COVMAP_BIN" peer bind impl ../impl_rs )
+
+hr "portable connection survives clones at different checkout paths"
+( cd "$WORK/spec" && git add errors.md widget.md .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "fixture" )
+( cd "$WORK/impl_rs" && git init -q && git add widget.rs .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "fixture" )
+mkdir -p "$WORK/review/deps"
+git clone -q "$WORK/spec" "$WORK/review/spec-clone"
+git clone -q "$WORK/impl_rs" "$WORK/review/deps/implementation"
+cmp "$WORK/spec/.covmap/connections/widget_links" \
+    "$WORK/review/spec-clone/.covmap/connections/widget_links"
+[[ ! -e "$WORK/review/spec-clone/.covmap/local/peers" ]] \
+  || { echo "  FAIL: clone unexpectedly contained local peer bindings"; exit 1; }
+[[ $(find "$WORK/review/spec-clone/.covmap/objects" -type f 2>/dev/null | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: clone unexpectedly contained cached objects"; exit 1; }
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" fsck --offline --hydrate )
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" peer bind impl ../deps/implementation )
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" fsck )
+cmp "$WORK/spec/.covmap/connections/widget_links" \
+    "$WORK/review/spec-clone/.covmap/connections/widget_links"
+[[ -z $(cd "$WORK/review/spec-clone" && git status --short) ]] \
+  || { echo "  FAIL: hydration or peer binding dirtied the clone"; exit 1; }
 
 hr "re-link with a new note updates it in place (not a no-op)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
@@ -238,7 +393,10 @@ p.write_text(t)
 PY
 
 hr "status (should report drift: 1 file edited)"
-( cd "$WORK/spec" && "$COVMAP_BIN" status )
+STATUS_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+printf '%s\n' "$STATUS_AFTER_EDIT"
+grep -Fq "    edited: widget.md" <<<"$STATUS_AFTER_EDIT" \
+  || { echo "  FAIL: status did not name the edited file"; exit 1; }
 
 hr "fsck --broken-links (none: relabeling preserved Increment, Decrement is only drifted)"
 if BROKEN_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then
@@ -250,6 +408,24 @@ else
   printf '%s\n' "$BROKEN_AFTER_EDIT"
   exit 1
 fi
+
+hr "iter new refuses a drifted cache miss with recovery guidance"
+rm -f "$(object_file "$WORK/spec" "$DEC")"
+if CAT_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${DEC:0:8}" 2>&1 ); then
+  echo "  FAIL: cat-segment returned drifted source for a missing live object"
+  exit 1
+fi
+printf '%s\n' "$CAT_DRIFT" | grep -qF "resolved but recorded bytes are unavailable" \
+  || { echo "  FAIL: cat-segment did not distinguish a live hash from missing bytes"; exit 1; }
+if ITER_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter drift_probe new main --label Decrement 2>&1 ); then
+  echo "  FAIL: iter new froze a task whose recorded bytes were unavailable"
+  exit 1
+fi
+printf '%s\n' "$ITER_DRIFT" | grep -qF "recorded bytes unavailable" \
+  && printf '%s\n' "$ITER_DRIFT" | grep -qF 'run `covmap hydrate`' \
+  || { echo "  FAIL: iter new did not explain missing-recorded-byte recovery"; exit 1; }
+[[ ! -e "$WORK/spec/.covmap/iterators/drift_probe" ]] \
+  || { echo "  FAIL: failed iter new left a frozen worklist"; exit 1; }
 
 hr "recut Decrement (the old hash-addressed endpoint now breaks)"
 RECUT_OUT=$( cd "$WORK/spec" && "$COVMAP_BIN" recut "main:$DEC" )

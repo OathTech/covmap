@@ -195,8 +195,16 @@ The \emph{segment store} for $A$ is a partial map
   \sigma_A : \{\text{hashes}\} \rightharpoonup \{\text{segments of } A\},
 \]
 populated lazily as coverings are computed. A covering $\Cov$ is
-represented as a finite list of $(\hash(s), s)$ entries, and the
-segments themselves are fetched from the store by hash.
+represented as a finite list of $(\hash(s), s)$ entries. For a live covering
+entry, $\sigma_A(\hash(s))$ is an operational cache: when it is undefined and
+the checked-out range still has hash $\hash(s)$, \emph{hydration} may
+reconstruct the stored content from that range. An undefined cache entry is
+therefore not corruption by itself; a defined entry whose content does not
+hash to its key is corruption. Any operation that needs the recorded bytes
+may reconstruct them only after this hash check, never from drifted source.
+Logical hash lookup ranges over the union of hashes named by live covering
+refs and hashes retained only in $\sigma_A$; cache population therefore does
+not determine whether a clean live segment has an address.
 \end{definition}
 
 \begin{definition}[DAG of coverings and segments]\label{def:dag}
@@ -576,13 +584,13 @@ A task is \emph{active} exactly when $\gamma$ points at it and it is
 \textsc{pending}; there is no stored \textsc{active} state.
 \end{definition}
 
-The iterator is a \emph{snapshot}, not a live view. Because $\tau$ records
-each segment's hash at creation time and the object store $\sigma_A$
-(\S\ref{sec:sharing}) is append-only, every frozen task's content stays
-retrievable no matter how the files, the covering, or the connections are
-later changed --- even if the covering is deleted. The line numbers a task
-carries are a \emph{hint} to the current on-disk position; the frozen hash
-is the anchor.
+The iterator is a \emph{snapshot}, not a live view. Iterator creation ensures
+that $\sigma_A$ is defined for every frozen task. Because $\tau$ records each
+segment's hash at creation time and those task objects are retained
+append-only, every frozen task's content stays retrievable no matter how the
+files, the covering, or the connections are later changed --- even if the
+covering is deleted. The line numbers a task carries are a \emph{hint} to the
+current on-disk position; the frozen hash is the anchor.
 
 Two enumeration orders are canonical: \emph{file order} (by path, then by
 start position --- natural reading order) and \emph{label order} (grouping
@@ -630,12 +638,12 @@ covering did not already contain, so the invariant composes cleanly with
 C1--C3 rather than qualifying them.
 
 \begin{remark}[No drift state on a task]\label{rem:iterator-drift}
-A task has no \textsc{stale} state. Freezing plus the append-only object
-store means a task's content is always the bytes recorded at creation; if
-the file later drifts (\S\ref{sec:complexity}) that is a property of the
-covering, surfaced by \texttt{status} and repaired by
-\texttt{recut}/diff-remap, not of the iterator, whose task still resolves
-to its frozen content via \texttt{cat-segment}.
+A task has no \textsc{stale} state. Freezing ensures its object is cached, and
+retaining that object append-only means the task's content is always the bytes
+recorded at creation; if the file later drifts (\S\ref{sec:complexity}) that
+is a property of the covering, surfaced by \texttt{status} and repaired by
+\texttt{recut}/diff-remap, not of the iterator, whose task still resolves to
+its frozen content via \texttt{cat-segment}.
 \end{remark}
 
 \section{An interface for \texttt{covmap}}\label{sec:interface}
@@ -650,21 +658,82 @@ A repository under \texttt{covmap} acquires a \texttt{.covmap/}
 directory:
 \begin{verbatim}
 .covmap/
-  version             on-disk format version (currently 2)
+  .gitignore          default publication policy
+  version             on-disk format version (currently 3)
   HEAD                default covering name
   ignore              optional gitignore-lite patterns
-  objects/<hh>/<rest> raw content, addressed by truncated SHA-256(content)
+  objects/<hh>/<rest> local raw-content cache, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
+  local/peers         checkout-local peer bindings
   iterators/<name>    one file per iterator (frozen worklist + cursor)
 \end{verbatim}
-The format-2 object body is exactly the segment content. Labels, names,
+The object body is exactly the segment content. Labels, names,
 and messages live in covering refs and are not stored in or hashed into
-objects.
+objects. Missing live objects can be reconstructed from checked-out source
+only while the recorded range reproduces the ref's hash; \texttt{hydrate}
+performs that reconstruction explicitly. Since checked-out source is part of
+the live project state, unavailable covered source fails integrity verification
+even when a valid object remains in the cache. Format 3 separates the portable
+project artifact from ignored local state and replaces connection target paths
+with portable peer aliases.
 The \texttt{iterators/} directory is purely additive: an older
 \texttt{covmap} simply never reads it, so introducing it needs no
 format-version change, mirroring how the character column and segment name
 were added.
+
+\subsection{Project artifacts and publication boundary}
+\label{sec:project-artifacts}
+
+\begin{definition}[Publication boundary]\label{def:publication-boundary}
+The \emph{covmap project artifact} consists of the format version, default
+covering, covering-input policy, covering refs, connection refs, and default
+publication policy. \emph{Local state} consists of the reconstructible content
+cache, checkout-specific peer bindings, iterator work state and its retained
+objects, generated reports, and temporary files. Publication retains the
+project artifact and excludes local state by default. A project may
+deliberately publish an iterator snapshot only by publishing its worklist and
+retained objects together.
+\end{definition}
+
+\begin{definition}[Portable peer reference]\label{def:peer-reference}
+For repository $A$, let $P_A$ be a set of stable peer aliases containing the
+reserved self alias ``\texttt{.}'', and let
+$\pi_A : P_A \rightharpoonup \mathrm{Repositories}$ be a checkout-local
+binding with $\pi_A(\texttt{.}) = A$. A durable connection from $A$ records a
+target alias $p \in P_A$, never an absolute checkout path. Resolving its target
+repository applies $\pi_A$; changing that local binding changes where the peer
+is found, not the stored relation.
+\end{definition}
+
+\begin{definition}[Version-control-suitable artifact]
+\label{def:version-control-artifact}
+A covmap project artifact is \emph{version-control-suitable} when:
+\begin{enumerate}[label=(V\arabic*),leftmargin=3em]
+\item logically equal refs serialize to equal, deterministic plain-text bytes;
+\item durable bytes contain no machine-specific checkout paths;
+\item the artifact together with matching checked-out source verifies and
+      reconstructs every missing live cache object;
+\item its default publication policy excludes local state; and
+\item publishing is external to covmap, so no version-control system is
+      required or invoked.
+\end{enumerate}
+\end{definition}
+
+\begin{proposition}[Checkout invariance]\label{prop:checkout-invariance}
+Let two checkouts contain equal project artifacts and equal checked-out source,
+but have different roots, cache contents, and peer bindings. If corresponding
+peer aliases resolve to semantically equal target artifacts, both checkouts
+denote equal coverings and connections. After the same logical ref mutation,
+their durable serialized bytes remain equal.
+\end{proposition}
+\begin{proof}
+Covering and connection meaning is determined by source-verifiable refs and
+peer aliases, none of which contains a checkout root or cache path. Local
+bindings affect only alias resolution, and the premise makes those resolutions
+semantically equal. Deterministic serialization then maps the equal logical
+post-mutation state to equal bytes.
+\end{proof}
 
 \subsection{Addressing}
 
@@ -680,13 +749,16 @@ throughout the interface and can be mixed freely.
 \texttt{$K$}               \> a connection by name
 \end{tabbing}
 
-A bare \texttt{$h$} is short for \texttt{HEAD:$h$}. Where a covering
-is expected, the literal \texttt{HEAD} resolves to the default
+A bare \texttt{$h$} resolves over the distinct hashes in every local live
+covering ref together with cache-only retained hashes. A
+\texttt{$C$:$h$} address restricts the search to covering $C$. Where a
+covering is expected, the literal \texttt{HEAD} resolves to the default
 covering recorded in \texttt{.covmap/HEAD}. Hash prefixes follow
-\texttt{git}-style disambiguation: any unique prefix works,
-ambiguity is an error. An \texttt{@$\nu$} address selects a segment by
-its name; connection endpoints store \texttt{@$\nu$} for named segments
-so that links survive content edits.
+\texttt{git}-style disambiguation: any unique prefix works and repeated
+references to the same full hash count as one match; ambiguity between
+distinct full hashes is an error. An \texttt{@$\nu$} address selects a segment
+by its name; connection endpoints store \texttt{@$\nu$} for named segments so
+that links survive content edits.
 
 \subsection{Initial cover and refinement}\label{sec:initial-cover}
 
@@ -702,6 +774,10 @@ There is no segmentation rule. The interface gives the user one
       \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
       adds segments only for new files. Existing segments are never
       touched, so any user-driven refinement is preserved.
+\item \texttt{covmap hydrate [$C$]}\\
+      Verify every live entry of $C$ (or every covering when omitted) against
+      checked-out source and atomically recreate each missing cache object.
+      Never change a covering ref, and fail rather than cache drifted bytes.
 \item \texttt{covmap split $C$:$a$ $p_1$ [$p_2$ \ldots]}\\
       Atomically insert the finite set of cut positions $p_i$ into the
       selected part of covering $C$. The selector $a$ is a segment address
@@ -780,13 +856,21 @@ names one item prints all covmap holds about it. The region view and the
 label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
 of file/range regions or a label, presenting each selected segment together
 with its image.
+When inspection needs live segment bytes whose cache entry is absent, it
+reconstructs them only from source that reproduces the recorded hash.
+\texttt{status}, \texttt{show}, and \texttt{ls} may publish those verified
+bytes to the operational cache on a best-effort basis; an unwritable cache
+does not invalidate otherwise successful inspection. Drift, unavailable
+source, and present corrupt objects remain observable. Verification itself is
+read-only unless hydration is requested explicitly.
 
 \begin{itemize}[leftmargin=2em,itemsep=2pt]
 \item \texttt{covmap status [$C$]}\\
       One-line summary per covering: cardinality and line count. A drift
       line reports the number of files whose bytes have changed since
-      their segments were recorded. Per connection: link count, broken
-      count, and source/target coverage (Definition~\ref{def:coverage}).
+      their segments were recorded and names each edited or unreadable
+      path. Per connection: link count, broken count, and source/target
+      coverage (Definition~\ref{def:coverage}).
 \item \texttt{covmap show <addr>}\\
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
@@ -803,10 +887,17 @@ with its image.
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
       Segments only in $C_1$, only in $C_2$, and shared.
-\item \texttt{covmap connect $C_A$ [repo$_B$:]$C_B$ [$K$]}\\
-      Create an empty connection between two coverings. Omitting repo$_B$
-      selects another covering in the source repository, including $C_A$
-      itself; inspection marks this case as a self-map.
+\item \texttt{covmap peer bind $p$ <path>}\\
+      \texttt{covmap peer ls | rename <old> <new> | unbind $p$}\\
+      Manage the checkout-local partial binding $\pi_A$. Renaming a peer
+      rewrites every local connection ref that names it through a
+      crash-resumable journal. The reserved alias \texttt{.} is implicit and
+      cannot be bound or unbound.
+\item \texttt{covmap connect $C_A$ [$p$:]$C_B$ [$K$]}\\
+      Create an empty connection between two coverings. Omitting $p$ selects
+      the reserved self peer \texttt{.}, including $C_A$ itself. An external
+      $p$ must be locally bound and its target covering must exist before the
+      connection is created.
 \item \texttt{covmap disconnect $K$}\\
       Delete the stored connection ref $K$ without deleting either covering,
       any segment object, or a derived report.
@@ -818,10 +909,20 @@ with its image.
 \item \texttt{covmap prune $K$}\\
       Drop every link of $K$ whose endpoint is no longer in its
       covering.
-\item \texttt{covmap fsck}\\
-      Verify that every covering is a partition of its covered set
-      and that every connection's endpoints resolve.
+\item \texttt{covmap fsck [--offline [--hydrate]]}\\
+      Verify that every covering is a partition of its covered set, source
+      reproduces each recorded hash, every present cache object hashes to its
+      key, and every checked connection endpoint resolves. Missing live cache
+      objects are valid when source reconstructs them. \texttt{--offline}
+      leaves external repositories unchecked; adding \texttt{--hydrate}
+      recreates missing local objects during the same pass.
 \end{itemize}
+
+Read-only inspection degrades explicitly when an external peer is unavailable:
+the source side remains inspectable and the target is marked unchecked.
+Operations that need target content or mutate the relation fail with peer
+binding recovery guidance. Raw connection rows remain readable without a
+binding.
 
 \subsection{Iterators}\label{sec:iter-interface}
 
@@ -890,13 +991,21 @@ Lower-level commands meant for scripts.
 \subsection{Design discipline}
 
 \begin{itemize}[leftmargin=2em]
-\item Coverings and connections are independent artifacts; a
+\item Coverings and connections are independent components of the project
+      artifact (Definition~\ref{def:publication-boundary}); a
       connection names its source and target coverings in metadata and
       records each link using name or hash endpoints.
+\item Durable state satisfies the version-control conditions of
+      Definition~\ref{def:version-control-artifact}. Cache population and peer
+      path bindings are local operational choices, not changes to project
+      meaning.
 \item Every state-changing operation is explicit. \texttt{cover} is
       additive only. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —
       \texttt{covmap} never silently re-segments existing files.
+\item A missing live object is reconstructed only from source whose content
+      hash equals the covering ref. Refinement and drift repair never treat
+      unverified current source as recorded bytes.
 \item covmap is built from a small set of composable primitives:
       convenience commands are intended to be expressible as shell
       pipelines over the lower-level, line-oriented commands. This is

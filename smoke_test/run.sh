@@ -42,6 +42,39 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
+[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
+  || { echo "  FAIL: init did not create format 3"; exit 1; }
+cmp -s "$WORK/spec/.covmap/.gitignore" <(printf '%s' \
+"# Local and reconstructible covmap state.
+# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+/local/
+/objects/
+/iterators/
+/*.html
+*.tmp
+") || { echo "  FAIL: generated .covmap/.gitignore differs from policy"; exit 1; }
+
+hr "default Git publication policy stages refs but not local state"
+( cd "$WORK/spec" && mkdir -p .covmap/objects/aa .covmap/iterators .covmap/local \
+  && : > .covmap/objects/aa/.partial.tmp \
+  && : > .covmap/iterators/session \
+  && : > .covmap/local/peers \
+  && : > .covmap/report.html )
+( cd "$WORK/spec" && git init -q && git add .covmap )
+STAGED=$( cd "$WORK/spec" && git diff --cached --name-only )
+for path in .covmap/.gitignore .covmap/HEAD .covmap/version .covmap/coverings/main; do
+  printf '%s\n' "$STAGED" | grep -qxF "$path" \
+    || { echo "  FAIL: durable artifact '$path' was not staged"; exit 1; }
+done
+if printf '%s\n' "$STAGED" | grep -qE '^\.covmap/(objects|iterators|local)/'; then
+  echo "  FAIL: local covmap state was staged"
+  exit 1
+fi
+if ( cd "$WORK/spec" && git ls-files .covmap/report.html .covmap/objects/aa/.partial.tmp \
+  .covmap/iterators/session .covmap/local/peers | grep -q . ); then
+  echo "  FAIL: generated report, nested temp, iterator, or binding was staged"
+  exit 1
+fi
 ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }' )
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "widget.md" { print $1 }' )
 
@@ -144,7 +177,7 @@ REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
   || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
 printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
   || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
-[[ $(cat "$WORK/spec/.covmap/version") == "2" ]] \
+[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
   || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
@@ -166,7 +199,15 @@ hr "grep 'increment' in spec"
 ( cd "$WORK/spec" && "$COVMAP_BIN" grep increment )
 
 hr "connect spec/main -> impl_rs/main"
-( cd "$WORK/spec" && "$COVMAP_BIN" connect main "$WORK/impl_rs:main" widget_links )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer bind impl ../impl_rs )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer ls | grep -q $'^impl\tbound\t' )
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main widget_links )
+grep -qF "# target_peer=impl" "$WORK/spec/.covmap/connections/widget_links" \
+  || { echo "  FAIL: connection did not store the peer alias"; exit 1; }
+if grep -qF "$WORK/impl_rs" "$WORK/spec/.covmap/connections/widget_links"; then
+  echo "  FAIL: connection leaked an absolute checkout path"
+  exit 1
+fi
 
 hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
@@ -185,6 +226,51 @@ echo "  impl: $RS"
 # both spellings into one target node.
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
+
+hr "unbound peer degrades inspection but blocks target mutation"
+( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main disposable_peer_ref )
+( cd "$WORK/spec" && "$COVMAP_BIN" peer unbind impl )
+UNBOUND_STATUS=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+printf '%s\n' "$UNBOUND_STATUS" | grep -qF "unavailable: peer 'impl' is not bound"
+printf '%s\n' "$UNBOUND_STATUS" | grep -qF "0 source-broken, target unchecked"
+( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links | grep -qF "target unchecked" )
+( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" | grep -qF "(unchecked)" )
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links >/dev/null )
+RESOLVE_ERR="$WORK/resolve.err"
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links 2>"$RESOLVE_ERR" \
+  | awk -F '\t' 'NF == 5 && $3 == "" && $4 == "" { ok++ } END { exit ok == 2 ? 0 : 1 }' )
+grep -qF "peer 'impl' is unavailable" "$RESOLVE_ERR" \
+  || { echo "  FAIL: resolved plumbing did not warn about the unbound peer"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" disconnect disposable_peer_ref )
+[[ ! -e "$WORK/spec/.covmap/connections/disposable_peer_ref" ]] \
+  || { echo "  FAIL: disconnect required an external peer binding"; exit 1; }
+if ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$INC" "$RS" >/dev/null 2>&1 ); then
+  echo "  FAIL: link accepted an unbound target peer"
+  exit 1
+fi
+( cd "$WORK/spec" && "$COVMAP_BIN" peer bind impl ../impl_rs )
+
+hr "portable connection survives clones at different checkout paths"
+( cd "$WORK/spec" && git add errors.md widget.md .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "fixture" )
+( cd "$WORK/impl_rs" && git init -q && git add widget.rs .covmap \
+  && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "fixture" )
+mkdir -p "$WORK/review/deps"
+git clone -q "$WORK/spec" "$WORK/review/spec-clone"
+git clone -q "$WORK/impl_rs" "$WORK/review/deps/implementation"
+cmp "$WORK/spec/.covmap/connections/widget_links" \
+    "$WORK/review/spec-clone/.covmap/connections/widget_links"
+[[ ! -e "$WORK/review/spec-clone/.covmap/local/peers" ]] \
+  || { echo "  FAIL: clone unexpectedly contained local peer bindings"; exit 1; }
+[[ $(find "$WORK/review/spec-clone/.covmap/objects" -type f 2>/dev/null | wc -l | tr -d ' ') == "0" ]] \
+  || { echo "  FAIL: clone unexpectedly contained cached objects"; exit 1; }
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" fsck --offline --hydrate )
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" peer bind impl ../deps/implementation )
+( cd "$WORK/review/spec-clone" && "$COVMAP_BIN" fsck )
+cmp "$WORK/spec/.covmap/connections/widget_links" \
+    "$WORK/review/spec-clone/.covmap/connections/widget_links"
+[[ -z $(cd "$WORK/review/spec-clone" && git status --short) ]] \
+  || { echo "  FAIL: hydration or peer binding dirtied the clone"; exit 1; }
 
 hr "re-link with a new note updates it in place (not a no-op)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
@@ -301,7 +387,10 @@ p.write_text(t)
 PY
 
 hr "status (should report drift: 1 file edited)"
-( cd "$WORK/spec" && "$COVMAP_BIN" status )
+STATUS_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
+printf '%s\n' "$STATUS_AFTER_EDIT"
+grep -Fq "    edited: widget.md" <<<"$STATUS_AFTER_EDIT" \
+  || { echo "  FAIL: status did not name the edited file"; exit 1; }
 
 hr "fsck --broken-links (none: relabeling preserved Increment, Decrement is only drifted)"
 if BROKEN_AFTER_EDIT=$( cd "$WORK/spec" && "$COVMAP_BIN" fsck --broken-links ); then

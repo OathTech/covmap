@@ -3,12 +3,14 @@
 //! ```text
 //! <repo>/
 //!   .covmap/
-//!     version             # on-disk format version (currently "2")
+//!     .gitignore          # tracked default publication policy
+//!     version             # on-disk format version (currently "3")
 //!     HEAD                # default covering name
 //!     ignore              # optional gitignore-lite patterns
 //!     objects/<hh>/<rest> # local segment-content cache
 //!     coverings/<name>    # covered files + segment list
 //!     connections/<name>  # connection metadata + links
+//!     local/peers         # checkout-local peer bindings
 //!     iterators/<name>    # frozen worklist + per-task state + cursor
 //! ```
 
@@ -20,8 +22,9 @@ use std::path::{Path, PathBuf};
 /// the segment hash, object encoding, covering refs, or connection
 /// refs. covmap refuses to operate on a `.covmap/` whose version
 /// disagrees.
-pub const FORMAT_VERSION: &str = "2";
+pub const FORMAT_VERSION: &str = "3";
 
+#[derive(Clone, Debug)]
 pub struct Repo {
     pub root: PathBuf,
 }
@@ -75,6 +78,8 @@ impl Repo {
         fs::create_dir_all(dot.join("coverings"))?;
         fs::create_dir_all(dot.join("connections"))?;
         fs::create_dir_all(dot.join("iterators"))?;
+        fs::create_dir_all(dot.join("local"))?;
+        fs::write(dot.join(".gitignore"), crate::repo::DEFAULT_GITIGNORE)?;
         fs::write(dot.join("version"), format!("{FORMAT_VERSION}\n"))?;
         let mut head = fs::File::create(dot.join("HEAD"))?;
         writeln!(head, "main")?;
@@ -107,9 +112,8 @@ impl Repo {
         };
         let on_disk = raw.trim();
         if on_disk != FORMAT_VERSION {
-            let hint = if on_disk == "1" {
-                " Run `covmap migrate` to upgrade it (format 1 → 2 makes the \
-                 segment hash content-only; labels move out of the hash)."
+            let hint = if matches!(on_disk, "1" | "2") {
+                " Run `covmap migrate` to upgrade it to format 3."
             } else {
                 ""
             };
@@ -143,11 +147,60 @@ impl Repo {
     pub fn iterators_dir(&self) -> PathBuf {
         self.dot().join("iterators")
     }
+    pub fn local_dir(&self) -> PathBuf {
+        self.dot().join("local")
+    }
+    pub fn peers_file(&self) -> PathBuf {
+        self.local_dir().join("peers")
+    }
+    pub fn peer_rename_file(&self) -> PathBuf {
+        self.local_dir().join("peer-rename")
+    }
     pub fn head_file(&self) -> PathBuf {
         self.dot().join("HEAD")
     }
 
     pub fn read_head(&self) -> io::Result<String> {
         Ok(fs::read_to_string(self.head_file())?.trim().to_string())
+    }
+}
+
+pub const DEFAULT_GITIGNORE: &str = "\
+# Local and reconstructible covmap state.
+# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+/local/
+/objects/
+/iterators/
+/*.html
+*.tmp
+";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("covmap-repo-{tag}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn init_creates_format3_publication_policy() {
+        let root = temp_root("init");
+        fs::create_dir_all(&root).unwrap();
+
+        let repo = Repo::init(&root).unwrap();
+
+        assert_eq!(repo.read_version().unwrap(), "3");
+        assert_eq!(
+            fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
+            DEFAULT_GITIGNORE
+        );
+        assert!(repo.local_dir().is_dir());
+        fs::remove_dir_all(root).unwrap();
     }
 }

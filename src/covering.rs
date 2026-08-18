@@ -326,12 +326,35 @@ pub fn partition_issues(c: &Covering) -> Vec<String> {
 impl Covering {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
         let path = repo.coverings_dir().join(&self.name);
+        atomic_write(&path, &self.serialize())
+    }
+
+    pub fn serialize(&self) -> String {
         let mut buf = String::new();
-        let files: BTreeSet<&str> = self.entries.iter().map(|e| e.file.as_str()).collect();
+        let mut entries: Vec<&CoveringEntry> = self.entries.iter().collect();
+        entries.sort_by(|a, b| {
+            (
+                &a.file,
+                a.a,
+                a.a_col.unwrap_or(0),
+                a.b,
+                a.b_col.unwrap_or(usize::MAX),
+                &a.hash,
+            )
+                .cmp(&(
+                    &b.file,
+                    b.a,
+                    b.a_col.unwrap_or(0),
+                    b.b,
+                    b.b_col.unwrap_or(usize::MAX),
+                    &b.hash,
+                ))
+        });
+        let files: BTreeSet<&str> = entries.iter().map(|e| e.file.as_str()).collect();
         for f in &files {
             buf.push_str(&format!("# covered={}\n", f));
         }
-        for e in &self.entries {
+        for e in &entries {
             // The sixth (name) field is written only when present, so a
             // covering with no named segments is byte-identical to one
             // written by an older covmap.
@@ -363,7 +386,7 @@ impl Covering {
         // with '#' — is read back verbatim. A segment with no message emits
         // nothing, so a message-free covering is byte-identical to an older
         // covmap's ref (backward compatible, no FORMAT_VERSION bump).
-        for (i, e) in self.entries.iter().enumerate() {
+        for (i, e) in entries.iter().enumerate() {
             if let Some(msg) = &e.message {
                 let lines: Vec<&str> = msg.split('\n').collect();
                 buf.push_str(&format!("# message {} {}\n", i, lines.len()));
@@ -373,7 +396,7 @@ impl Covering {
                 }
             }
         }
-        atomic_write(&path, &buf)
+        buf
     }
 
     pub fn read(repo: &Repo, name: &str) -> io::Result<Covering> {

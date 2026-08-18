@@ -5,6 +5,7 @@
 use crate::cache;
 use crate::connection::Connection;
 use crate::covering::{self, Covering, CoveringEntry};
+use crate::peer;
 use crate::repo::Repo;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -78,11 +79,8 @@ pub fn render(
     let mut conn_data: Vec<ConnView> = Vec::new();
     for cn in &connections {
         let k = Connection::read(repo, cn)?;
-        let tgt_repo_path = PathBuf::from(&k.target_repo);
-        let tgt_repo = Repo {
-            root: tgt_repo_path.clone(),
-        };
-        let tgt_cov = Covering::read(&tgt_repo, &k.target_covering).ok();
+        let tgt_repo = peer::resolve(repo, &k.target_peer)?;
+        let tgt_cov = Some(Covering::read(&tgt_repo, &k.target_covering)?);
         conn_data.push(ConnView {
             k,
             tgt_repo,
@@ -94,7 +92,7 @@ pub fn render(
     // For each segment hash in the source covering, list outgoing links.
     let mut outgoing: BTreeMap<String, Vec<OutgoingLink>> = BTreeMap::new();
     let mut incoming: BTreeMap<(String, String), Vec<IncomingLink>> = BTreeMap::new();
-    // key for incoming: (target_repo, target_hash)
+    // key for incoming: (target_peer, target_hash)
     if let Some(src) = &src_cov {
         for cv in &conn_data {
             for p in &cv.k.links {
@@ -116,7 +114,7 @@ pub fn render(
                     .or_default()
                     .push(OutgoingLink {
                         conn_name: cv.k.name.clone(),
-                        target_repo: cv.k.target_repo.clone(),
+                        target_peer: cv.k.target_peer.clone(),
                         target_covering: cv.k.target_covering.clone(),
                         target_hash: b_key.clone(),
                         note: p.note.clone(),
@@ -124,7 +122,7 @@ pub fn render(
                         tgt_resolved: b_in,
                     });
                 incoming
-                    .entry((cv.k.target_repo.clone(), b_key.clone()))
+                    .entry((cv.k.target_peer.clone(), b_key.clone()))
                     .or_default()
                     .push(IncomingLink {
                         conn_name: cv.k.name.clone(),
@@ -239,7 +237,7 @@ struct ConnView {
 #[derive(Clone)]
 struct OutgoingLink {
     conn_name: String,
-    target_repo: String,
+    target_peer: String,
     target_covering: String,
     target_hash: String,
     note: String,
@@ -347,7 +345,7 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
                 }
             }
             for (f, n) in by_file {
-                let key = (cv.k.target_repo.clone(), cv.k.target_covering.clone(), f);
+                let key = (cv.k.target_peer.clone(), cv.k.target_covering.clone(), f);
                 *groups.entry(key).or_insert(0) += n;
             }
         }
@@ -470,7 +468,7 @@ fn links_block(links: &[OutgoingLink]) -> String {
             &l.target_hash,
             esc(&format!(
                 "{}:{}",
-                short_repo_name(&l.target_repo),
+                short_repo_name(&l.target_peer),
                 l.target_covering
             ))
         ));
@@ -554,7 +552,7 @@ fn render_target_view(
         // Only emit files that have at least one incoming link.
         let target_hashes_with_incoming: BTreeSet<&str> = incoming
             .keys()
-            .filter(|(rp, _)| rp == &cv.k.target_repo)
+            .filter(|(rp, _)| rp == &cv.k.target_peer)
             .map(|(_, h)| h.as_str())
             .collect();
 
@@ -571,21 +569,21 @@ fn render_target_view(
             }
             printed += 1;
 
-            let key = format!("{}::{}::{}", cv.k.target_repo, cv.k.target_covering, fname);
+            let key = format!("{}::{}::{}", cv.k.target_peer, cv.k.target_covering, fname);
             s.push_str(&format!(
                 "<div class=\"tgt-file\" data-target-file=\"{}\">\
                    <h2>{} <span class=\"sub\">[{} / {}]</span></h2>\
                    <pre class=\"tgt-pre\">",
                 esc(&key),
                 esc(fname),
-                esc(&short_repo_name(&cv.k.target_repo)),
+                esc(&short_repo_name(&cv.k.target_peer)),
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
                 let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
-                    .get(&(cv.k.target_repo.clone(), e.hash.clone()))
+                    .get(&(cv.k.target_peer.clone(), e.hash.clone()))
                     .cloned()
                     .unwrap_or_default();
                 let any_broken = inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved);
@@ -751,20 +749,20 @@ fn render_compare_view(
         }
         for (fname, entries) in &tgt_by_file {
             any_b = true;
-            let key = format!("{}::{}::{}", cv.k.target_repo, cv.k.target_covering, fname);
+            let key = format!("{}::{}::{}", cv.k.target_peer, cv.k.target_covering, fname);
             s.push_str(&format!(
                 "<div class=\"cmp-file-block\" data-cmp-file-b=\"{}\">\
                    <h3>{} <span class=\"sub\">[{} / {}]</span></h3><pre class=\"cmp-pre\">",
                 esc(&key),
                 esc(fname),
-                esc(&short_repo_name(&cv.k.target_repo)),
+                esc(&short_repo_name(&cv.k.target_peer)),
                 esc(&cv.k.target_covering)
             ));
             for (i, e) in entries.iter().enumerate() {
                 let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let inc = incoming
-                    .get(&(cv.k.target_repo.clone(), e.hash.clone()))
+                    .get(&(cv.k.target_peer.clone(), e.hash.clone()))
                     .cloned()
                     .unwrap_or_default();
                 let back_hashes: Vec<String> = inc.iter().map(|l| l.source_hash.clone()).collect();
@@ -790,7 +788,7 @@ fn render_compare_view(
                         status,
                         &inc,
                         &src_by_hash,
-                        &format!("{}::{}::", cv.k.target_repo, cv.k.target_covering),
+                        &format!("{}::{}::", cv.k.target_peer, cv.k.target_covering),
                     ))
                 ));
                 s.push_str(&esc(&content));
@@ -819,11 +817,11 @@ fn render_compare_view(
             if let Some(tc) = &cv.tgt_cov {
                 for e in &tc.entries {
                     let inc = incoming
-                        .get(&(cv.k.target_repo.clone(), e.hash.clone()))
+                        .get(&(cv.k.target_peer.clone(), e.hash.clone()))
                         .cloned()
                         .unwrap_or_default();
                     let key = (
-                        cv.k.target_repo.clone(),
+                        cv.k.target_peer.clone(),
                         cv.k.target_covering.clone(),
                         e.file.clone(),
                     );
@@ -915,13 +913,13 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
             s.push(',');
         }
         s.push_str(&format!(
-            "{{\"conn\":\"{}\",\"target_repo\":\"{}\",\"target_covering\":\"{}\",\"target_hash\":\"{}\",\"note\":\"{}\",\"target_file_key\":\"{}\",\"resolved\":{}}}",
+            "{{\"conn\":\"{}\",\"target_peer\":\"{}\",\"target_covering\":\"{}\",\"target_hash\":\"{}\",\"note\":\"{}\",\"target_file_key\":\"{}\",\"resolved\":{}}}",
             json_escape(&l.conn_name),
-            json_escape(&l.target_repo),
+            json_escape(&l.target_peer),
             json_escape(&l.target_covering),
             &l.target_hash,
             json_escape(&l.note),
-            json_escape(&format!("{}::{}::", l.target_repo, l.target_covering)),
+            json_escape(&format!("{}::{}::", l.target_peer, l.target_covering)),
             l.src_resolved && l.tgt_resolved
         ));
     }

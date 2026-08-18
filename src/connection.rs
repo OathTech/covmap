@@ -1,11 +1,11 @@
 //! Connections between two coverings.
 //!
 //! A connection is stored in the SOURCE repo's `.covmap/connections/<name>`
-//! and references the target repo by absolute path. File format:
+//! and references the target repo by a durable peer alias. File format:
 //!
 //! ```text
 //! # source_covering=<C_A>
-//! # target_repo=<abs/path>
+//! # target_peer=<alias-or-.>
 //! # target_covering=<C_B>
 //! <endpoint_A>\t<endpoint_B>[\t<note>]
 //! ...
@@ -27,6 +27,15 @@ pub struct Link {
 pub struct Connection {
     pub name: String,
     pub source_covering: String,
+    pub target_peer: String,
+    pub target_covering: String,
+    pub links: Vec<Link>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LegacyConnection {
+    pub name: String,
+    pub source_covering: String,
     pub target_repo: String,
     pub target_covering: String,
     pub links: Vec<Link>,
@@ -35,18 +44,24 @@ pub struct Connection {
 impl Connection {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
         let path = repo.connections_dir().join(&self.name);
+        atomic_write(&path, &self.serialize())
+    }
+
+    pub fn serialize(&self) -> String {
         let mut buf = String::new();
         buf.push_str(&format!("# source_covering={}\n", self.source_covering));
-        buf.push_str(&format!("# target_repo={}\n", self.target_repo));
+        buf.push_str(&format!("# target_peer={}\n", self.target_peer));
         buf.push_str(&format!("# target_covering={}\n", self.target_covering));
-        for p in &self.links {
+        let mut links = self.links.clone();
+        links.sort_by(|a, b| (&a.a, &a.b, &a.note).cmp(&(&b.a, &b.b, &b.note)));
+        for p in &links {
             if p.note.is_empty() {
                 buf.push_str(&format!("{}\t{}\n", p.a, p.b));
             } else {
                 buf.push_str(&format!("{}\t{}\t{}\n", p.a, p.b, p.note));
             }
         }
-        atomic_write(&path, &buf)
+        buf
     }
 
     pub fn read(repo: &Repo, name: &str) -> io::Result<Connection> {
@@ -58,14 +73,14 @@ impl Connection {
             )
         })?;
         let mut source_covering = String::new();
-        let mut target_repo = String::new();
+        let mut target_peer = String::new();
         let mut target_covering = String::new();
         let mut links = Vec::new();
         for line in raw.lines() {
             if let Some(v) = line.strip_prefix("# source_covering=") {
                 source_covering = v.to_string();
-            } else if let Some(v) = line.strip_prefix("# target_repo=") {
-                target_repo = v.to_string();
+            } else if let Some(v) = line.strip_prefix("# target_peer=") {
+                target_peer = v.to_string();
             } else if let Some(v) = line.strip_prefix("# target_covering=") {
                 target_covering = v.to_string();
             } else if line.is_empty() || line.starts_with('#') {
@@ -87,7 +102,7 @@ impl Connection {
         }
         for (field, value) in [
             ("source_covering", source_covering.as_str()),
-            ("target_repo", target_repo.as_str()),
+            ("target_peer", target_peer.as_str()),
             ("target_covering", target_covering.as_str()),
         ] {
             if value.is_empty() {
@@ -97,10 +112,16 @@ impl Connection {
                 ));
             }
         }
+        if !crate::peer::valid_alias(&target_peer) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("connection '{name}' has invalid target_peer '{target_peer}'"),
+            ));
+        }
         Ok(Connection {
             name: name.to_string(),
             source_covering,
-            target_repo,
+            target_peer,
             target_covering,
             links,
         })
@@ -132,6 +153,86 @@ impl Connection {
     }
 }
 
+impl LegacyConnection {
+    pub fn read(repo: &Repo, name: &str) -> io::Result<LegacyConnection> {
+        let path = repo.connections_dir().join(name);
+        let raw = fs::read_to_string(&path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("connection '{name}' not found at {}", path.display()),
+            )
+        })?;
+        let mut source_covering = String::new();
+        let mut target_repo = String::new();
+        let mut target_covering = String::new();
+        let mut links = Vec::new();
+        for line in raw.lines() {
+            if let Some(value) = line.strip_prefix("# source_covering=") {
+                source_covering = value.to_string();
+            } else if let Some(value) = line.strip_prefix("# target_repo=") {
+                target_repo = value.to_string();
+            } else if let Some(value) = line.strip_prefix("# target_covering=") {
+                target_covering = value.to_string();
+            } else if line.is_empty() || line.starts_with('#') {
+                continue;
+            } else {
+                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                if parts.len() < 2 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("malformed connection line: {line}"),
+                    ));
+                }
+                links.push(Link {
+                    a: parts[0].to_string(),
+                    b: parts[1].to_string(),
+                    note: parts.get(2).copied().unwrap_or("").to_string(),
+                });
+            }
+        }
+        for (field, value) in [
+            ("source_covering", source_covering.as_str()),
+            ("target_repo", target_repo.as_str()),
+            ("target_covering", target_covering.as_str()),
+        ] {
+            if value.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("connection '{name}' is missing required field '{field}'"),
+                ));
+            }
+        }
+        Ok(LegacyConnection {
+            name: name.to_string(),
+            source_covering,
+            target_repo,
+            target_covering,
+            links,
+        })
+    }
+
+    pub fn write(&self, repo: &Repo) -> io::Result<()> {
+        atomic_write(&repo.connections_dir().join(&self.name), &self.serialize())
+    }
+
+    pub fn serialize(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("# source_covering={}\n", self.source_covering));
+        out.push_str(&format!("# target_repo={}\n", self.target_repo));
+        out.push_str(&format!("# target_covering={}\n", self.target_covering));
+        let mut links = self.links.clone();
+        links.sort_by(|a, b| (&a.a, &a.b, &a.note).cmp(&(&b.a, &b.b, &b.note)));
+        for link in links {
+            if link.note.is_empty() {
+                out.push_str(&format!("{}\t{}\n", link.a, link.b));
+            } else {
+                out.push_str(&format!("{}\t{}\t{}\n", link.a, link.b, link.note));
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +259,7 @@ mod tests {
         let connection = Connection {
             name: "map".to_string(),
             source_covering: "source".to_string(),
-            target_repo: repo.root.to_string_lossy().to_string(),
+            target_peer: ".".to_string(),
             target_covering: "target".to_string(),
             links: vec![Link {
                 a: "@left".to_string(),
@@ -198,7 +299,64 @@ mod tests {
         let err = Connection::read(&repo, "broken").unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("target_repo"));
+        assert!(err.to_string().contains("target_peer"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn read_rejects_an_invalid_peer_alias() {
+        let repo = temp_repo("peer-alias");
+        let path = repo.connections_dir().join("broken");
+        fs::write(
+            &path,
+            "# source_covering=main\n\
+             # target_peer=bad alias\n\
+             # target_covering=main\n",
+        )
+        .unwrap();
+
+        let err = Connection::read(&repo, "broken").unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("invalid target_peer"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format3_connection_serialization_is_canonical() {
+        let repo = temp_repo("canonical");
+        let connection = Connection {
+            name: "map".to_string(),
+            source_covering: "source".to_string(),
+            target_peer: "impl".to_string(),
+            target_covering: "target".to_string(),
+            links: vec![
+                Link {
+                    a: "@z".to_string(),
+                    b: "@b".to_string(),
+                    note: "second".to_string(),
+                },
+                Link {
+                    a: "@a".to_string(),
+                    b: "@c".to_string(),
+                    note: "first".to_string(),
+                },
+            ],
+        };
+
+        connection.write(&repo).unwrap();
+        let raw = fs::read_to_string(repo.connections_dir().join("map")).unwrap();
+
+        assert_eq!(
+            raw,
+            "# source_covering=source\n\
+             # target_peer=impl\n\
+             # target_covering=target\n\
+             @a\t@c\tfirst\n\
+             @z\t@b\tsecond\n"
+        );
+        let read = Connection::read(&repo, "map").unwrap();
+        assert_eq!(read.target_peer, "impl");
         fs::remove_dir_all(repo.root).unwrap();
     }
 }

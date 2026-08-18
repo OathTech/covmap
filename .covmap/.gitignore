@@ -1,0 +1,7 @@
+# Local and reconstructible covmap state.
+# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+/local/
+/objects/
+/iterators/
+/*.html
+*.tmp

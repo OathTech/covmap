@@ -16,14 +16,15 @@
 @req14	@drift	broken endpoints after content or name-identity changes
 @req14	@inspection	broken-link reporting and prune
 @req14	@refinement	subdivision diagnostics expose narrowed name and broken hash endpoints
-@req15	@covering_partition	the partition invariant validates the complete cut plan before ref replacement
 @req15	@inspection	fsck verifies partitions and endpoints
+@req15	@partition_refinement	the partition invariant validates the complete cut plan before ref replacement
 @req16	@addressing	hash, name, position, connection, and endpoint operand forms
 @req16	@named_identity	name endpoint semantics
 @req16	@refinement	split-specific segment, position, and exact-file selector precedence
 @req17	@state_on_disk	versioned object store and text refs
 @req18	@discipline	explicit tracked-state discipline
 @req18	@refinement	ignore-controlled initial cover
+@req18	@selection	effective layered input selection and additive covered-set semantics
 @req19	@discipline	porcelain composed over primitives
 @req19	@plumbing	line-oriented plumbing commands
 @req19	@refinement	multi-cut composes position and object primitives into one atomic ref transition
@@ -43,8 +44,9 @@
 @req3	@segment_identity	content-only hash identity
 @req4	@refinement	split changes geometry; fragment status metadata is composed separately
 @req4	@segment_identity	label is ref-local, non-hashed metadata
-@req5	@covering_partition	finite cut-set insertion preserves a complete disjoint confined partition
+@req5	@partition_refinement	finite cut-set insertion preserves a complete disjoint confined partition
 @req6	@covering_partition	explicit covered set
 @req7	@refinement	additive idempotent initial cover
+@req7	@selection	selected candidates are additive and policy never removes covered paths
 @req8	@refinement	label-free atomic multi-cut, explicit merge, and separate metadata operations
 @req9	@sharing	automatic sharing by content address

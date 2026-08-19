@@ -112,26 +112,37 @@ preamble; `spec/errors.md` lists two error codes.
 
 ---
 
-## 1. Initialize, ignore, cover  (req1, req6, req7, req18)
+## 1. Initialize, select, cover  (req1, req6, req7, req18)
 
-Each repository gets its own `.covmap/`. **Before the first `cover`**,
-write `.covmap/ignore` so generated files never enter the covering — the
-single most important setup step.
+Each repository gets its own `.covmap/`. **Before the first `cover`**, define
+the source-of-truth set positively. The repository include is the default for
+all coverings; ignore is a hard veto. A covering-specific include replaces
+the global include for that covering.
 
 ```sh
 covmap init                          # in _play/spec
 (cd ../impl_rs && covmap init)
 
-printf 'build/\n' > .covmap/ignore   # keep build output out
+printf '/queue.md\n/errors.md\n' > .covmap/include
+printf 'build/\n' > .covmap/ignore
+printf '/queue.rs\n' > ../impl_rs/.covmap/include
+mkdir -p .covmap/selections/alt
+printf '/queue.md\n' > .covmap/selections/alt/include
 
 covmap cover
 (cd ../impl_rs && covmap cover)
 ```
 
-`cover` adds one whole-file `unknown` segment per readable file it has
-not yet covered — this first, unrefined covering is the *initial cover*.
-It is additive and idempotent. `build/artifact.txt` is absent from the
-covering because `build/` is ignored.
+`cover` adds one whole-file `unknown` segment per selected readable file it
+has not yet covered — this first, unrefined covering is the *initial cover*.
+It is additive and idempotent. `build/artifact.txt` is absent because the
+global ignore vetoes it. The predeclared `alt` policy is valid before the
+covering exists and is exercised in step 10.
+
+Selection affects future discovery only. Narrowing it later does not remove
+an existing covered path; `cover` warns and leaves the ref unchanged. A
+present empty include selects no new files. Active include patterns that match
+no discoverable file warn with their policy file and line number.
 
 ```
 Covering 'main': 2 segments, 20 lines (2 added)
@@ -398,8 +409,9 @@ project you would refine the impl side too.)
 The script commits each repository's sources and `.covmap/` artifact, then
 clones them into a different directory layout. It also creates local iterator,
 report, and temporary files before the commit to prove that the default policy
-excludes them. The clone contains the covering and connection refs but no
-object cache, peer binding, iterator state, report, or temporary file:
+excludes them. The clone contains the tracked selection policy, covering and
+connection refs, but no object cache, peer binding, iterator state, report, or
+temporary file:
 
 ```sh
 git add queue.md errors.md .covmap
@@ -460,14 +472,16 @@ do not invent one. A fan-out rename still emits one block, with every safe
 ```sh
 covmap show queue_links     # connection metadata + links
 covmap grep capacity        # segments whose label or content matches
-covmap cover alt            # a second, whole-file covering
+covmap cover alt            # specific include selects queue.md only
 covmap diff main alt        # added (-) / only-in-alt (+) / shared (=)
-covmap fsck                 # verify partitions + connection endpoints
+covmap fsck                 # verify policy, partitions, and endpoints
 covmap status
 ```
 
-`fsck: ok` confirms every covering is a valid partition and every
-connection endpoint resolves. `status` now shows the connection with its
+The `alt` covering uses `.covmap/selections/alt/include`, which replaces the
+global include, so it contains `queue.md` but not `errors.md`. `fsck: ok`
+confirms every covering is a valid partition, selection layout is valid, and
+every connection endpoint resolves. `status` now shows the connection with its
 **coverage** — how much of each side is mapped:
 
 ```
@@ -605,11 +619,11 @@ resolution, jumping around and skipping cannot strand a task — the covering
 is always fully reachable.
 
 An iterator can be **filtered to one label** — a backfill of just the
-not-yet-refined `unknown` segments, say. Here `alt` (from step 10) is the
-whole-file covering, so this freezes its two `unknown` segments:
+not-yet-refined `unknown` segments, say. Here `alt` (from step 10) selects
+only `queue.md`, so this freezes its one whole-file `unknown` segment:
 
 ```sh
-covmap iter backfill new alt --label unknown   # froze ... 2 task(s), label=unknown
+covmap iter backfill new alt --label unknown   # froze ... 1 task(s), label=unknown
 covmap iter                                    # bare `iter` lists every iterator
 ```
 

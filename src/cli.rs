@@ -11,7 +11,8 @@ use crate::peer;
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
 use crate::walk::{self, DEFAULT_LABEL};
-use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
@@ -147,7 +148,9 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
             "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  peek          list pending tasks\n  peek --all    list the complete frozen worklist with state and notes"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
-        "migrate" => "covmap migrate                              upgrade .covmap/ on-disk format (1/2 → 3)",
+        "migrate" => {
+            "covmap migrate [--recover-covering <legacy>]...  upgrade .covmap/ format (1/2/3 -> 4)"
+        }
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
         "ls-segments" => "covmap ls-segments <covering>",
@@ -167,7 +170,7 @@ Run `covmap --version` to print the version.
 
 PORCELAIN
   init                                create .covmap/ in the cwd
-  cover [<covering>]                  add one whole-file `unknown` segment per missing file
+  cover [<covering>]                  add selected missing files; report policy diagnostics
   hydrate [<covering>]                reconstruct missing live objects from matching source
   status [<covering>]                 cardinality, lines, drift, broken links
   show <addr> [--content] [--all]     inspect a segment, covering, region, link, or connection
@@ -190,7 +193,8 @@ PORCELAIN
   prune <K>                           drop links whose endpoints are no longer in their coverings
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
-  migrate                            upgrade .covmap/ on-disk format (1/2 → 3)
+  migrate [--recover-covering <legacy>]...
+                                     upgrade .covmap/ format (1/2/3 -> 4)
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
@@ -285,7 +289,10 @@ fn cmd_init(args: &[String]) -> io::Result<u8> {
     let _ = Repo::init(&cwd)?;
     println!("Initialized covmap in {}", cwd.join(".covmap").display());
     println!("  HEAD -> main (run `covmap cover` to populate)");
-    println!("  Project artifacts: .covmap/coverings, .covmap/connections, and covmap metadata");
+    println!(
+        "  Project artifacts: selection policy, .covmap/coverings, \
+         .covmap/connections, and covmap metadata"
+    );
     println!("  Local state:       .covmap/objects, .covmap/iterators, .covmap/local");
     println!("  Next:              git add .covmap");
     Ok(0)
@@ -294,10 +301,9 @@ fn cmd_init(args: &[String]) -> io::Result<u8> {
 // ---- cover ----------------------------------------------------------------
 
 /// `cover` is *additive and idempotent*: it walks the repo, and for
-/// every readable UTF-8 file that the covering doesn't already cover,
-/// it adds a single whole-file `unknown` segment. Existing segments
-/// are never touched. Files already partitioned by the covering are
-/// left alone (the user has presumably refined them with `split`).
+/// every selected readable UTF-8 file that the covering doesn't already
+/// cover, it adds a single whole-file `unknown` segment. Existing segments
+/// are never touched.
 fn cmd_cover(args: &[String]) -> io::Result<u8> {
     let mut name_override: Option<String> = None;
     for a in args {
@@ -317,20 +323,46 @@ fn cmd_cover(args: &[String]) -> io::Result<u8> {
     }
     let repo = current_repo()?;
     let name = match name_override {
-        Some(n) => n,
+        Some(n) if n == "HEAD" => repo.read_head()?,
+        Some(n) => {
+            crate::repo::validate_covering_name(&n)?;
+            n
+        }
         None => repo.read_head()?,
     };
     let mut cov = match Covering::read(&repo, &name) {
         Ok(c) => c,
-        Err(_) => Covering {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Covering {
             name: name.clone(),
             entries: Vec::new(),
         },
+        Err(error) => return Err(error),
     };
+    let policy = walk::SelectionPolicy::load(&repo, &name)?;
+    let selection = policy.select(&repo.root)?;
+    for pattern in &selection.unmatched_include {
+        let source = pattern
+            .file
+            .strip_prefix(&repo.root)
+            .unwrap_or(&pattern.file);
+        eprintln!(
+            "warning: {}:{}: include pattern '{}' matches no discoverable file",
+            source.display(),
+            pattern.line,
+            pattern.text
+        );
+    }
     let already = cov.covered_files();
+    for file in &already {
+        if !policy.admitted(file) {
+            eprintln!(
+                "warning: covering '{name}' keeps '{file}', which current selection policy does not admit"
+            );
+        }
+    }
     let mut added = 0usize;
     let mut skipped_binary = 0usize;
-    for rel in walk::walk_files(&repo.root)? {
+    for rel in selection.files {
         let rel_str = walk::rel_string(&rel);
         if already.contains(&rel_str) {
             continue;
@@ -700,13 +732,13 @@ fn cmd_show(args: &[String]) -> io::Result<u8> {
     // Covering selector: `<C>` — either a region within it, or the whole
     // covering listing.
     if let Some(cname) = &covering {
-        if repo.coverings_dir().join(cname).is_file() {
+        if repo.covering_exists(cname).unwrap_or(false) {
             let c = Covering::read(&repo, cname)?;
             if let Some(region) = parse_region(&c, &prefix) {
                 return show_region(&repo, &c, &region?);
             }
         }
-    } else if repo.coverings_dir().join(addr).is_file() {
+    } else if repo.covering_exists(addr).unwrap_or(false) {
         let c = Covering::read(&repo, addr)?;
         return show_covering(&repo, &c);
     }
@@ -1491,7 +1523,7 @@ fn cmd_ls(args: &[String]) -> io::Result<u8> {
 /// the covering only when it names an existing covering or HEAD; otherwise
 /// every positional is a region under HEAD.
 fn split_ls_positionals(repo: &Repo, positionals: &[String]) -> (String, Vec<String>, bool) {
-    let is_cov = |s: &str| repo.coverings_dir().join(s).is_file() || s == "HEAD";
+    let is_cov = |s: &str| repo.covering_exists(s).unwrap_or(false) || s == "HEAD";
     match positionals.first() {
         Some(first) if is_cov(first) => (first.clone(), positionals[1..].to_vec(), false),
         _ => ("HEAD".to_string(), positionals.to_vec(), true),
@@ -2237,18 +2269,23 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
 /// left untouched and its segments reported as unresolved. With an address
 /// `<C>:<addr>` only that segment's file is remapped; otherwise every
 /// drifted file in the covering is.
-fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
-    let repo = current_repo()?;
-    let (covname, only_file) = match addr {
+fn remap_scope(repo: &Repo, addr: Option<&str>) -> io::Result<(String, Option<String>)> {
+    match addr {
+        Some(a) if a == "HEAD" || repo.covering_exists(a)? => Ok((a.to_string(), None)),
         Some(a) => {
             let (cn, seg) = parse_addr(a);
             let covname = cn.unwrap_or_else(|| "HEAD".to_string());
-            let c = resolve_covering(&repo, &covname)?;
+            let c = resolve_covering(repo, &covname)?;
             let idx = covering::resolve_segment(&c, &seg)?;
-            (covname, Some(c.entries[idx].file.clone()))
+            Ok((covname, Some(c.entries[idx].file.clone())))
         }
-        None => ("HEAD".to_string(), None),
-    };
+        None => Ok(("HEAD".to_string(), None)),
+    }
+}
+
+fn cmd_recut_remap(addr: Option<&str>, threshold: f64) -> io::Result<u8> {
+    let repo = current_repo()?;
+    let (covname, only_file) = remap_scope(&repo, addr)?;
     let mut c = resolve_covering(&repo, &covname)?;
 
     // Group entry indices by file.
@@ -3328,34 +3365,833 @@ fn cmd_html(args: &[String]) -> io::Result<u8> {
 
 // ---- migrate --------------------------------------------------------------
 
-fn cmd_migrate(_args: &[String]) -> io::Result<u8> {
+fn cmd_migrate(args: &[String]) -> io::Result<u8> {
+    let mut recoveries = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--recover-covering" => {
+                let name = args.get(index + 1).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "migrate: --recover-covering needs a legacy name",
+                    )
+                })?;
+                recoveries.push(name.clone());
+                index += 2;
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("migrate: unexpected argument '{other}'"),
+                ))
+            }
+        }
+    }
+
     let repo = Repo::discover_unchecked(&env::current_dir()?)?;
     let mut version = repo.read_version().unwrap_or_default();
+    if !matches!(version.as_str(), "1" | "2" | "3" | "4") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("cannot migrate from format '{version}' (expected '1', '2', '3', or '4')"),
+        ));
+    }
+    if version == "4" {
+        if !recoveries.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "migrate: --recover-covering applies only to legacy formats",
+            ));
+        }
+        ensure_format4_gitignore(&repo)?;
+        cleanup_published_migration(&repo)?;
+        cleanup_name_migration(&repo)?;
+        println!("repository format is 4 - no version migration needed");
+        return Ok(0);
+    }
+
+    normalize_legacy_covering_names(&repo, &recoveries)?;
     match version.as_str() {
         "3" => {
             if cleanup_published_migration(&repo)? {
                 println!("format 3 migration was already published; removed stale staging state");
-            } else {
-                println!("already at format 3 — nothing to migrate");
             }
-            return Ok(0);
         }
         "1" => {
             migrate_v1_to_v2(&repo)?;
             version = "2".to_string();
         }
         "2" => {}
-        other => {
+        _ => unreachable!(),
+    }
+    if version == "2" {
+        migrate_v2_to_v3(&repo)?;
+    }
+    migrate_v3_to_v4(&repo)?;
+    println!("run `covmap fsck` to confirm every partition and endpoint resolves");
+    Ok(0)
+}
+
+const ESCAPED_COVERING_PREFIX: &str = "covmap-escaped-";
+
+#[derive(Clone, Debug, Default)]
+struct NameMigrationManifest {
+    recoveries: BTreeSet<String>,
+    mappings: BTreeMap<String, String>,
+    sources: BTreeMap<String, String>,
+    selections: BTreeSet<String>,
+}
+
+fn migrated_covering_name(name: &str) -> String {
+    if crate::repo::valid_covering_name(name) && !name.starts_with(ESCAPED_COVERING_PREFIX) {
+        return name.to_string();
+    }
+    let digest = Sha256::digest(name.as_bytes());
+    let mut escaped = String::with_capacity(ESCAPED_COVERING_PREFIX.len() + digest.len() * 2);
+    escaped.push_str(ESCAPED_COVERING_PREFIX);
+    for byte in digest {
+        escaped.push_str(&format!("{byte:02x}"));
+    }
+    escaped
+}
+
+fn name_migration_dir(repo: &Repo) -> PathBuf {
+    repo.local_dir().join("migrate-covering-names")
+}
+
+fn name_migration_manifest(repo: &Repo) -> PathBuf {
+    name_migration_dir(repo).join("manifest")
+}
+
+fn cleanup_name_migration(repo: &Repo) -> io::Result<bool> {
+    let path = name_migration_dir(repo);
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn hex_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 2);
+    for byte in value.as_bytes() {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn hex_decode(value: &str) -> io::Result<String> {
+    if value.len() % 2 != 0 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid hex field in covering-name migration manifest",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for offset in (0..value.len()).step_by(2) {
+        bytes.push(
+            u8::from_str_radix(&value[offset..offset + 2], 16).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid hex field in covering-name migration manifest",
+                )
+            })?,
+        );
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "non-UTF-8 field in covering-name migration manifest",
+        )
+    })
+}
+
+fn serialize_name_migration_manifest(manifest: &NameMigrationManifest) -> String {
+    let mut out = String::from("ready\n");
+    for recovery in &manifest.recoveries {
+        out.push_str(&format!("recover\t{}\n", hex_encode(recovery)));
+    }
+    for (old, new) in &manifest.mappings {
+        out.push_str(&format!("map\t{}\t{new}\n", hex_encode(old)));
+    }
+    for (old, source) in &manifest.sources {
+        out.push_str(&format!(
+            "source\t{}\t{}\n",
+            hex_encode(old),
+            hex_encode(source)
+        ));
+    }
+    for selection in &manifest.selections {
+        out.push_str(&format!("selection\t{}\n", hex_encode(selection)));
+    }
+    out
+}
+
+fn read_name_migration_manifest(repo: &Repo) -> io::Result<Option<NameMigrationManifest>> {
+    let path = name_migration_manifest(repo);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut lines = raw.lines();
+    if lines.next() != Some("ready") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "invalid covering-name migration manifest at {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut manifest = NameMigrationManifest::default();
+    for line in lines {
+        let fields: Vec<&str> = line.split('\t').collect();
+        match fields.as_slice() {
+            ["recover", old] => {
+                manifest.recoveries.insert(hex_decode(old)?);
+            }
+            ["map", old, new] if crate::repo::valid_covering_name(new) => {
+                manifest
+                    .mappings
+                    .insert(hex_decode(old)?, (*new).to_string());
+            }
+            ["source", old, source] => {
+                manifest
+                    .sources
+                    .insert(hex_decode(old)?, hex_decode(source)?);
+            }
+            ["selection", old] => {
+                manifest.selections.insert(hex_decode(old)?);
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid covering-name migration manifest record '{line}'"),
+                ))
+            }
+        }
+    }
+    Ok(Some(manifest))
+}
+
+fn normalize_legacy_covering_names(repo: &Repo, recoveries: &[String]) -> io::Result<()> {
+    if let Some(manifest) = read_name_migration_manifest(repo)? {
+        let supplied: BTreeSet<String> = recoveries.iter().cloned().collect();
+        if !supplied.is_empty() && supplied != manifest.recoveries {
             return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("cannot migrate from format '{other}' (expected '1' or '2')"),
+                io::ErrorKind::InvalidInput,
+                "migrate: recovery arguments differ from the ready migration manifest; \
+                 resume without arguments or repeat the same set",
+            ));
+        }
+        println!("resuming staged legacy covering-name normalization");
+        publish_name_migration(repo, &manifest)?;
+        return Ok(());
+    }
+
+    let manifest = stage_name_migration(repo, recoveries)?;
+    if manifest.mappings.iter().all(|(old, new)| old == new) && manifest.recoveries.is_empty() {
+        cleanup_name_migration(repo)?;
+        return Ok(());
+    }
+    publish_name_migration(repo, &manifest)
+}
+
+fn stage_name_migration(repo: &Repo, recoveries: &[String]) -> io::Result<NameMigrationManifest> {
+    let root = name_migration_dir(repo);
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
+    }
+    let staged = root.join("staged");
+    fs::create_dir_all(staged.join("coverings"))?;
+    fs::create_dir_all(staged.join("connections"))?;
+    fs::create_dir_all(staged.join("iterators"))?;
+    fs::create_dir_all(staged.join("selections"))?;
+
+    let mut manifest = NameMigrationManifest::default();
+    let mut local_names = BTreeSet::new();
+
+    let raw_head = fs::read_to_string(repo.head_file())?;
+    let head_name = raw_head.trim_end_matches(&['\r', '\n'][..]).to_string();
+    if head_name.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy HEAD contains an empty covering name",
+        ));
+    }
+    manifest.mappings.insert(head_name.clone(), String::new());
+    local_names.insert(head_name);
+
+    let connection_files = legacy_regular_files(&repo.connections_dir(), false)?;
+    for (name, path) in &connection_files {
+        let raw = fs::read_to_string(path)?;
+        if let Some(source) = stored_metadata_value(&raw, "# source_covering=") {
+            manifest.mappings.insert(source.clone(), String::new());
+            local_names.insert(source);
+        }
+        if let Some(target) = stored_metadata_value(&raw, "# target_covering=") {
+            manifest.mappings.insert(target, String::new());
+        }
+        crate::store::atomic_write(&staged.join("connections").join(name), &raw)?;
+    }
+
+    let iterator_files = legacy_regular_files(&repo.iterators_dir(), false)?;
+    for (name, path) in &iterator_files {
+        let raw = fs::read_to_string(path)?;
+        if let Some(covering) = stored_metadata_value(&raw, "# covering=") {
+            manifest.mappings.insert(covering.clone(), String::new());
+            local_names.insert(covering);
+        }
+        crate::store::atomic_write(&staged.join("iterators").join(name), &raw)?;
+    }
+
+    for recovery in recoveries {
+        if migrated_covering_name(recovery) == *recovery {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "migrate: recovery name '{recovery}' is already a normal format-4 covering name"
+                ),
+            ));
+        }
+        manifest.recoveries.insert(recovery.clone());
+        manifest.mappings.insert(recovery.clone(), String::new());
+        local_names.insert(recovery.clone());
+    }
+
+    let direct_coverings = legacy_regular_files(&repo.coverings_dir(), true)?;
+    for (name, path) in direct_coverings {
+        manifest.mappings.insert(name.clone(), String::new());
+        manifest.sources.insert(
+            name,
+            relative_to_dot(repo, &path)?.to_string_lossy().to_string(),
+        );
+    }
+
+    inventory_legacy_selections(repo, &mut manifest)?;
+
+    for name in &local_names {
+        if manifest.sources.contains_key(name) {
+            continue;
+        }
+        if let Some(path) = legacy_covering_source(repo, name)? {
+            manifest.sources.insert(
+                name.clone(),
+                relative_to_dot(repo, &path)?.to_string_lossy().to_string(),
+            );
+        } else if manifest.recoveries.contains(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("migrate: recovered covering '{name}' has no safe legacy ref"),
             ));
         }
     }
-    debug_assert_eq!(version, "2");
-    migrate_v2_to_v3(&repo)?;
-    println!("run `covmap fsck` to confirm every partition and endpoint resolves");
-    Ok(0)
+    validate_nested_covering_sources(repo, &manifest)?;
+
+    let names: Vec<String> = manifest.mappings.keys().cloned().collect();
+    let mut outputs = BTreeMap::<String, String>::new();
+    for old in names {
+        let new = migrated_covering_name(&old);
+        crate::repo::validate_covering_name(&new)?;
+        if let Some(previous) = outputs.insert(new.clone(), old.clone()) {
+            if previous != old {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "covering-name migration collision: '{previous}' and '{old}' both map to '{new}'"
+                    ),
+                ));
+            }
+        }
+        manifest.mappings.insert(old, new);
+    }
+
+    let mut claimed_sources = BTreeMap::<String, String>::new();
+    for (old, source) in &manifest.sources {
+        if let Some(previous) = claimed_sources.insert(source.clone(), old.clone()) {
+            if previous != *old {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "legacy covering source '{}' is claimed by both '{}' and '{}'",
+                        repo.dot().join(source).display(),
+                        previous,
+                        old
+                    ),
+                ));
+            }
+        }
+        let raw = fs::read_to_string(repo.dot().join(source))?;
+        let new = &manifest.mappings[old];
+        Covering::parse(new, &raw).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "legacy covering '{}' at {} is not a valid covering ref: {error}",
+                    old,
+                    repo.dot().join(source).display()
+                ),
+            )
+        })?;
+        crate::store::atomic_write(&staged.join("coverings").join(new), &raw)?;
+    }
+
+    stage_rewritten_metadata(repo, &staged, &manifest, &connection_files, &iterator_files)?;
+    crate::store::atomic_write(
+        &name_migration_manifest(repo),
+        &serialize_name_migration_manifest(&manifest),
+    )?;
+    Ok(manifest)
+}
+
+fn legacy_regular_files(dir: &Path, allow_directories: bool) -> io::Result<Vec<(String, PathBuf)>> {
+    let metadata = match fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "legacy artifact path is not a regular directory: {}",
+                dir.display()
+            ),
+        ));
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "legacy artifact name is not valid UTF-8: {}",
+                    entry.path().display()
+                ),
+            )
+        })?;
+        if crate::store::is_atomic_temp_name(&name) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("migration refuses symbolic link {}", entry.path().display()),
+            ));
+        }
+        if metadata.is_file() {
+            files.push((name, entry.path()));
+        } else if !allow_directories || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unexpected legacy artifact entry {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+fn stored_metadata_value(raw: &str, prefix: &str) -> Option<String> {
+    raw.lines()
+        .find_map(|line| line.strip_prefix(prefix).map(str::to_string))
+}
+
+fn relative_to_dot<'a>(repo: &Repo, path: &'a Path) -> io::Result<&'a Path> {
+    path.strip_prefix(repo.dot()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "migration source escapes {}: {}",
+                repo.dot().display(),
+                path.display()
+            ),
+        )
+    })
+}
+
+fn legacy_covering_source(repo: &Repo, name: &str) -> io::Result<Option<PathBuf>> {
+    use std::path::Component;
+
+    let mut components = vec![std::ffi::OsString::from("coverings")];
+    for component in Path::new(name).components() {
+        match component {
+            Component::Normal(value) => components.push(value.to_os_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if components.pop().is_none() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("legacy covering '{name}' resolves outside .covmap"),
+                    ));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("legacy covering '{name}' is an absolute path"),
+                ))
+            }
+        }
+    }
+    if components.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("legacy covering '{name}' resolves outside .covmap"),
+        ));
+    }
+    if components.len() == 1 {
+        let reserved = components[0].to_string_lossy();
+        if matches!(
+            reserved.as_ref(),
+            "version"
+                | "HEAD"
+                | "include"
+                | "ignore"
+                | ".gitignore"
+                | "objects"
+                | "connections"
+                | "iterators"
+                | "local"
+                | "selections"
+        ) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "legacy covering '{name}' resolves to reserved metadata {}",
+                    repo.dot().join(&components[0]).display()
+                ),
+            ));
+        }
+    }
+
+    let mut path = repo.dot();
+    for (offset, component) in components.iter().enumerate() {
+        path.push(component);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("migration refuses symbolic link {}", path.display()),
+            ));
+        }
+        let final_component = offset + 1 == components.len();
+        if (!final_component && !metadata.is_dir()) || (final_component && !metadata.is_file()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "legacy covering source is not a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(Some(path))
+}
+
+fn inventory_legacy_selections(
+    repo: &Repo,
+    manifest: &mut NameMigrationManifest,
+) -> io::Result<()> {
+    let root = repo.selections_dir();
+    let metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "selection root is not a regular directory: {}",
+                root.display()
+            ),
+        ));
+    }
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "selection directory name is not valid UTF-8: {}",
+                    entry.path().display()
+                ),
+            )
+        })?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "selection entry is not a regular directory: {}",
+                    entry.path().display()
+                ),
+            ));
+        }
+        for child in fs::read_dir(entry.path())? {
+            let child = child?;
+            if !matches!(child.file_name().to_str(), Some("include" | "ignore")) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "unexpected selection policy entry {}",
+                        child.path().display()
+                    ),
+                ));
+            }
+            let child_metadata = fs::symlink_metadata(child.path())?;
+            if child_metadata.file_type().is_symlink() || !child_metadata.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "selection policy is not a regular file: {}",
+                        child.path().display()
+                    ),
+                ));
+            }
+            fs::read_to_string(child.path()).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "cannot read selection policy {}: {error}",
+                        child.path().display()
+                    ),
+                )
+            })?;
+        }
+        manifest.mappings.insert(name.clone(), String::new());
+        manifest.selections.insert(name);
+    }
+    Ok(())
+}
+
+fn collect_covering_tree_files(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("migration refuses symbolic link {}", entry.path().display()),
+            ));
+        }
+        if metadata.is_dir() {
+            collect_covering_tree_files(&entry.path(), out)?;
+        } else if metadata.is_file() {
+            let name = entry.file_name();
+            if !name.to_str().is_some_and(crate::store::is_atomic_temp_name) {
+                out.push(entry.path());
+            }
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected covering artifact {}", entry.path().display()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_nested_covering_sources(
+    repo: &Repo,
+    manifest: &NameMigrationManifest,
+) -> io::Result<()> {
+    let claimed: BTreeSet<String> = manifest.sources.values().cloned().collect();
+    let mut files = Vec::new();
+    collect_covering_tree_files(&repo.coverings_dir(), &mut files)?;
+    for file in files {
+        let relative = relative_to_dot(repo, &file)?.to_string_lossy().to_string();
+        if !claimed.contains(&relative) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "legacy covering path {} has no unambiguous covering identity; \
+                     reference it from HEAD/metadata or pass --recover-covering",
+                    file.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_metadata_fields(
+    raw: &str,
+    prefixes: &[&str],
+    mappings: &BTreeMap<String, String>,
+) -> io::Result<String> {
+    let mut out = String::new();
+    for line in raw.lines() {
+        let mut rewritten = false;
+        for prefix in prefixes {
+            if let Some(value) = line.strip_prefix(prefix) {
+                let mapped = mappings.get(value).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("migration inventory omitted covering name '{value}'"),
+                    )
+                })?;
+                out.push_str(prefix);
+                out.push_str(mapped);
+                out.push('\n');
+                rewritten = true;
+                break;
+            }
+        }
+        if !rewritten {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !raw.ends_with('\n') {
+        out.pop();
+    }
+    Ok(out)
+}
+
+fn stage_rewritten_metadata(
+    repo: &Repo,
+    staged: &Path,
+    manifest: &NameMigrationManifest,
+    connection_files: &[(String, PathBuf)],
+    iterator_files: &[(String, PathBuf)],
+) -> io::Result<()> {
+    let version = repo.read_version()?;
+    let raw = fs::read_to_string(repo.head_file())?;
+    let old = raw.trim_end_matches(&['\r', '\n'][..]);
+    let new = manifest.mappings.get(old).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("migration inventory omitted HEAD covering '{old}'"),
+        )
+    })?;
+    crate::store::atomic_write(&staged.join("HEAD"), &format!("{new}\n"))?;
+    for (name, path) in connection_files {
+        let raw = fs::read_to_string(path)?;
+        let rewritten = rewrite_metadata_fields(
+            &raw,
+            &["# source_covering=", "# target_covering="],
+            &manifest.mappings,
+        )?;
+        match version.as_str() {
+            "1" | "2" => {
+                LegacyConnection::parse(name, &rewritten)?;
+            }
+            "3" => {
+                Connection::parse(name, &rewritten)?;
+            }
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("cannot stage covering-name migration for format '{other}'"),
+                ))
+            }
+        }
+        crate::store::atomic_write(&staged.join("connections").join(name), &rewritten)?;
+    }
+    for (name, path) in iterator_files {
+        let raw = fs::read_to_string(path)?;
+        let rewritten = rewrite_metadata_fields(&raw, &["# covering="], &manifest.mappings)?;
+        Iter::parse(name, &rewritten)?;
+        crate::store::atomic_write(&staged.join("iterators").join(name), &rewritten)?;
+    }
+    for old in &manifest.selections {
+        let new = &manifest.mappings[old];
+        let source = repo.selections_dir().join(old);
+        let target = staged.join("selections").join(new);
+        fs::create_dir_all(&target)?;
+        for policy in ["include", "ignore"] {
+            let path = source.join(policy);
+            match fs::read_to_string(&path) {
+                Ok(raw) => crate::store::atomic_write(&target.join(policy), &raw)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn publish_name_migration(repo: &Repo, manifest: &NameMigrationManifest) -> io::Result<()> {
+    let staged = name_migration_dir(repo).join("staged");
+    publish_staged_directory(&staged.join("coverings"), &repo.coverings_dir())?;
+    publish_staged_directory(&staged.join("connections"), &repo.connections_dir())?;
+    publish_staged_directory(&staged.join("iterators"), &repo.iterators_dir())?;
+    if staged.join("HEAD").is_file() {
+        let head = fs::read_to_string(staged.join("HEAD"))?;
+        repo.write_head(head.trim_end_matches(&['\r', '\n'][..]))?;
+    }
+    if staged.join("selections").is_dir() {
+        for entry in fs::read_dir(staged.join("selections"))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let target = repo.selections_dir().join(&name);
+            fs::create_dir_all(&target)?;
+            publish_staged_directory(&entry.path(), &target)?;
+        }
+    }
+
+    for (old, source) in &manifest.sources {
+        let target = PathBuf::from("coverings").join(&manifest.mappings[old]);
+        if Path::new(source) != target {
+            let path = repo.dot().join(source);
+            if path.exists() {
+                fs::remove_file(&path)?;
+                remove_empty_covering_parents(repo, path.parent())?;
+            }
+        }
+    }
+    for old in &manifest.selections {
+        if manifest.mappings[old] != *old {
+            let path = repo.selections_dir().join(old);
+            if path.exists() {
+                fs::remove_dir_all(path)?;
+            }
+        }
+    }
+
+    for (old, new) in &manifest.mappings {
+        if old != new {
+            println!("covering name '{old}' -> '{new}'");
+        }
+    }
+    fs::remove_dir_all(name_migration_dir(repo))?;
+    Ok(())
+}
+
+fn remove_empty_covering_parents(repo: &Repo, mut path: Option<&Path>) -> io::Result<()> {
+    let root = repo.coverings_dir();
+    while let Some(current) = path {
+        if current == root || !current.starts_with(&root) {
+            break;
+        }
+        match fs::remove_dir(current) {
+            Ok(()) => path = current.parent(),
+            Err(error) => {
+                if fs::read_dir(current)?.next().is_some() {
+                    break;
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn cleanup_published_migration(repo: &Repo) -> io::Result<bool> {
@@ -3449,14 +4285,49 @@ fn migrate_v1_to_v2(repo: &Repo) -> io::Result<()> {
 fn ensure_default_gitignore(repo: &Repo) -> io::Result<()> {
     let path = repo.dot().join(".gitignore");
     match fs::read_to_string(&path) {
-        Ok(existing) => {
-            for required in ["/local/", "/objects/", "/iterators/", "/*.html", "*.tmp"] {
-                if !existing.lines().any(|line| line.trim() == required) {
-                    eprintln!("warning: existing .covmap/.gitignore does not exclude '{required}'");
-                }
-            }
+        Ok(existing) => warn_gitignore_policy(&existing),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            crate::store::atomic_write(&path, crate::repo::DEFAULT_GITIGNORE)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn warn_gitignore_policy(existing: &str) -> io::Result<()> {
+    for required in [
+        "/local/",
+        "/objects/",
+        "/iterators/",
+        "/*.html",
+        r"\#covmap-tmp-*.tmp",
+    ] {
+        if !existing.lines().any(|line| line.trim() == required) {
+            eprintln!("warning: existing .covmap/.gitignore does not exclude '{required}'");
+        }
+    }
+    if existing.lines().any(|line| line.trim() == "*.tmp") {
+        eprintln!(
+            "warning: existing .covmap/.gitignore pattern '*.tmp' can hide valid project refs; \
+             replace it with '\\#covmap-tmp-*.tmp'"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_format4_gitignore(repo: &Repo) -> io::Result<()> {
+    let path = repo.dot().join(".gitignore");
+    match fs::read_to_string(&path) {
+        Ok(existing)
+            if matches!(
+                existing.as_str(),
+                crate::repo::FORMAT3_DEFAULT_GITIGNORE | crate::repo::BROAD_TMP_DEFAULT_GITIGNORE
+            ) =>
+        {
+            crate::store::atomic_write(&path, crate::repo::DEFAULT_GITIGNORE)?;
+            println!("updated generated .covmap/.gitignore atomic-temp rule");
             Ok(())
         }
+        Ok(existing) => warn_gitignore_policy(&existing),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             crate::store::atomic_write(&path, crate::repo::DEFAULT_GITIGNORE)
         }
@@ -3698,6 +4569,46 @@ fn migrate_v2_to_v3(repo: &Repo) -> io::Result<()> {
     Ok(())
 }
 
+fn migrate_v3_to_v4(repo: &Repo) -> io::Result<()> {
+    let version = repo.read_version()?;
+    if version != "3" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("format 3 -> 4 migration expected version 3, found '{version}'"),
+        ));
+    }
+
+    repo.read_head()?;
+    for name in Covering::list(repo)? {
+        Covering::read(repo, &name)?;
+    }
+    for name in Connection::list(repo)? {
+        Connection::read(repo, &name)?;
+    }
+    for name in Iter::list(repo)? {
+        Iter::read(repo, &name)?;
+    }
+    let policy_issues = walk::layout_issues(repo);
+    if !policy_issues.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "cannot activate format 4 with invalid selection policy:\n  {}",
+                policy_issues.join("\n  ")
+            ),
+        ));
+    }
+
+    ensure_format4_gitignore(repo)?;
+    fs::create_dir_all(repo.selections_dir())?;
+    crate::store::atomic_write(&repo.dot().join("version"), "4\n")?;
+    println!(
+        "migrated to format 4: covering-input selection is tracked; \
+         existing ignore-only discovery behavior is unchanged"
+    );
+    Ok(())
+}
+
 /// Read a format-1 object body and return its content, stripping the
 /// leading `label \0` prefix. Format-1 objects always contain a NUL; if
 /// one is somehow absent, treat the whole body as content.
@@ -3931,6 +4842,14 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
 
     let repo = current_repo()?;
     let mut errs = 0usize;
+    if let Err(error) = repo.read_head() {
+        eprintln!("fsck: HEAD: {error}");
+        errs += 1;
+    }
+    for issue in walk::layout_issues(&repo) {
+        eprintln!("fsck: selection policy: {issue}");
+        errs += 1;
+    }
     let bindings = peer::read_bindings(&repo)?;
     for issue in &bindings.issues {
         eprintln!("fsck: peer bindings: {issue}");
@@ -3942,6 +4861,12 @@ fn cmd_fsck(args: &[String]) -> io::Result<u8> {
              run `covmap peer rename {old} {new}` to resume"
         );
         errs += 1;
+    }
+    for name in Iter::list(&repo)? {
+        if let Err(error) = Iter::read(&repo, &name) {
+            eprintln!("fsck: iterator {name}: {error}");
+            errs += 1;
+        }
     }
     if !broken_only {
         for cn in Covering::list(&repo)? {
@@ -4251,6 +5176,28 @@ mod tests {
                 vec!["one.md".to_string(), "two.md".to_string()],
                 false
             )
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn remap_scope_accepts_a_bare_covering_name() {
+        let repo = temp_repo("remap-covering");
+        initialize_test_repo(&repo);
+        Covering {
+            name: "theory".to_string(),
+            entries: Vec::new(),
+        }
+        .write(&repo)
+        .unwrap();
+
+        assert_eq!(
+            remap_scope(&repo, Some("theory")).unwrap(),
+            ("theory".to_string(), None)
+        );
+        assert_eq!(
+            remap_scope(&repo, Some("HEAD")).unwrap(),
+            ("HEAD".to_string(), None)
         );
         fs::remove_dir_all(repo.root).unwrap();
     }
@@ -5037,6 +5984,216 @@ mod tests {
         assert_eq!(connection.target_peer, ".");
         assert_eq!(connection.links[0].a, new_hash);
         assert_eq!(connection.links[0].b, new_hash);
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn covering_name_migration_is_deterministic_and_reserves_its_prefix() {
+        let escaped = migrated_covering_name("foo:bar");
+        assert!(escaped.starts_with(ESCAPED_COVERING_PREFIX));
+        assert_eq!(escaped.len(), ESCAPED_COVERING_PREFIX.len() + 64);
+        assert_eq!(escaped, migrated_covering_name("foo:bar"));
+        assert_eq!(migrated_covering_name("ordinary"), "ordinary");
+        assert_ne!(
+            migrated_covering_name(&format!("{ESCAPED_COVERING_PREFIX}ordinary")),
+            format!("{ESCAPED_COVERING_PREFIX}ordinary")
+        );
+    }
+
+    #[test]
+    fn format3_migration_rewrites_unsafe_names_across_all_artifacts() {
+        let repo = temp_repo("migrate-unsafe-name");
+        initialize_test_repo(&repo);
+        fs::create_dir_all(repo.iterators_dir()).unwrap();
+        fs::create_dir_all(repo.selections_dir().join("foo:bar")).unwrap();
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+        fs::write(repo.head_file(), "foo:bar\n").unwrap();
+        fs::write(repo.coverings_dir().join("foo:bar"), "").unwrap();
+        fs::write(
+            repo.connections_dir().join("self"),
+            "# source_covering=foo:bar\n# target_peer=.\n# target_covering=foo:bar\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.iterators_dir().join("work"),
+            "# covering=foo:bar\n# order=file\n",
+        )
+        .unwrap();
+        fs::write(repo.selections_dir().join("foo:bar/include"), "src/\n").unwrap();
+
+        normalize_legacy_covering_names(&repo, &[]).unwrap();
+        let escaped = migrated_covering_name("foo:bar");
+
+        assert_eq!(repo.read_head().unwrap(), escaped);
+        assert!(repo.covering_path(&escaped).unwrap().is_file());
+        assert!(!repo.coverings_dir().join("foo:bar").exists());
+        let connection = Connection::read(&repo, "self").unwrap();
+        assert_eq!(connection.source_covering, escaped);
+        assert_eq!(connection.target_covering, escaped);
+        assert_eq!(Iter::read(&repo, "work").unwrap().covering, escaped);
+        assert_eq!(
+            fs::read_to_string(repo.selection_dir(&escaped).unwrap().join("include")).unwrap(),
+            "src/\n"
+        );
+        assert!(!repo.selections_dir().join("foo:bar").exists());
+
+        migrate_v3_to_v4(&repo).unwrap();
+        assert_eq!(repo.read_version().unwrap(), "4");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn migration_recovery_repairs_an_unreferenced_parent_traversal_ref() {
+        let repo = temp_repo("migrate-recovery");
+        initialize_test_repo(&repo);
+        fs::create_dir_all(repo.iterators_dir()).unwrap();
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+        fs::write(repo.dot().join("evil"), "").unwrap();
+
+        let manifest = stage_name_migration(&repo, &["../evil".to_string()]).unwrap();
+        assert!(manifest.recoveries.contains("../evil"));
+        normalize_legacy_covering_names(&repo, &[]).unwrap();
+
+        let escaped = migrated_covering_name("../evil");
+        assert!(repo.covering_path(&escaped).unwrap().is_file());
+        assert!(!repo.dot().join("evil").exists());
+        assert!(!name_migration_dir(&repo).exists());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn migration_repairs_a_referenced_parent_traversal_ref() {
+        let repo = temp_repo("migrate-referenced-traversal");
+        initialize_test_repo(&repo);
+        fs::create_dir_all(repo.iterators_dir()).unwrap();
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+        fs::write(repo.head_file(), "../evil\n").unwrap();
+        fs::write(repo.dot().join("evil"), "").unwrap();
+
+        normalize_legacy_covering_names(&repo, &[]).unwrap();
+
+        let escaped = migrated_covering_name("../evil");
+        assert_eq!(repo.read_head().unwrap(), escaped);
+        assert!(repo.covering_path(&escaped).unwrap().is_file());
+        assert!(!repo.dot().join("evil").exists());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn migration_recovery_refuses_paths_outside_covmap() {
+        let repo = temp_repo("migrate-recovery-outside");
+        initialize_test_repo(&repo);
+        fs::create_dir_all(repo.iterators_dir()).unwrap();
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+
+        let error = stage_name_migration(&repo, &["../../outside".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("outside .covmap"));
+        assert_eq!(repo.read_version().unwrap(), "3");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format3_name_validation_failure_does_not_publish_staged_rewrites() {
+        let repo = temp_repo("migrate-validation-atomic");
+        initialize_test_repo(&repo);
+        fs::create_dir_all(repo.iterators_dir()).unwrap();
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+        fs::write(repo.head_file(), "foo:bar\n").unwrap();
+        fs::write(repo.coverings_dir().join("foo:bar"), "").unwrap();
+        fs::write(
+            repo.connections_dir().join("broken"),
+            "# source_covering=foo:bar\n# target_covering=foo:bar\n",
+        )
+        .unwrap();
+
+        let error = normalize_legacy_covering_names(&repo, &[])
+            .unwrap_err()
+            .to_string();
+        let escaped = migrated_covering_name("foo:bar");
+
+        assert!(error.contains("missing required field 'target_peer'"));
+        assert_eq!(fs::read_to_string(repo.head_file()).unwrap(), "foo:bar\n");
+        assert!(repo.coverings_dir().join("foo:bar").is_file());
+        assert!(!repo.covering_path(&escaped).unwrap().exists());
+        assert_eq!(repo.read_version().unwrap(), "3");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format3_to_format4_preserves_pre_authored_selection_policy() {
+        let repo = format2_repo("migrate-selection");
+        fs::write(repo.dot().join("version"), "3\n").unwrap();
+        fs::write(
+            repo.dot().join(".gitignore"),
+            crate::repo::FORMAT3_DEFAULT_GITIGNORE,
+        )
+        .unwrap();
+        fs::create_dir_all(repo.selection_dir("main").unwrap()).unwrap();
+        fs::write(repo.dot().join("include"), "*.md\n").unwrap();
+        fs::write(repo.dot().join("ignore"), "vendor/\n").unwrap();
+        fs::write(
+            repo.selection_dir("main").unwrap().join("include"),
+            "src/\n",
+        )
+        .unwrap();
+
+        normalize_legacy_covering_names(&repo, &[]).unwrap();
+        migrate_v3_to_v4(&repo).unwrap();
+
+        assert_eq!(repo.read_version().unwrap(), "4");
+        assert_eq!(
+            fs::read_to_string(repo.dot().join("include")).unwrap(),
+            "*.md\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.dot().join("ignore")).unwrap(),
+            "vendor/\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.selection_dir("main").unwrap().join("include")).unwrap(),
+            "src/\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
+            crate::repo::DEFAULT_GITIGNORE
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format4_migrate_repairs_the_broad_generated_tmp_rule() {
+        let repo = format2_repo("migrate-format4-gitignore");
+        fs::write(repo.dot().join("version"), "4\n").unwrap();
+        fs::write(
+            repo.dot().join(".gitignore"),
+            crate::repo::BROAD_TMP_DEFAULT_GITIGNORE,
+        )
+        .unwrap();
+
+        ensure_format4_gitignore(&repo).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
+            crate::repo::DEFAULT_GITIGNORE
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format4_migrate_preserves_a_custom_gitignore() {
+        let repo = format2_repo("migrate-format4-custom-gitignore");
+        fs::write(repo.dot().join("version"), "4\n").unwrap();
+        let custom = "# project policy\n/objects/\n*.tmp\n";
+        fs::write(repo.dot().join(".gitignore"), custom).unwrap();
+
+        ensure_format4_gitignore(&repo).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
+            custom
+        );
         fs::remove_dir_all(repo.root).unwrap();
     }
 

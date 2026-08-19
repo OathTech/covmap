@@ -82,15 +82,15 @@ docs→test).
 
 **Cover** **[T][R][S]** — the `covmap cover` operation that seeds a
 covering with one **whole-file segment** (labelled `unknown`) per
-readable UTF-8 file. Additive and idempotent: re-running adds only new
-files and never disturbs existing refinements. covmap ships no automatic
-segmentation rule, so this is the only non-manual step. Has one
+selected readable UTF-8 file. Additive and idempotent: re-running adds only
+newly selected files and never disturbs existing refinements. covmap ships no
+automatic segmentation rule, so this is the only non-manual step. Has one
 sub-concept (below).
 
 **Initial cover** **[T][R][S]** — the particular covering produced by the
 first `cover` on a repository: one whole-file `unknown` segment per file,
-before any **split**/**merge** refinement. Its **granularity** is near 0.
-Sub-concept of **cover**.
+selected by that covering's effective policy, before any **split**/**merge**
+refinement. Its **granularity** is near 0. Sub-concept of **cover**.
 
 **Coverage (source / target)** **[T][S]** — the fraction of a covering's
 segments that appear in at least one link of a connection. A connection
@@ -105,11 +105,25 @@ disjoint, complete, contiguous, file-confined segments. The basic unit
 on which all mapping and analysis is built. A repository may carry
 several coverings at once.
 
+**Covering name** **[R][S]** — the path- and address-safe single-component
+identity of a covering. It is non-empty UTF-8, is not `.`, `..`, or `HEAD`,
+contains no whitespace, `/`, `\`, `:`, or NUL, and does not begin with `@` or
+`#`. The same grammar applies in refs, `HEAD`, connections, iterators,
+selection directories, commands, migration, and verification.
+
 **Covering invariants (C1–C3)** **[T]** — the three conditions a covering
 must satisfy on each covered file: **disjointness** (no two segments
 overlap), **completeness** (every character lies in some segment), and
 **confinement** (every segment lies within a covered file). Checkable by
 `fsck`.
+
+**Covering-input selection** **[T][R][S]** — tracked policy controlling which
+**discoverable files** may be added by a future `cover`. `.covmap/include` is
+the optional repository default; `.covmap/selections/<C>/include`, when
+present, replaces it for covering `C`. Repository and covering-specific
+ignore files form a veto union. An absent include means all, while a present
+empty include means none. Policy does not redefine the **covered set** already
+stored in the covering ref.
 
 **Cut / cut sequence** **[T][S]** — the ordered positions
 `p₀ ≺ p₁ ≺ … ≺ p_k` delimiting a file's segments. `split` introduces a
@@ -122,6 +136,11 @@ the number of links entering or leaving one content-hash node. Hash and
 one node; its hub is listed once at the first covering-order location. Broken
 links are excluded. A degree greater than one identifies a **fan-in** or
 **fan-out hub**.
+
+**Discoverable files** **[T][R][S]** — regular files reached by the repository
+walk without following symbolic links and without entering a dot-prefixed
+path component. Selection policy filters this set; it does not change the
+walk's definition.
 
 **Drift** **[T][R][S]** — divergence between a covering's recorded
 segments and the current bytes of an edited file: the *repairable* state
@@ -160,15 +179,15 @@ successfully reading it. It is the lifecycle inverse of `connect`, not a
 relation-algebra operation: it leaves both coverings, every segment object,
 and derived HTML reports untouched.
 
-**Format version** **[R][S]** — the string in `.covmap/version`
-(currently `3`) recording the on-disk format. covmap refuses to operate
-on a repository whose version disagrees.
+**Format version** **[R][S]** — the string in `.covmap/version` recording the
+on-disk format. covmap refuses to operate on a repository whose version
+disagrees.
 
-**fsck** **[R][S]** — integrity verification: checks covering partitions,
-live source against recorded hashes, every present cache object, and
-connection endpoints. A missing reconstructible live object is valid, but
-unavailable covered source is an integrity failure even when its cached object
-is valid.
+**fsck** **[R][S]** — integrity verification: checks covering names and
+partitions, selection-policy layout, live source against recorded hashes,
+every present cache object, iterator covering metadata, and connection
+endpoints. A missing reconstructible live object is valid, but unavailable
+covered source is an integrity failure even when its cached object is valid.
 `--offline` leaves external repositories unchecked; `--hydrate` fills missing
 local objects during that pass; `--broken-links` lists just broken links.
 
@@ -190,9 +209,10 @@ segment ↔ segment.
 the range reproduces the covering ref's recorded hash. Realized by `hydrate`
 and `fsck --offline --hydrate`; it never changes refs or accepts drifted bytes.
 
-**Ignore (gitignore-lite)** **[R][S]** — patterns in `.covmap/ignore`
-(one per line, `#` comments) that keep build output, vendored, or
-generated files out of coverings. Dot-directories are always skipped.
+**Ignore (gitignore-lite)** **[R][S]** — negative patterns in
+`.covmap/ignore` and `.covmap/selections/<C>/ignore` that veto otherwise
+included files. The repository ignore applies to every covering; the specific
+ignore adds exclusions for `C`. See **covering-input selection**.
 
 **Iterator** **[T][R][S]** — a covering frozen into an ordered, stateful
 *worklist*: each segment becomes a **task** an external consumer (an agent,
@@ -264,12 +284,19 @@ checkout-specific peer bindings, iterator work state and retained objects,
 generated reports, and temporary files. It may differ across checkouts without
 changing the meaning of their coverings or mappings.
 
-**Migrate** **[R][S]** — `covmap migrate` upgrades on-disk format 1 or 2
-to format 3. The format-1 phase re-keys stored segments by raw content and
-rewrites affected references. The format-2 phase stages canonical covering
-and connection refs, replaces checkout paths with peer aliases, records local
-bindings, then publishes the version last so an interrupted migration can be
-resumed.
+**Migrate** **[R][S]** — `covmap migrate` upgrades supported legacy on-disk
+formats to the current format through resumable stages. Earlier phases re-key
+content and replace checkout paths with peer aliases. The final metadata phase
+preserves and validates tracked selection policy. Before those phases, unsafe
+legacy covering names are deterministically escaped with a full SHA-256 digest
+and rewritten across refs, `HEAD`, connections, iterators, and selection
+directories.
+
+**Policy drift** **[T][R][S]** — the non-fatal state in which an existing
+covered path is no longer admitted by current **covering-input selection**.
+`cover` warns in stable order but does not remove or rewrite the path; the
+warning remains until policy admits it again or a future explicit removal
+operation changes the covered set.
 
 **Broken link** **[T][R][S]** — a link whose source
 or target endpoint no longer resolves in its covering: the *terminal*
@@ -372,9 +399,9 @@ start, and the last character (through the trailing newline) for an end;
 
 **Project artifact** **[T][R][S]** — the portable covmap state intended for
 publication beside project source: format version, default covering,
-covering-input policy, covering refs, connection refs, and the default
-publication policy. Together with matching checked-out source, it is sufficient
-to verify and reconstruct clean live segments.
+global and covering-specific input-selection policy, covering refs, connection
+refs, and the default publication policy. Together with matching checked-out
+source, it is sufficient to verify and reconstruct clean live segments.
 
 **Publication boundary** **[T][R][S]** — the distinction between a
 **project artifact**, which is tracked by default, and **local state**, which
@@ -429,9 +456,9 @@ left to the user or agent. Sub-concept of **repair**.
 **reqmap / self-map** **[R][S]** — named connections in this repo's own
 `.covmap/`. `reqmap` links each requirement to the theory block that
 justifies it; a self-map connects a covering to another covering of the
-*same* repository (e.g. duplication audits, docs-to-code links). A format-3
-self-map stores the reserved peer `.` and `status`/`show` render the
-relationship as `<source> -> <target> (self-map)`.
+*same* repository (e.g. duplication audits, docs-to-code links). A self-map
+stores the reserved peer `.` and `status`/`show` render the relationship as
+`<source> -> <target> (self-map)`.
 
 **Segment** **[T][R][S]** — a contiguous, labelled range of characters
 within a single file: `(file, a, a_col, b, b_col, label)`. The atom of a

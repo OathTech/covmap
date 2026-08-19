@@ -6,8 +6,9 @@ command interface (`covmap --help`). Intentionally coarse: the list stayed
 at 20 for a long time, and the count is a deliberate ceiling, lifted only
 for a genuinely distinct capability. req21 through req24 are such lifts.
 All are realized today except req11 (connection algebra), which is explicitly
-kept as a recommended future direction. req24 is realized by on-disk format 3
-and CIP 0010.
+kept as a recommended future direction. Req24 is realized by the portable
+artifact model, including tracked repository-wide and covering-specific
+input-selection policy.
 
 Each requirement is mapped — via the `reqmap` connection in this repo's
 own `.covmap/` — to the theory block that justifies it. Open the HTML
@@ -59,8 +60,11 @@ the set of files it accepts responsibility for.
 
 ## req7 — Additive, idempotent cover
 covmap shall seed a covering with one whole-file segment per readable
-file — the *initial cover* — and re-running it shall add only new files,
-never disturbing existing refinements.
+file selected by that covering's effective input policy — the *initial cover*
+— and re-running it shall add only newly selected files, never disturbing
+existing refinements. Narrowing selection policy shall never remove or rewrite
+an existing entry; `cover` shall instead warn when current policy no longer
+admits an already-covered path.
 
 ## req8 — Manual refinement only
 covmap shall ship no automatic segmentation rule; coverings are refined
@@ -150,7 +154,10 @@ to hydrate reconstructible objects during the pass. The same partition
 validator shall reject an invalid multi-cut plan before its covering ref is
 replaced. Verification shall reject malformed peer bindings, unfinished peer
 renames, invalid peer aliases, and external aliases that resolve back to the
-current repository instead of using the canonical self peer `.`.
+current repository instead of using the canonical self peer `.`. It shall also
+reject invalid covering names and malformed or unreadable selection-policy
+layout while allowing covering-specific policy to be declared before its
+covering ref exists.
 
 ## req16 — Stable, git-style addressing
 Objects shall be addressable by hash, by covering-qualified hash, by
@@ -172,15 +179,30 @@ shall use positional-address syntax, and a bare file selector shall use HEAD.
 ## req17 — Plain-text, versioned state on disk
 All state shall live under a `.covmap/` directory as a content-addressed
 object cache plus plain-text covering and connection refs, carrying a format
-version so mismatched repositories are rejected. Format 3 shall separate
-portable project artifacts from checkout-local state and store connection
-targets as peer aliases rather than paths. For live covering entries, the ref
-and matching checked-out source are sufficient to reconstruct a missing
-object; an existing object whose bytes do not hash to its filename is corrupt.
+version so mismatched repositories are rejected. The current format shall
+separate portable project artifacts from checkout-local state and store
+connection targets as peer aliases rather than paths, and shall activate
+tracked positive and covering-specific input-selection policy. Covering names
+shall use one validated path- and address-safe grammar at every command, ref,
+`HEAD`, connection, iterator, selection, migration, and verification boundary.
+For live covering entries, the ref and matching checked-out source are
+sufficient to reconstruct a missing object; an existing object whose bytes do
+not hash to its filename is corrupt. Migration from formats 1, 2, or 3 shall
+be resumable, publish the new version last, and deterministically escape any
+legacy covering name that the common grammar rejects.
 
-## req18 — Tracked-file control via ignore
-covmap shall honor gitignore-lite patterns in `.covmap/ignore` so users
-keep build output, vendored code, and generated files out of coverings.
+## req18 — Covering-input selection
+covmap shall select candidates for `cover` through portable gitignore-lite
+policy. `.covmap/include` is an optional repository-wide positive default and
+`.covmap/ignore` is a repository-wide hard veto. For covering `C`,
+`.covmap/selections/<C>/include`, when present, replaces the global include,
+while `.covmap/selections/<C>/ignore` adds exclusions. If no include exists,
+all otherwise-discoverable files are included; a present empty include selects
+none. Pattern order and negation shall have no meaning, directory patterns
+shall apply to descendants, dot-prefixed paths and symbolic links shall remain
+undiscoverable, and matching include diagnostics shall be computed before
+ignore vetoes. Policy changes only future discovery: the covering ref remains
+authoritative for its current covered set.
 
 ## req19 — Composable primitives (plumbing / porcelain)
 covmap shall expose a small set of lower-level *plumbing* commands
@@ -276,17 +298,19 @@ machine-specific checkout paths. An external connection shall name a stable
 peer alias whose checkout path is supplied by ignored local binding state.
 
 The default publication policy shall make ordinary `git add .covmap` include
-covering refs, connection refs, and project metadata while excluding the
-reconstructible object cache, peer bindings, iterator work state, generated
-reports, and temporary files. Checked-out source plus the tracked artifact
-shall be sufficient for offline verification and hydration of every clean live
-segment. Iterator snapshots remain local unless a team deliberately publishes
-both the worklist and its retained objects.
+covering refs, connection refs, global and covering-specific input-selection
+policy, and project metadata while excluding the reconstructible object cache,
+peer bindings, iterator work state, generated reports, and temporary files.
+Checked-out source plus the tracked artifact shall be sufficient for offline
+verification and hydration of every clean live segment. Iterator snapshots
+remain local unless a team deliberately publishes both the worklist and its
+retained objects.
 
 Git is the publication mechanism, not a runtime dependency: covmap shall not
 invoke Git, inspect its index, stage files, or commit changes, and the same
 artifact semantics shall work outside a Git repository. `covmap init` shall
 create a commented repository-scoped default ignore policy and report the
-durable/local boundary. `covmap migrate` shall upgrade format 1 or 2
-repositories to format 3 through resumable staging, preserving a user-managed
-publication policy while warning when it omits required local-state patterns.
+durable/local boundary. `covmap migrate` shall upgrade format 1, 2, or 3
+repositories to format 4 through resumable staging, preserving a user-managed
+publication policy and pre-authored selection policy while warning when the
+publication policy omits required local-state patterns.

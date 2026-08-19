@@ -43,6 +43,8 @@ pub struct LegacyConnection {
 
 impl Connection {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
+        crate::repo::validate_covering_name(&self.source_covering)?;
+        crate::repo::validate_covering_name(&self.target_covering)?;
         let path = repo.connections_dir().join(&self.name);
         atomic_write(&path, &self.serialize())
     }
@@ -72,6 +74,10 @@ impl Connection {
                 format!("connection '{name}' not found at {}", path.display()),
             )
         })?;
+        Self::parse(name, &raw)
+    }
+
+    pub(crate) fn parse(name: &str, raw: &str) -> io::Result<Connection> {
         let mut source_covering = String::new();
         let mut target_peer = String::new();
         let mut target_covering = String::new();
@@ -118,6 +124,17 @@ impl Connection {
                 format!("connection '{name}' has invalid target_peer '{target_peer}'"),
             ));
         }
+        for (field, value) in [
+            ("source_covering", source_covering.as_str()),
+            ("target_covering", target_covering.as_str()),
+        ] {
+            if !crate::repo::valid_covering_name(value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("connection '{name}' has invalid {field} '{value}'"),
+                ));
+            }
+        }
         Ok(Connection {
             name: name.to_string(),
             source_covering,
@@ -144,7 +161,7 @@ impl Connection {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && !name.ends_with(".tmp") {
+            if !name.starts_with('.') && !crate::store::is_atomic_temp_name(&name) {
                 out.push(name);
             }
         }
@@ -162,6 +179,10 @@ impl LegacyConnection {
                 format!("connection '{name}' not found at {}", path.display()),
             )
         })?;
+        Self::parse(name, &raw)
+    }
+
+    pub(crate) fn parse(name: &str, raw: &str) -> io::Result<LegacyConnection> {
         let mut source_covering = String::new();
         let mut target_repo = String::new();
         let mut target_covering = String::new();
@@ -199,6 +220,17 @@ impl LegacyConnection {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("connection '{name}' is missing required field '{field}'"),
+                ));
+            }
+        }
+        for (field, value) in [
+            ("source_covering", source_covering.as_str()),
+            ("target_covering", target_covering.as_str()),
+        ] {
+            if !crate::repo::valid_covering_name(value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("connection '{name}' has invalid {field} '{value}'"),
                 ));
             }
         }

@@ -14,9 +14,10 @@ The mathematical model is in `covmap/theory/main.tex`; the source is
 `covmap/src/`. Build with `cargo build --release` from `covmap/`. The
 binary path is `covmap/target/release/covmap`.
 
-Git-trackable coverings and mappings (req24 / CIP 0010) use on-disk format 3.
-Durable refs are portable and canonical; cache objects, peer paths, iterator
-state, reports, and temporary files are ignored local state by default.
+Git-trackable coverings, mappings, and input-selection policy use the current
+on-disk format. Durable refs and policy are portable; cache objects, peer
+paths, iterator state, reports, and temporary files are ignored local state
+by default.
 
 ## Mental model
 
@@ -37,7 +38,9 @@ state, reports, and temporary files are ignored local state by default.
 - A **covering** is a partition of (some files of) a repository into
   segments. It is a ref under `.covmap/coverings/<name>` listing one
   segment per line, prefixed by `# covered=<file>` lines. The default
-  covering is named `main` and is pointed at by `.covmap/HEAD`.
+  covering is named `main` and is pointed at by `.covmap/HEAD`. Covering
+  names are one path/address-safe component: no whitespace, `/`, `\`, `:`,
+  NUL, leading `@`/`#`, or reserved `.`, `..`, `HEAD`.
 - A **name** is an optional stable identity for a segment (a
   *segment*), set with `covmap name`. It is shown as `@name`. Naming is for
   segments you intend to map: a connection referencing a segment by
@@ -61,10 +64,12 @@ state, reports, and temporary files are ignored local state by default.
   regardless of label. Labels and names are covering-local metadata and do
   not affect the segment hash.
 - **There are no segmentation rules.** `covmap cover` walks the repo
-  and adds a single whole-file segment labelled `unknown` for every
-  readable UTF-8 file it has not yet covered. The user / agent then
-  refines the covering with `covmap split` and `covmap merge`. `split`
-  atomically inserts one or more cut positions; it does not set metadata.
+  and adds a single whole-file segment labelled `unknown` for every selected
+  readable UTF-8 file it has not yet covered. Selection policy controls only
+  future discovery; the covering ref remains authoritative and is never
+  synchronized by narrowing policy. The user / agent then refines the
+  covering with `covmap split` and `covmap merge`. `split` atomically inserts
+  one or more cut positions; it does not set metadata.
 
 ### Where text lives — five channels, don't confuse them
 
@@ -104,9 +109,11 @@ A covmap-managed repository contains:
 ```
 .covmap/
   .gitignore              tracked default publication policy
-  version                 format version (3)
+  version                 on-disk format compatibility marker
   HEAD                    default covering name (default: main)
-  ignore                  optional gitignore-lite patterns
+  include                 optional repository positive default
+  ignore                  optional repository exclusions
+  selections/<C>/         optional include/ignore policy for covering C
   objects/<hh>/<rest>     local content-addressed segment cache
   coverings/<name>        covering refs (one per name)
   connections/<name>      connection refs (one per name)
@@ -123,7 +130,7 @@ are unique.
 | Command | Purpose | Read output? |
 | ------- | ------- | ------------ |
 | `covmap init` | Create `.covmap/` in cwd. | no |
-| `covmap cover [<C>]` | Add a whole-file `unknown` segment for every file not yet covered. **Idempotent and additive — never overwrites refined segments.** | yes — segment count |
+| `covmap cover [<C>]` | Add a whole-file `unknown` segment for every selected file not yet covered. **Idempotent and additive — never overwrites refined segments.** Read unmatched-include and policy-drift warnings. | yes |
 | `covmap hydrate [<C>]` | Verify live source against covering hashes and atomically recreate missing cache objects; omitted `<C>` means every covering. | **yes** |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
 | `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
@@ -144,6 +151,7 @@ are unique.
 | `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
+| `covmap migrate [--recover-covering <legacy>]...` | Upgrade supported legacy repositories to the current format. Recovery identifies an otherwise-unreferenced unsafe legacy ref; covmap derives the replacement name. | yes |
 | `covmap fsck [--offline [--hydrate]]` | Verify partitions, source hashes, present cache objects, and connection endpoints. Missing clean live objects are valid; offline mode skips external repositories and may hydrate. | yes |
 | `covmap html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser. For humans, not you. Shows one connection at a time: auto-selected when only one exists, otherwise `--connection K` is required (with no connections, shows List/Source of HEAD's covering). `--covering`/`--connection` select what it shows independent of HEAD/cwd; `--connection K` fixes the source to K's source covering and renders K's target side in the Target/Compare views (run it from the connection's *source* repo). | no |
 
@@ -184,20 +192,25 @@ form — `covmap link K @src-seg @tgt-seg`. A `<C>:` prefix is accepted but
 only when `<C>` is that side's covering (it is simply stripped); it cannot
 point at some other covering.
 
-## Ignoring files — control what gets covered
+## Selecting files — control what each covering discovers
 
 **This is the single most important setup step, and it is easy to skip.**
-`covmap cover` turns *every* readable file in the repo into an `unknown`
-whole-file segment. On a real project that means build output, vendored
-dependencies, lockfiles, generated code, fixtures, and docs all land in
-the covering as noise. The `unknown` list becomes overwhelming, `status`
-and `ls` are unreadable, and the human cannot see the files that actually
-matter. **Tight, deliberate control over the tracked file set is what
-makes covmap usable — treat it as a precondition, not an afterthought.**
+On a real project, an unrestricted initial cover includes build output,
+vendored dependencies, lockfiles, generated code, fixtures, and unrelated
+docs. Tight positive selection keeps each covering purposeful.
 
-covmap reads gitignore-lite patterns from **`.covmap/ignore`**, one per
-line, and applies them while walking during `cover`. Ignored directories
-are pruned (covmap never descends into them).
+All policy files use the same gitignore-lite patterns:
+
+- `.covmap/include` is the optional repository-wide positive default.
+- `.covmap/ignore` is a repository-wide hard veto.
+- `.covmap/selections/<C>/include`, when present, **replaces** the global
+  include for covering `C`.
+- `.covmap/selections/<C>/ignore` adds exclusions for `C`.
+
+If no applicable include exists, all discoverable files are included. A
+present empty include selects none. Global and covering-specific ignores are
+unioned and veto included files. Dot-prefixed path components and symlinks are
+never discoverable.
 
 | Pattern | Matches |
 | ------- | ------- |
@@ -207,42 +220,44 @@ are pruned (covmap never descends into them).
 | `vendor/*.go` | path fragment — `*.go` directly inside any `vendor/` |
 | `# comment` | comments and blank lines are skipped |
 
-Globs: `*` and `?` match within a single path component (they do not
-cross `/`). Unanchored patterns are tested against the full relative
-path, each path component, and any trailing path fragment. A missing
-`ignore` file means nothing is ignored.
+Globs: `*` and `?` match within a single path component (they do not cross
+`/`). Directory patterns apply to descendants. Pattern order has no meaning,
+and `!` is literal rather than negation.
+
+`cover` warns for every active include line that matches no discoverable file,
+identifying its policy file and line. Matches are counted before ignore
+vetoes. It also warns when an existing covered path is no longer admitted.
+That warning is intentionally sticky: **policy changes future discovery only**.
+They never remove existing segments, refinements, names, messages, or links.
 
 **Recommended discipline before the first `cover`:**
 
 1. List the repo (`tree` / `ls`) and decide what is *source of truth*
    versus generated/vendored/binary noise.
-2. Write `.covmap/ignore` to exclude everything that is not source of
-   truth — build dirs (`target/`, `build/`, `dist/`, `node_modules/`),
-   lockfiles, minified assets, generated code, large fixtures, `.git`
-   is already excluded automatically.
-3. *Then* run `covmap cover`. Check the segment count and `covmap ls`:
-   if the `unknown` list still contains noise, tighten `ignore` and
-   re-cover (cover is additive and idempotent, so add the pattern,
-   then refine). It is far cheaper to ignore up front than to prune a
-   bloated covering later.
+2. Prefer `.covmap/include` for the repository-wide source-of-truth set.
+   Use `.covmap/selections/<C>/include` when coverings intentionally select
+   different domains, such as `spec` and `implementation`.
+3. Write `.covmap/ignore` for hard exclusions shared by every covering:
+   build dirs (`target/`, `build/`, `dist/`, `node_modules/`), generated
+   code, or large fixtures. Add a covering-specific ignore only when needed.
+4. *Then* run `covmap cover <C>`. Read every warning and inspect
+   `covmap ls`. If an unwanted path is already covered, narrowing policy will
+   stop future additions but will not remove it.
 
-If a user complains the `unknown`/uncovered list is "overwhelming" or
-"huge", the fix is almost always a tighter `.covmap/ignore` — diagnose
-that first.
+If a user complains the `unknown` list is overwhelming, inspect the effective
+include first, then the ignore vetoes. Do not imply that adding an ignore will
+remove entries already present in the covering.
 
 ## Workflows
 
 ### A. Set up a new project
 
 1. Identify the two directories. Ask if unclear.
-2. From each, run `covmap init`. **Before covering, write
-   `.covmap/ignore`** to exclude build output, vendored deps, lockfiles,
-   and generated files (see "Ignoring files" above) — skipping this is
-   the most common cause of an unusable, noise-filled covering.
-3. From each, run `covmap cover`. Each readable UTF-8 file (minus the
-   ignored set) becomes one whole-file `unknown` segment. Binaries are
-   skipped with a warning. Inspect `covmap ls`; if noise remains,
-   tighten `ignore` and re-cover before refining.
+2. From each, run `covmap init`. Before covering, author a deliberate global
+   include or covering-specific include, plus shared/specific ignore vetoes.
+3. From each, run `covmap cover`. Each selected readable UTF-8 file becomes
+   one whole-file `unknown` segment. Read unmatched-pattern warnings and
+   inspect `covmap ls` before refining.
 4. Refine the spec covering. Use `covmap ls -l` to see file:line ranges,
    gather the meaningful boundaries (`##` headings, declarations, etc.),
    then insert them in one command: `covmap split main:<file> <cut>...`.
@@ -261,15 +276,16 @@ that first.
 ### A0. Publish or restore a Git-tracked mapping
 
 `covmap init` creates a repository-scoped `.covmap/.gitignore`. Ordinary
-`git add .covmap` includes `HEAD`, `version`, `.covmap/ignore`, covering refs,
-connection refs, and the publication policy while excluding:
+`git add .covmap` includes `HEAD`, `version`, global and covering-specific
+selection policy, covering refs, connection refs, and the publication policy
+while excluding:
 
 ```text
 .covmap/local/       checkout paths and recovery journals
 .covmap/objects/     reconstructible live cache
 .covmap/iterators/   local worklists and retained task objects
 .covmap/*.html       generated reports
-*.tmp                temporary writes
+\#covmap-tmp-*.tmp   interrupted covmap atomic writes
 ```
 
 This is repository hygiene, not a fence: forced additions can override it,
@@ -377,10 +393,9 @@ call:
 covmap show --label <l> <C>     # every segment labelled <l>, each with its image
 ```
 
-Labels are ref-local and non-hashed (since cip 0004), so tagging is free and
-never breaks a link. `label` is singular per segment, so it doubles as the
-segment's status; pick a labelling scheme that suits the concern you want to
-trace.
+Labels are ref-local and non-hashed, so tagging is free and never breaks a
+link. `label` is singular per segment, so it doubles as the segment's status;
+pick a labelling scheme that suits the concern you want to trace.
 
 ### B. Resolve drift after a source edit
 

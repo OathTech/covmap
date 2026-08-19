@@ -92,20 +92,27 @@ repair. Workspace: $WORK
 EOF
 
 #############################################################################
-hr "1. init + ignore + cover  (REQ1, REQ6, REQ7, REQ18)"
+hr "1. init + select + cover  (REQ1, REQ6, REQ7, REQ18)"
 #############################################################################
 ( cd "$WORK/spec"    && run init )
 ( cd "$WORK/impl_rs" && run init )
 
-# Keep build output out of the covering BEFORE the first cover.
+# Select source-of-truth files positively, with build output as a hard veto.
+printf '/queue.md\n/errors.md\n' > "$WORK/spec/.covmap/include"
 printf 'build/\n' > "$WORK/spec/.covmap/ignore"
-echo "  (wrote spec/.covmap/ignore: build/)"
+printf '/queue.rs\n' > "$WORK/impl_rs/.covmap/include"
+# Predeclare a narrower policy for the `alt` covering created in step 10.
+mkdir -p "$WORK/spec/.covmap/selections/alt"
+printf '/queue.md\n' > "$WORK/spec/.covmap/selections/alt/include"
+echo "  (wrote global includes, shared ignore, and selections/alt/include)"
 
 ( cd "$WORK/spec"    && run cover )
 ( cd "$WORK/impl_rs" && run cover )
 
 assert "build/ was ignored (not covered)" \
   bash -c "! ( cd '$WORK/spec' && '$COVMAP' ls main | grep -q 'build/artifact' )"
+assert "global positive selection covered exactly the two spec sources" \
+  bash -c "[[ \$(cd '$WORK/spec' && '$COVMAP' ls-segments main | wc -l | tr -d ' ') -eq 2 ]]"
 
 #############################################################################
 hr "2. inspect the covering  (REQ12, REQ20)"
@@ -268,7 +275,7 @@ echo "  clone portability:"
 ( cd "$WORK/spec" && mkdir -p .covmap/iterators \
   && : > .covmap/iterators/tutorial-session \
   && : > .covmap/report.html \
-  && : > .covmap/nested.tmp )
+  && : > '.covmap/#covmap-tmp-nested.tmp' )
 ( cd "$WORK/spec" && git init -q && git add queue.md errors.md .covmap \
   && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "tutorial spec" )
 ( cd "$WORK/impl_rs" && git init -q && git add queue.rs .covmap \
@@ -283,7 +290,11 @@ assert "clone contains no peer binding" \
 assert "clone contains no iterator, report, or temporary state" \
   bash -c "[[ ! -e '$WORK/review/spec/.covmap/iterators/tutorial-session' \
     && ! -e '$WORK/review/spec/.covmap/report.html' \
-    && ! -e '$WORK/review/spec/.covmap/nested.tmp' ]]"
+    && ! -e '$WORK/review/spec/.covmap/#covmap-tmp-nested.tmp' ]]"
+assert "clone contains tracked global and covering-specific selection policy" \
+  bash -c "[[ -f '$WORK/review/spec/.covmap/include' \
+    && -f '$WORK/review/spec/.covmap/ignore' \
+    && -f '$WORK/review/spec/.covmap/selections/alt/include' ]]"
 ( cd "$WORK/review/spec" && run fsck --offline --hydrate )
 ( cd "$WORK/review/spec" && run peer bind impl ../deps/implementation )
 ( cd "$WORK/review/spec" && run fsck )
@@ -325,6 +336,9 @@ hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 # only in one side with `-` / `+`.
 ( cd "$WORK/spec" && run cover alt )
 ( cd "$WORK/spec" && run diff main alt )
+assert "covering-specific include replaced the global include for alt" \
+  bash -c "( cd '$WORK/spec' && '$COVMAP' ls alt ) | grep -q 'queue.md' \
+    && ! ( cd '$WORK/spec' && '$COVMAP' ls alt ) | grep -q 'errors.md'"
 ( cd "$WORK/spec" && run fsck )
 ( cd "$WORK/spec" && run status )
 
@@ -444,14 +458,13 @@ assert "the sweep did not mutate the covering (fsck still clean)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 # An iterator can be filtered to one label — e.g. a backfill of only the
-# not-yet-refined `unknown` segments. `alt` (step 9) is the whole-file
-# covering: two `unknown` segments (queue.md, errors.md), so this freezes
-# exactly those two tasks, narrowing the worklist to the backlog.
+# not-yet-refined `unknown` segments. `alt` (step 10) selects only queue.md,
+# so this freezes exactly one task, narrowing the worklist to that backlog.
 ( cd "$WORK/spec" && run iter backfill new alt --label unknown )
 ( cd "$WORK/spec" && run iter )        # bare `iter` lists every iterator
 
-assert "label-filtered iterator froze only the unknown segments" \
-  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter backfill status | grep -oE '/[0-9]+' | head -1 | tr -d / ) ) -eq 2 ]]"
+assert "label-filtered iterator froze only the selected unknown segment" \
+  bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter backfill status | grep -oE '/[0-9]+' | head -1 | tr -d / ) ) -eq 1 ]]"
 
 # Delete the iterators; the covering is untouched (they are pure overlays).
 ( cd "$WORK/spec" && run iter review rm )

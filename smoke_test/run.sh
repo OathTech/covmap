@@ -42,17 +42,35 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
-[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
-  || { echo "  FAIL: init did not create format 3"; exit 1; }
+[[ $(cat "$WORK/spec/.covmap/version") == "4" ]] \
+  || { echo "  FAIL: init did not create format 4"; exit 1; }
 cmp -s "$WORK/spec/.covmap/.gitignore" <(printf '%s' \
 "# Local and reconstructible covmap state.
-# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+# Commit selection policy, coverings, connections, and covmap metadata.
 /local/
 /objects/
 /iterators/
 /*.html
-*.tmp
+\#covmap-tmp-*.tmp
 ") || { echo "  FAIL: generated .covmap/.gitignore differs from policy"; exit 1; }
+
+hr "tmp-suffixed covering refs remain Git-trackable"
+TMP_POLICY="$WORK/tmp_policy"
+mkdir -p "$TMP_POLICY"
+printf 'tracked\n' > "$TMP_POLICY/source.txt"
+( cd "$TMP_POLICY" && "$COVMAP_BIN" init >/dev/null \
+  && printf '/source.txt\n' > .covmap/include \
+  && "$COVMAP_BIN" cover release.tmp >/dev/null \
+  && : > '.covmap/coverings/#covmap-tmp-release.tmp.tmp' \
+  && git init -q \
+  && git add .covmap )
+TMP_STAGED=$( cd "$TMP_POLICY" && git diff --cached --name-only )
+printf '%s\n' "$TMP_STAGED" | grep -qxF '.covmap/coverings/release.tmp' \
+  || { echo "  FAIL: tmp-suffixed covering ref was not staged"; exit 1; }
+if printf '%s\n' "$TMP_STAGED" | grep -qF '#covmap-tmp-release.tmp.tmp'; then
+  echo "  FAIL: reserved atomic temp file was staged"
+  exit 1
+fi
 
 hr "default Git publication policy stages refs but not local state"
 ( cd "$WORK/spec" && mkdir -p .covmap/objects/aa .covmap/iterators .covmap/local \
@@ -75,6 +93,7 @@ if ( cd "$WORK/spec" && git ls-files .covmap/report.html .covmap/objects/aa/.par
   echo "  FAIL: generated report, nested temp, iterator, or binding was staged"
   exit 1
 fi
+rm -f "$WORK/spec/.covmap/iterators/session"
 ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }' )
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "widget.md" { print $1 }' )
 
@@ -183,7 +202,7 @@ REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
   || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
 printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
   || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
-[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
+[[ $(cat "$WORK/spec/.covmap/version") == "4" ]] \
   || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"

@@ -14,7 +14,7 @@
 
 ## Starting state
 
-- `spec/.covmap/` exists with format version 3.
+- `spec/.covmap/` exists in the current format.
 - Covering `main` has one `unknown` whole-file segment for `service.md`.
 - `.covmap/objects/` is empty; `service.md` still matches the covering ref.
 - The `##` headings begin at lines 5, 9, 14, and 18.

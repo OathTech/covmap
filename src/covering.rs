@@ -325,7 +325,7 @@ pub fn partition_issues(c: &Covering) -> Vec<String> {
 
 impl Covering {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
-        let path = repo.coverings_dir().join(&self.name);
+        let path = repo.covering_path(&self.name)?;
         atomic_write(&path, &self.serialize())
     }
 
@@ -400,13 +400,17 @@ impl Covering {
     }
 
     pub fn read(repo: &Repo, name: &str) -> io::Result<Covering> {
-        let path = repo.coverings_dir().join(name);
+        let path = repo.covering_path(name)?;
         let raw = fs::read_to_string(&path).map_err(|e| {
             io::Error::new(
                 e.kind(),
                 format!("covering '{name}' not found at {}", path.display()),
             )
         })?;
+        Self::parse(name, &raw)
+    }
+
+    pub(crate) fn parse(name: &str, raw: &str) -> io::Result<Covering> {
         let mut entries = Vec::new();
         // Scan line by line. Segment lines come first; `# message` stanzas
         // (each a header plus a fixed number of body lines) come after, and
@@ -494,10 +498,35 @@ impl Covering {
         }
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && !name.ends_with(".tmp") {
-                out.push(name);
+            let file_name = entry.file_name();
+            let name = file_name.to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "covering ref name is not valid UTF-8: {}",
+                        entry.path().display()
+                    ),
+                )
+            })?;
+            if crate::store::is_atomic_temp_name(name) {
+                continue;
             }
+            crate::repo::validate_covering_name(name).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid covering ref name '{name}'"),
+                )
+            })?;
+            if !entry.file_type()?.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "covering ref is not a regular file: {}",
+                        entry.path().display()
+                    ),
+                ));
+            }
+            out.push(name.to_string());
         }
         out.sort();
         Ok(out)
@@ -1791,6 +1820,22 @@ mod tests {
         std::fs::write(repo.coverings_dir().join("legacy"), legacy).unwrap();
         let leg = Covering::read(&repo, "legacy").unwrap();
         assert_eq!(leg.entries[0].name, None);
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn covering_name_ending_in_tmp_roundtrips() {
+        let repo = tmp_repo();
+        std::fs::create_dir_all(repo.coverings_dir()).unwrap();
+        let covering = Covering {
+            name: "release.tmp".to_string(),
+            entries: Vec::new(),
+        };
+
+        covering.write(&repo).unwrap();
+
+        assert_eq!(Covering::list(&repo).unwrap(), vec!["release.tmp"]);
+        assert_eq!(Covering::read(&repo, "release.tmp").unwrap(), covering);
         std::fs::remove_dir_all(&repo.root).ok();
     }
 

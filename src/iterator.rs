@@ -228,6 +228,7 @@ pub fn freeze(cov: &Covering, order: Order, label: Option<&str>) -> Vec<Task> {
 
 impl Iter {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
+        crate::repo::validate_covering_name(&self.covering)?;
         let path = repo.iterators_dir().join(&self.name);
         let mut buf = String::new();
         buf.push_str(&format!("# covering={}\n", self.covering));
@@ -276,6 +277,10 @@ impl Iter {
                 format!("iterator '{name}' not found at {}", path.display()),
             )
         })?;
+        Self::parse(name, &raw)
+    }
+
+    pub(crate) fn parse(name: &str, raw: &str) -> io::Result<Iter> {
         let mut covering = String::new();
         let mut order = Order::File;
         let mut label: Option<String> = None;
@@ -333,6 +338,12 @@ impl Iter {
                 cursor = None;
             }
         }
+        if !crate::repo::valid_covering_name(&covering) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("iterator '{name}' has invalid covering '{covering}'"),
+            ));
+        }
         Ok(Iter {
             name: name.to_string(),
             covering,
@@ -352,7 +363,7 @@ impl Iter {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && !name.ends_with(".tmp") {
+            if !name.starts_with('.') && !crate::store::is_atomic_temp_name(&name) {
                 out.push(name);
             }
         }

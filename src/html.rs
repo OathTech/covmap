@@ -53,7 +53,7 @@ pub fn render(
     };
     let source_covering = match sel_covering {
         Some(c) => {
-            if !repo.coverings_dir().join(c).is_file() {
+            if !repo.covering_exists(c)? {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("covering '{c}' not found in {}", repo.root.display()),

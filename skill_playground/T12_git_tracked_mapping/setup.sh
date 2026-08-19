@@ -8,6 +8,9 @@ cp impl.rs author/impl/impl.rs
 (
   cd author/spec
   "$COVMAP_BIN" init >/dev/null
+  printf '/unused-default/\n' > .covmap/include
+  mkdir -p .covmap/selections/main
+  printf '/spec.md\n' > .covmap/selections/main/include
   "$COVMAP_BIN" cover >/dev/null
   hash=$("$COVMAP_BIN" ls-segments main)
   "$COVMAP_BIN" name "main:$hash" request-contract >/dev/null
@@ -15,6 +18,7 @@ cp impl.rs author/impl/impl.rs
 (
   cd author/impl
   "$COVMAP_BIN" init >/dev/null
+  printf '/impl.rs\n' > .covmap/include
   "$COVMAP_BIN" cover >/dev/null
   hash=$("$COVMAP_BIN" ls-segments main)
   "$COVMAP_BIN" name "main:$hash" request-handler >/dev/null

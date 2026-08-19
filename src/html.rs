@@ -7,7 +7,7 @@ use crate::connection::Connection;
 use crate::covering::{self, Covering, CoveringEntry};
 use crate::peer;
 use crate::repo::Repo;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
@@ -77,11 +77,12 @@ pub fn render(
 
     // Resolve all connection objects + their target coverings.
     let mut conn_data: Vec<ConnView> = Vec::new();
-    for cn in &connections {
+    for (view_id, cn) in connections.iter().enumerate() {
         let k = Connection::read(repo, cn)?;
         let tgt_repo = peer::resolve(repo, &k.target_peer)?;
         let tgt_cov = Some(Covering::read(&tgt_repo, &k.target_covering)?);
         conn_data.push(ConnView {
+            view_id,
             k,
             tgt_repo,
             tgt_cov,
@@ -91,24 +92,26 @@ pub fn render(
     // Build segment indices for the source covering.
     // For each segment hash in the source covering, list outgoing links.
     let mut outgoing: BTreeMap<String, Vec<OutgoingLink>> = BTreeMap::new();
-    let mut incoming: BTreeMap<(String, String), Vec<IncomingLink>> = BTreeMap::new();
-    // key for incoming: (target_peer, target_hash)
+    let mut incoming: BTreeMap<String, Vec<IncomingLink>> = BTreeMap::new();
+    // Incoming links are keyed by target occurrence rather than content
+    // hash. Distinct named segments may legitimately carry identical bytes.
     if let Some(src) = &src_cov {
         for cv in &conn_data {
             for p in &cv.k.links {
-                // Endpoints may be `@name` segment references or bare
-                // hashes. Resolve each to the segment's *current* hash so
-                // the views (which key on hashes) stay correct after a
-                // content edit; `None` means the endpoint is broken.
+                // Endpoints may be `@name` segment references or bare hashes.
+                // Resolve the source to its current content identity and the
+                // target to its concrete covering occurrence.
                 let a_hash = covering::endpoint_to_hash(src, &p.a);
-                let b_hash = cv
+                let b_entry = cv
                     .tgt_cov
                     .as_ref()
-                    .and_then(|t| covering::endpoint_to_hash(t, &p.b));
+                    .and_then(|t| covering::endpoint_to_index(t, &p.b).map(|index| (t, index)));
+                let b_hash = b_entry.map(|(t, index)| t.entries[index].hash.clone());
                 let a_in = a_hash.is_some();
                 let b_in = b_hash.is_some();
                 let a_key = a_hash.unwrap_or_else(|| p.a.clone());
                 let b_key = b_hash.unwrap_or_else(|| p.b.clone());
+                let target_id = b_entry.map(|(_, index)| target_occurrence_id(cv, index));
                 outgoing
                     .entry(a_key.clone())
                     .or_default()
@@ -117,20 +120,19 @@ pub fn render(
                         target_peer: cv.k.target_peer.clone(),
                         target_covering: cv.k.target_covering.clone(),
                         target_hash: b_key.clone(),
+                        target_id: target_id.clone(),
                         note: p.note.clone(),
                         src_resolved: a_in,
                         tgt_resolved: b_in,
                     });
-                incoming
-                    .entry((cv.k.target_peer.clone(), b_key.clone()))
-                    .or_default()
-                    .push(IncomingLink {
+                if let Some(target_id) = target_id {
+                    incoming.entry(target_id).or_default().push(IncomingLink {
                         conn_name: cv.k.name.clone(),
                         source_hash: a_key.clone(),
                         note: p.note.clone(),
                         src_resolved: a_in,
-                        tgt_resolved: b_in,
                     });
+                }
             }
         }
     }
@@ -199,7 +201,7 @@ pub fn render(
     s.push_str("<main>\n<aside id=\"sidebar\"><div id=\"sidebar-source\">");
     s.push_str(&render_source_sidebar(&by_file, &outgoing));
     s.push_str("</div><div id=\"sidebar-target\" class=\"hidden\">");
-    s.push_str(&render_target_sidebar(&conn_data));
+    s.push_str(&render_target_sidebar(&conn_data, &incoming));
     s.push_str("</div></aside>\n");
 
     // Section: three views.
@@ -229,6 +231,7 @@ pub fn render(
 // ----- helpers -------------------------------------------------------------
 
 struct ConnView {
+    view_id: usize,
     k: Connection,
     tgt_repo: Repo,
     tgt_cov: Option<Covering>,
@@ -240,6 +243,7 @@ struct OutgoingLink {
     target_peer: String,
     target_covering: String,
     target_hash: String,
+    target_id: Option<String>,
     note: String,
     src_resolved: bool,
     tgt_resolved: bool,
@@ -251,7 +255,10 @@ struct IncomingLink {
     source_hash: String,
     note: String,
     src_resolved: bool,
-    tgt_resolved: bool,
+}
+
+fn target_occurrence_id(cv: &ConnView, entry_index: usize) -> String {
+    format!("t{}-{entry_index}", cv.view_id)
 }
 
 /// Status for a source segment: linked / unlinked / broken.
@@ -328,7 +335,10 @@ fn file_sidebar_item(name: &str, key: &str, counts: (usize, usize, usize), activ
     )
 }
 
-fn render_target_sidebar(conns: &[ConnView]) -> String {
+fn render_target_sidebar(
+    conns: &[ConnView],
+    incoming: &BTreeMap<String, Vec<IncomingLink>>,
+) -> String {
     if conns.is_empty() {
         return "<div class=\"file-empty\">No connections yet.</div>".to_string();
     }
@@ -337,10 +347,9 @@ fn render_target_sidebar(conns: &[ConnView]) -> String {
     let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     for cv in conns {
         if let Some(tc) = &cv.tgt_cov {
-            let by_link_target: BTreeSet<&str> = cv.k.links.iter().map(|p| p.b.as_str()).collect();
             let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
-            for e in &tc.entries {
-                if by_link_target.contains(e.hash.as_str()) {
+            for (entry_index, e) in tc.entries.iter().enumerate() {
+                if incoming.contains_key(&target_occurrence_id(cv, entry_index)) {
                     *by_file.entry(e.file.clone()).or_insert(0) += 1;
                 }
             }
@@ -527,7 +536,7 @@ fn render_source_view(
 
 fn render_target_view(
     conns: &[ConnView],
-    incoming: &BTreeMap<(String, String), Vec<IncomingLink>>,
+    incoming: &BTreeMap<String, Vec<IncomingLink>>,
 ) -> io::Result<String> {
     let mut s = String::new();
     if conns.is_empty() {
@@ -541,29 +550,21 @@ fn render_target_view(
             None => continue,
         };
         // Group target entries by file.
-        let mut by_file: BTreeMap<String, Vec<&CoveringEntry>> = BTreeMap::new();
-        for e in &tc.entries {
-            by_file.entry(e.file.clone()).or_default().push(e);
+        let mut by_file: BTreeMap<String, Vec<(usize, &CoveringEntry)>> = BTreeMap::new();
+        for (entry_index, e) in tc.entries.iter().enumerate() {
+            by_file
+                .entry(e.file.clone())
+                .or_default()
+                .push((entry_index, e));
         }
         for v in by_file.values_mut() {
-            v.sort_by_key(|e| e.sort_key());
+            v.sort_by_key(|(_, e)| e.sort_key());
         }
 
-        // Only emit files that have at least one incoming link.
-        let target_hashes_with_incoming: BTreeSet<&str> = incoming
-            .keys()
-            .filter(|(rp, _)| rp == &cv.k.target_peer)
-            .map(|(_, h)| h.as_str())
-            .collect();
-
         for (fname, entries) in &by_file {
-            let mut has_incoming = false;
-            for e in entries {
-                if target_hashes_with_incoming.contains(e.hash.as_str()) {
-                    has_incoming = true;
-                    break;
-                }
-            }
+            let has_incoming = entries.iter().any(|(entry_index, _)| {
+                incoming.contains_key(&target_occurrence_id(cv, *entry_index))
+            });
             if !has_incoming {
                 continue;
             }
@@ -579,14 +580,12 @@ fn render_target_view(
                 esc(&short_repo_name(&cv.k.target_peer)),
                 esc(&cv.k.target_covering)
             ));
-            for (i, e) in entries.iter().enumerate() {
+            for (i, (entry_index, e)) in entries.iter().enumerate() {
                 let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
-                let inc = incoming
-                    .get(&(cv.k.target_peer.clone(), e.hash.clone()))
-                    .cloned()
-                    .unwrap_or_default();
-                let any_broken = inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved);
+                let target_id = target_occurrence_id(cv, *entry_index);
+                let inc = incoming.get(&target_id).cloned().unwrap_or_default();
+                let any_broken = inc.iter().any(|l| !l.src_resolved);
                 let cov_class = if inc.is_empty() {
                     ""
                 } else if any_broken {
@@ -596,17 +595,18 @@ fn render_target_view(
                 };
                 let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
-                    "<span class=\"tgt-block{}{} zebra-{}\" data-tgt-hash=\"{}\">",
+                    "<span class=\"tgt-block{}{} zebra-{}\" data-tgt-id=\"{}\" data-tgt-hash=\"{}\">",
                     cov_class,
                     inline,
                     i % 2,
+                    target_id,
                     &e.hash
                 ));
                 s.push_str(&esc(&content));
                 if !inc.is_empty() {
                     s.push_str("<span class=\"tgt-markers\">");
                     for l in &inc {
-                        let cls = if !l.src_resolved || !l.tgt_resolved {
+                        let cls = if !l.src_resolved {
                             "tgt-marker tgt-broken"
                         } else {
                             "tgt-marker"
@@ -616,13 +616,13 @@ fn render_target_view(
                                 ← <code>{}</code> ({})\
                              </span>\
                              <span class=\"tgt-to-cmp\" title=\"show this link in Compare\" \
-                                   data-a-hash=\"{}\" data-b-hash=\"{}\">⇄</span>",
+                                   data-a-hash=\"{}\" data-b-id=\"{}\">⇄</span>",
                             cls,
                             &l.source_hash,
                             &l.source_hash,
                             esc(&l.conn_name),
                             &l.source_hash,
-                            &e.hash
+                            target_id
                         ));
                         if !l.note.is_empty() {
                             s.push_str(&format!(" <span class=\"note\">{}</span>", esc(&l.note)));
@@ -650,7 +650,7 @@ fn render_target_view(
 //
 // All markup here uses `cmp-*` classes and `data-cmp-*` attributes so the
 // existing List / Source / Target views (and their JS) are untouched. Source
-// segments carry the target hashes they link to (`data-cmp-links`); target
+// segments carry the target occurrence IDs they link to (`data-cmp-links`); target
 // segments carry the source hashes that point at them (`data-cmp-back`). The
 // compare JS uses those to highlight + scroll the counterpart panel on click.
 
@@ -659,7 +659,7 @@ fn render_compare_view(
     by_file: &BTreeMap<String, Vec<&CoveringEntry>>,
     outgoing: &BTreeMap<String, Vec<OutgoingLink>>,
     conns: &[ConnView],
-    incoming: &BTreeMap<(String, String), Vec<IncomingLink>>,
+    incoming: &BTreeMap<String, Vec<IncomingLink>>,
 ) -> io::Result<String> {
     let mut s = String::from("<div class=\"cmp-grid\">\n");
 
@@ -708,8 +708,10 @@ fn render_compare_view(
                     .unwrap_or_else(|_| String::from("(missing)\n"));
                 let status = seg_status(outgoing, &e.hash);
                 let links = outgoing.get(&e.hash).cloned().unwrap_or_default();
-                let link_hashes: Vec<String> =
-                    links.iter().map(|l| l.target_hash.clone()).collect();
+                let link_targets: Vec<&str> = links
+                    .iter()
+                    .filter_map(|link| link.target_id.as_deref())
+                    .collect();
                 let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
                     "<span class=\"cmp-seg cmp-seg-a status-{}{} zebra-{}\" data-status=\"{}\" \
@@ -719,7 +721,7 @@ fn render_compare_view(
                     i % 2,
                     status,
                     &e.hash,
-                    esc(&link_hashes.join(" ")),
+                    esc(&link_targets.join(" ")),
                     esc(&tip_json(e, &links))
                 ));
                 s.push_str(&esc(&content));
@@ -740,12 +742,15 @@ fn render_compare_view(
             Some(t) => t,
             None => continue,
         };
-        let mut tgt_by_file: BTreeMap<String, Vec<&CoveringEntry>> = BTreeMap::new();
-        for e in &tc.entries {
-            tgt_by_file.entry(e.file.clone()).or_default().push(e);
+        let mut tgt_by_file: BTreeMap<String, Vec<(usize, &CoveringEntry)>> = BTreeMap::new();
+        for (entry_index, e) in tc.entries.iter().enumerate() {
+            tgt_by_file
+                .entry(e.file.clone())
+                .or_default()
+                .push((entry_index, e));
         }
         for v in tgt_by_file.values_mut() {
-            v.sort_by_key(|e| e.sort_key());
+            v.sort_by_key(|(_, e)| e.sort_key());
         }
         for (fname, entries) in &tgt_by_file {
             any_b = true;
@@ -758,17 +763,15 @@ fn render_compare_view(
                 esc(&short_repo_name(&cv.k.target_peer)),
                 esc(&cv.k.target_covering)
             ));
-            for (i, e) in entries.iter().enumerate() {
+            for (i, (entry_index, e)) in entries.iter().enumerate() {
                 let content = cache::read_live_content(&cv.tgt_repo, e)
                     .unwrap_or_else(|_| String::from("(missing)\n"));
-                let inc = incoming
-                    .get(&(cv.k.target_peer.clone(), e.hash.clone()))
-                    .cloned()
-                    .unwrap_or_default();
+                let target_id = target_occurrence_id(cv, *entry_index);
+                let inc = incoming.get(&target_id).cloned().unwrap_or_default();
                 let back_hashes: Vec<String> = inc.iter().map(|l| l.source_hash.clone()).collect();
                 let status = if inc.is_empty() {
                     "unlinked"
-                } else if inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
+                } else if inc.iter().any(|l| !l.src_resolved) {
                     "broken"
                 } else {
                     "linked"
@@ -776,11 +779,12 @@ fn render_compare_view(
                 let inline = if e.is_line_aligned() { "" } else { " inline" };
                 s.push_str(&format!(
                     "<span class=\"cmp-seg cmp-seg-b status-{}{} zebra-{}\" data-status=\"{}\" \
-                           data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\" data-tip='{}'>",
+                           data-cmp-b-id=\"{}\" data-cmp-b-hash=\"{}\" data-cmp-back=\"{}\" data-tip='{}'>",
                     status,
                     inline,
                     i % 2,
                     status,
+                    target_id,
                     &e.hash,
                     esc(&back_hashes.join(" ")),
                     esc(&back_tip_json(
@@ -788,7 +792,7 @@ fn render_compare_view(
                         status,
                         &inc,
                         &src_by_hash,
-                        &format!("{}::{}::", cv.k.target_peer, cv.k.target_covering),
+                        &target_id,
                     ))
                 ));
                 s.push_str(&esc(&content));
@@ -815,9 +819,9 @@ fn render_compare_view(
         let mut groups: BTreeMap<(String, String, String), (usize, usize, usize)> = BTreeMap::new();
         for cv in conns {
             if let Some(tc) = &cv.tgt_cov {
-                for e in &tc.entries {
+                for (entry_index, e) in tc.entries.iter().enumerate() {
                     let inc = incoming
-                        .get(&(cv.k.target_peer.clone(), e.hash.clone()))
+                        .get(&target_occurrence_id(cv, entry_index))
                         .cloned()
                         .unwrap_or_default();
                     let key = (
@@ -828,7 +832,7 @@ fn render_compare_view(
                     let g = groups.entry(key).or_insert((0, 0, 0));
                     if inc.is_empty() {
                         g.1 += 1; // unlinked
-                    } else if inc.iter().any(|l| !l.src_resolved || !l.tgt_resolved) {
+                    } else if inc.iter().any(|l| !l.src_resolved) {
                         g.2 += 1; // broken
                     } else {
                         g.0 += 1; // linked
@@ -913,13 +917,13 @@ fn tip_json(e: &CoveringEntry, links: &[OutgoingLink]) -> String {
             s.push(',');
         }
         s.push_str(&format!(
-            "{{\"conn\":\"{}\",\"target_peer\":\"{}\",\"target_covering\":\"{}\",\"target_hash\":\"{}\",\"note\":\"{}\",\"target_file_key\":\"{}\",\"resolved\":{}}}",
+            "{{\"conn\":\"{}\",\"target_peer\":\"{}\",\"target_covering\":\"{}\",\"target_hash\":\"{}\",\"target_id\":\"{}\",\"note\":\"{}\",\"resolved\":{}}}",
             json_escape(&l.conn_name),
             json_escape(&l.target_peer),
             json_escape(&l.target_covering),
             &l.target_hash,
+            l.target_id.as_deref().unwrap_or(""),
             json_escape(&l.note),
-            json_escape(&format!("{}::{}::", l.target_peer, l.target_covering)),
             l.src_resolved && l.tgt_resolved
         ));
     }
@@ -935,18 +939,13 @@ fn back_tip_json(
     status: &str,
     incoming: &[IncomingLink],
     src_by_hash: &BTreeMap<&str, &CoveringEntry>,
-    tgt_file_key: &str,
+    target_id: &str,
 ) -> String {
     let mut s = String::from("{\"dir\":\"back\",");
     s.push_str(&format!("\"hash\":\"{}\",", &e.hash));
     s.push_str(&format!("\"loc\":\"{}\",", json_escape(&e.loc())));
     s.push_str(&format!("\"label\":\"{}\",", json_escape(&e.label)));
-    // The B segment's own file key, so its header ↗ opens the Target view
-    // (this segment), not the counterpart A segment.
-    s.push_str(&format!(
-        "\"target_file_key\":\"{}\",",
-        json_escape(tgt_file_key)
-    ));
+    s.push_str(&format!("\"target_id\":\"{}\",", json_escape(target_id)));
     if let Some(m) = &e.message {
         s.push_str(&format!("\"message\":\"{}\",", json_escape(m)));
     }
@@ -968,7 +967,7 @@ fn back_tip_json(
             json_escape(&src_label),
             json_escape(&src_file),
             json_escape(&l.note),
-            l.src_resolved && l.tgt_resolved
+            l.src_resolved
         ));
     }
     s.push_str("]}");
@@ -1302,12 +1301,10 @@ function jumpToSource(segid, file, origin) {
   }
 }
 
-function jumpToTarget(targetFileKey, targetHash, origin) {
+function jumpToTarget(targetId, origin) {
   document.querySelector('.view-toggle button[data-view="target"]').click();
-  const fileEl = document.querySelector(`.tgt-file[data-target-file^="${CSS.escape(targetFileKey)}"]`);
-  if (fileEl) fileEl.scrollIntoView({behavior: 'smooth', block: 'start'});
-  if (targetHash) {
-    const block = document.querySelector(`.tgt-block[data-tgt-hash="${CSS.escape(targetHash)}"]`);
+  if (targetId) {
+    const block = document.querySelector(`.tgt-block[data-tgt-id="${CSS.escape(targetId)}"]`);
     if (block) {
       block.scrollIntoView({behavior: 'smooth', block: 'center'});
       block.classList.remove('flash'); void block.offsetWidth; block.classList.add('flash');
@@ -1347,7 +1344,7 @@ document.addEventListener('click', ev => {
   const toCmp = ev.target.closest('.tgt-to-cmp');
   if (toCmp) {
     tooltip.classList.remove('visible');
-    cmpJumpToLink(toCmp.dataset.aHash, toCmp.dataset.bHash);
+    cmpJumpToLink(toCmp.dataset.aHash, toCmp.dataset.bId);
     return;
   }
   // target → source jumps
@@ -1368,8 +1365,8 @@ document.addEventListener('click', ev => {
       cmpReturn = { a: open.dataset.segid, b: null };
       jumpToSource(open.dataset.segid, '', true);
     } else {
-      cmpReturn = { a: null, b: open.dataset.targetHash };
-      jumpToTarget(open.dataset.targetFileKey, open.dataset.targetHash, true);
+      cmpReturn = { a: null, b: open.dataset.targetId };
+      jumpToTarget(open.dataset.targetId, true);
     }
     showReturnPill();
     return;
@@ -1384,9 +1381,9 @@ document.addEventListener('click', ev => {
   // Forward tooltip link (List / Source views only): jump to the target.
   // In Compare the tooltip link rows are informational (navigation is by
   // clicking the segment in the panel), so they carry no jump target.
-  const fwd = ev.target.closest('.tt-link[data-target-hash]');
+  const fwd = ev.target.closest('.tt-link[data-target-id]');
   if (fwd) {
-    jumpToTarget(fwd.dataset.targetFileKey, fwd.dataset.targetHash);
+    jumpToTarget(fwd.dataset.targetId);
     return;
   }
 });
@@ -1395,11 +1392,11 @@ document.addEventListener('click', ev => {
 // (the A segment in its panel, the B segment in its). Used by the reciprocal
 // control in the Source / Target views. A missing endpoint (broken link) is
 // simply skipped, so a half-resolved link still shows the side that exists.
-function cmpJumpToLink(aHash, bHash) {
+function cmpJumpToLink(aHash, bId) {
   document.querySelector('.view-toggle button[data-view="compare"]').click();
   cmpClearHot();
   const a = aHash ? document.querySelector(`.cmp-seg-a[data-cmp-a-hash="${CSS.escape(aHash)}"]`) : null;
-  const b = bHash ? document.querySelector(`.cmp-seg-b[data-cmp-b-hash="${CSS.escape(bHash)}"]`) : null;
+  const b = bId ? document.querySelector(`.cmp-seg-b[data-cmp-b-id="${CSS.escape(bId)}"]`) : null;
   if (a) { a.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(a); }
   if (b) { b.scrollIntoView({behavior: 'smooth', block: 'center'}); cmpFlash(b); }
 }
@@ -1449,13 +1446,13 @@ function cmpFlash(el) {
 // Click a Compare segment -> highlight ALL its counterparts on the other
 // side; repeated clicks on the SAME segment cycle through them one at a
 // time (wrapping), scrolling each into view. `sideSel` picks the panel and
-// `attr` the hash attribute of the counterparts; `linksAttr` is the clicked
-// segment's list of counterpart hashes.
+// `attr` the identity attribute of the counterparts; `linksAttr` is the
+// clicked segment's list of counterpart identities.
 function cmpWire(seg, linksAttr, sideSel, attr) {
   seg.addEventListener('click', () => {
-    const hashes = (seg.dataset[linksAttr] || '').split(/\s+/).filter(Boolean);
-    const els = hashes
-      .map(h => document.querySelector(`${sideSel}[${attr}="${CSS.escape(h)}"]`))
+    const ids = (seg.dataset[linksAttr] || '').split(/\s+/).filter(Boolean);
+    const els = ids
+      .map(id => document.querySelector(`${sideSel}[${attr}="${CSS.escape(id)}"]`))
       .filter(Boolean);
     if (cmpCycle.origin === seg && cmpCycle.els.length) {
       // Same segment clicked again: advance to the next counterpart.
@@ -1475,7 +1472,7 @@ function cmpWire(seg, linksAttr, sideSel, attr) {
   });
 }
 document.querySelectorAll('.cmp-seg-a').forEach(seg =>
-  cmpWire(seg, 'cmpLinks', '.cmp-seg-b', 'data-cmp-b-hash'));
+  cmpWire(seg, 'cmpLinks', '.cmp-seg-b', 'data-cmp-b-id'));
 document.querySelectorAll('.cmp-seg-b').forEach(seg =>
   cmpWire(seg, 'cmpBack', '.cmp-seg-a', 'data-cmp-a-hash'));
 // Compare file lists scroll their panel to the chosen file.
@@ -1524,7 +1521,7 @@ function renderTip(data) {
       if (inCompare) {
         html += `<li><code class="${cls.trim()}">${escHtml(l.conn)}</code> → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code>${note}</li>`;
       } else {
-        html += `<li><span class="tt-link${cls}" data-target-file-key="${escHtml(l.target_file_key)}" data-target-hash="${l.target_hash}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
+        html += `<li><span class="tt-link${cls}" data-target-id="${l.target_id}">${escHtml(l.conn)} → <code>${l.target_hash.slice(0,12)}</code> in <code>${escHtml(l.target_covering)}</code></span>${note}</li>`;
       }
     }
     html += '</ul>';
@@ -1540,7 +1537,7 @@ function renderTip(data) {
 // A segments pointing at it (informational). The header ↗ opens this B
 // segment in its own Target view — not the counterpart A segment.
 function renderBackTip(data) {
-  const openIcon = ` <span class="tt-open" title="open this segment in the Target view" data-open-view="target" data-target-file-key="${escHtml(data.target_file_key||'')}" data-target-hash="${data.hash}">↗</span>`;
+  const openIcon = ` <span class="tt-open" title="open this segment in the Target view" data-open-view="target" data-target-id="${data.target_id||''}">↗</span>`;
   let html = `<div class="tt-title"><span class="badge ${data.status}">${data.status}</span>${escHtml(data.label || data.loc)}${openIcon}</div>`;
   html += `<div class="tt-meta">${escHtml(data.loc)} · <code>${data.hash}</code></div>`;
   if (data.message) {
@@ -1600,3 +1597,109 @@ document.addEventListener('mouseout', ev => {
 });
 </script>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::Link;
+    use crate::segment;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(tag: &str) -> Repo {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("covmap-html-{tag}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        Repo::init(&root).unwrap()
+    }
+
+    fn entry(hash: &str, file: &str, line: usize, name: &str) -> CoveringEntry {
+        CoveringEntry {
+            hash: hash.to_string(),
+            file: file.to_string(),
+            a: line,
+            a_col: None,
+            b: line,
+            b_col: None,
+            label: name.to_string(),
+            name: Some(name.to_string()),
+            message: None,
+        }
+    }
+
+    fn opening_span<'a>(html: &'a str, attribute: &str) -> &'a str {
+        let attribute_start = html.find(attribute).unwrap();
+        let tag_start = html[..attribute_start].rfind("<span").unwrap();
+        let tag_end = attribute_start + html[attribute_start..].find('>').unwrap() + 1;
+        &html[tag_start..tag_end]
+    }
+
+    #[test]
+    fn duplicate_target_hashes_keep_distinct_navigation_occurrences() {
+        let repo = temp_repo("duplicate-targets");
+        fs::write(repo.root.join("help.txt"), "status help\n").unwrap();
+        fs::write(repo.root.join("tutorial.md"), "covmap status\n".repeat(3)).unwrap();
+
+        let source_hash = segment::hash_of("status help\n");
+        let target_hash = segment::hash_of("covmap status\n");
+        Covering {
+            name: "source".to_string(),
+            entries: vec![entry(&source_hash, "help.txt", 1, "status")],
+        }
+        .write(&repo)
+        .unwrap();
+        Covering {
+            name: "target".to_string(),
+            entries: (1..=3)
+                .map(|line| entry(&target_hash, "tutorial.md", line, &format!("status-{line}")))
+                .collect(),
+        }
+        .write(&repo)
+        .unwrap();
+        Connection {
+            name: "map".to_string(),
+            source_covering: "source".to_string(),
+            target_peer: ".".to_string(),
+            target_covering: "target".to_string(),
+            links: (1..=3)
+                .map(|line| Link {
+                    a: "@status".to_string(),
+                    b: format!("@status-{line}"),
+                    note: format!("occurrence-{line}"),
+                })
+                .collect(),
+        }
+        .write(&repo)
+        .unwrap();
+
+        let html = render(&repo, Some("source"), Some("map")).unwrap();
+
+        assert!(html.contains("data-cmp-links=\"t0-0 t0-1 t0-2\""));
+        assert!(html.contains("3 incoming link(s)"));
+        for line in 1..=3 {
+            let target_id = format!("t0-{}", line - 1);
+            assert_eq!(
+                html.matches(&format!("data-cmp-b-id=\"{target_id}\""))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                html.matches(&format!("data-tgt-id=\"{target_id}\""))
+                    .count(),
+                1
+            );
+            let tag = opening_span(&html, &format!("data-cmp-b-id=\"{target_id}\""));
+            assert!(tag.contains(&format!("occurrence-{line}")));
+            for other in (1..=3).filter(|other| *other != line) {
+                assert!(!tag.contains(&format!("occurrence-{other}")));
+            }
+        }
+        assert!(SCRIPT.contains("cmpWire(seg, 'cmpLinks', '.cmp-seg-b', 'data-cmp-b-id')"));
+
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+}

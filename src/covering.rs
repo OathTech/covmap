@@ -213,17 +213,19 @@ pub fn endpoint_resolves(c: &Covering, ep: &str) -> bool {
 /// maps to whatever hash the named segment currently carries (so the link
 /// follows content edits); a hash endpoint maps to itself if present.
 pub fn endpoint_to_hash(c: &Covering, ep: &str) -> Option<String> {
+    endpoint_to_index(c, ep).map(|index| c.entries[index].hash.clone())
+}
+
+/// Resolve an endpoint to its concrete entry position in this covering.
+/// Names select their unique named entry; a content hash selects the first
+/// matching occurrence, preserving the legacy hash-resolution semantics.
+pub(crate) fn endpoint_to_index(c: &Covering, ep: &str) -> Option<usize> {
     match parse_endpoint(ep) {
         Endpoint::Name(n) => c
             .entries
             .iter()
-            .find(|e| e.name.as_deref() == Some(n.as_str()))
-            .map(|e| e.hash.clone()),
-        Endpoint::Hash(h) => c
-            .entries
-            .iter()
-            .find(|e| e.hash == h)
-            .map(|e| e.hash.clone()),
+            .position(|e| e.name.as_deref() == Some(n.as_str())),
+        Endpoint::Hash(h) => c.entries.iter().position(|e| e.hash == h),
     }
 }
 
@@ -1963,6 +1965,8 @@ mod tests {
         // Both resolve now.
         assert!(endpoint_resolves(&c, "@greeting"));
         assert!(endpoint_resolves(&c, &anon_hash));
+        assert_eq!(endpoint_to_index(&c, "@greeting"), Some(0));
+        assert_eq!(endpoint_to_index(&c, &anon_hash), Some(1));
         // A name endpoint resolves even if the segment's hash changes.
         let mut c2 = c.clone();
         c2.entries[0].hash = "deadbeefdeadbeef".into();

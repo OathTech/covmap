@@ -109,7 +109,8 @@ rm -rf "$WORK/spec/.covmap/objects"/*
 ( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "${ERROR_HASH:0:8}" | grep -qF "$ERROR_HASH" )
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
   || { echo "  FAIL: live hash resolution unexpectedly populated the cache"; exit 1; }
-( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$ERROR_HASH" --content | grep -qF "# Errors" )
+( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$ERROR_HASH" --content \
+  | grep -Eq '^[[:space:]]*1 \| # Errors$' )
 [[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
   || { echo "  FAIL: show --content did not warm its live object"; exit 1; }
 rm -rf "$WORK/spec/.covmap/objects"/*
@@ -312,6 +313,13 @@ LS_HELP=$( "$COVMAP_BIN" ls --help )
 printf '%s\n' "$LS_HELP" | grep -qF "list segments, optionally narrowed to regions" \
   && printf '%s\n' "$TOP_HELP" | grep -qF "list segments, optionally narrowed to regions" \
   || { echo "  FAIL: focused and top-level ls help disagree"; exit 1; }
+if CONNECTION_ARITY_ERROR=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show widget_links aaa 2>&1 ); then
+  echo "  FAIL: show connection accepted one endpoint"
+  exit 1
+fi
+[[ "$CONNECTION_ARITY_ERROR" == *"expected no endpoints or exactly <A> <B>; got 1 endpoint argument(s)"* ]] \
+  || { echo "  FAIL: show connection did not explain its endpoint arity"; exit 1; }
 
 MULTI_LS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main errors.md widget.md:10..20 widget.md:14..20 )
 printf '%s\n' "$MULTI_LS"
@@ -321,6 +329,27 @@ printf '%s\n' "$MULTI_LS"
   && $(printf '%s\n' "$MULTI_LS" | grep -c 'widget.md') == "3" ]] \
   && ! printf '%s\n' "$MULTI_LS" | grep -q 'widget.md:1..5' \
   || { echo "  FAIL: multi-region ls did not restrict the union"; exit 1; }
+
+REGION_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show main:widget.md:10..17 --content )
+[[ $(printf '%s\n' "$REGION_CONTENT" | grep -c -- '^--- content ') == "2" ]] \
+  && printf '%s\n' "$REGION_CONTENT" | grep -Eq '^10 \| ### Increment$' \
+  && printf '%s\n' "$REGION_CONTENT" | grep -Eq '^14 \| ### Decrement$' \
+  || { echo "  FAIL: region show did not emit one content block per segment"; exit 1; }
+LABEL_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show --label Increment main --content-plain )
+[[ $(printf '%s\n' "$LABEL_CONTENT" | grep -c -- '^--- content ') == "1" ]] \
+  && printf '%s\n' "$LABEL_CONTENT" | grep -qE '^### Increment$' \
+  && ! printf '%s\n' "$LABEL_CONTENT" | grep -qF '10 | ### Increment' \
+  || { echo "  FAIL: label show did not emit plain segment content"; exit 1; }
+NO_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show main:widget.md:10..17 )
+! printf '%s\n' "$NO_CONTENT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: show without a content flag emitted content"; exit 1; }
+if CONTENT_FLAG_ERROR=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show main:widget.md:10..17 --content plain 2>&1 ); then
+  echo "  FAIL: show accepted plain as a stray positional content value"
+  exit 1
+fi
+[[ "$CONTENT_FLAG_ERROR" == *"use --content-plain"* ]] \
+  || { echo "  FAIL: show did not point the old plain spelling to --content-plain"; exit 1; }
 
 REGION_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10..13 --linked )
 [[ $(printf '%s\n' "$REGION_LINKED" | wc -l | tr -d ' ') == "1" \

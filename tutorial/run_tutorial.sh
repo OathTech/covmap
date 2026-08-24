@@ -120,8 +120,11 @@ hr "2. inspect the covering  (REQ12, REQ20)"
 ( cd "$WORK/spec" && run status )
 ( cd "$WORK/spec" && run ls -l )
 
-SPEC_HASH="$(cd "$WORK/spec" && "$COVMAP" ls main | head -1 | cut -f1)"
+ERROR_HASH="$(cd "$WORK/spec" && "$COVMAP" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }')"
 QUEUE_HASH="$(cd "$WORK/spec" && "$COVMAP" ls-segments -l main | awk -F '\t' '$2 == "queue.md" { print $1 }')"
+SPEC_HASH="$ERROR_HASH"
+assert "initial segment hashes match the TUTORIAL2 transcript" \
+  bash -c "[[ '$ERROR_HASH' = 238857a21a1ee053 && '$QUEUE_HASH' = c7da83ee193093c5 ]]"
 echo "  (clearing reconstructible live object caches)"
 rm -rf "$WORK/spec/.covmap/objects"/* "$WORK/impl_rs/.covmap/objects"/*
 ( cd "$WORK/spec" && run fsck --offline )
@@ -404,14 +407,19 @@ hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
 assert "peek lists all 7 pending tasks (the choosable set)" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter review peek | wc -l ) ) -eq 7 ]]"
 
-# `next --content` advances AND dumps the frozen bytes in one call — the
-# review affordance (documented on next/current/peek alike). Regression
-# guard: this must be accepted, not rejected as an unexpected argument.
+# `next --content` advances and prints the frozen content with the same
+# numbered renderer as `show` (documented on next/current/peek alike).
 assert "next --content advances and emits frozen content" \
   bash -c "
     out=\$( cd '$WORK/spec' && '$COVMAP' iter review next --content )
-    # more than one line = handle line + at least one content line
-    [[ \$(printf '%s\n' \"\$out\" | wc -l) -gt 1 ]]
+    printf '%s\n' \"\$out\" | grep -q -- '^--- content '
+    printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*[0-9]+ \| '
+  "
+assert "current --content-plain emits raw frozen content" \
+  bash -c "
+    out=\$( cd '$WORK/spec' && '$COVMAP' iter review current --content-plain )
+    printf '%s\n' \"\$out\" | grep -q -- '^--- content '
+    ! printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*[0-9]+ \| '
   "
 # That advanced onto (and printed) the first task; resolve it so the
 # canonical loop below picks up cleanly from the next pending task.

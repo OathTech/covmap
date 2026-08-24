@@ -134,7 +134,7 @@ are unique.
 | `covmap hydrate [<C>]` | Verify live source against covering hashes and atomically recreate missing cache objects; omitted `<C>` means every covering. | **yes** |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
 | `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
-| `covmap show <addr> [--content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds a segment's bytes; `--all` expands a large connection. | yes |
+| `covmap show <addr> [--content\|--content-plain] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds numbered source lines; `--content-plain` adds raw segment bytes. Partial-line numbered views mark measured omitted columns with `.`; an unmeasurable trailing remainder is reported separately as `REST-OF-LINE-UNKNOWN`. `--all` expands a large connection. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
@@ -380,8 +380,12 @@ one content-hash node and produce one hub row at the first covering-order
 location. Mapping notes appear on wrapped lines beneath each resolved pair;
 add `--all` when the command suppresses a large link list.
 
-You can open the files yourself, so these views never dump content (use
-`--content` if you want a segment's bytes inline).
+You can open the files yourself, so these views never dump content unless
+requested. Use `--content` for numbered source lines or `--content-plain` for
+raw segment bytes. Numbered character-level segments mark measured omitted
+columns with `.`. If drift or unavailable source makes the trailing remainder
+unmeasurable, covmap preserves the recorded fragment verbatim and follows it
+with `! covmap: REST-OF-LINE-UNKNOWN`.
 
 ### A3. Trace a cross-cutting concern (label lens)
 
@@ -614,8 +618,9 @@ Each `next` / `current` / `peek` prints one parseable line per task:
 <@name|hash>	<label>	<file>:<a>..<b>
 ```
 
-Add `--content` (to `next`/`current`/`peek`) to also dump the frozen
-bytes; by default stdout stays terse so the loop is easy to parse.
+Add `--content` (to `next`/`current`/`peek`) for the same numbered content
+block used by `show`, or `--content-plain` for raw frozen bytes. By default
+stdout stays terse so the loop is easy to parse.
 
 **The enumeration guarantee — why you can't lose a task:**
 

@@ -158,8 +158,8 @@ covmap ls -l
 ```
 covering main: segments=2 lines=20
   drift: clean
-327ef5a116484a87	unknown	errors.md:1..4	4	-
-9ce81ba012a36b2a	unknown	queue.md:1..16	16	-
+238857a21a1ee053	unknown	errors.md:1..4	4	-
+c7da83ee193093c5	unknown	queue.md:1..16	16	-
 ```
 
 `ls -l` columns are: hash, label, location (`file:a..b`), line count, and
@@ -177,8 +177,8 @@ selected objects:
 rm -rf .covmap/objects/*
 covmap fsck --offline
 find .covmap/objects -type f          # still empty
-covmap rev-parse 327ef5a1             # resolves from the live covering ref
-covmap cat-segment 327ef5a1           # verified source read; warms one object
+covmap rev-parse 238857a2             # resolves from the live covering ref
+covmap cat-segment 238857a2           # verified source read; warms one object
 covmap status                         # best-effort warming fills the other
 rm -rf .covmap/objects/*
 covmap hydrate main                   # verify source hashes, then fill main
@@ -581,14 +581,15 @@ covmap iter review current               # the resume affordance: reprint the cu
 ```
 
 (Between `next` and `done` you would inspect the task — `covmap iter review
-next --content` hands you the frozen bytes as you advance, or fetch them any
-time with `covmap iter review current --content` / `covmap cat-segment
-<hash>` — and do the actual work; use `skip -m "why"` in place of `done` to
-pass on one deliberately.)
+next --content` hands you its numbered frozen content as you advance, or fetch
+it any time with `covmap iter review current --content`; use
+`--content-plain` or `covmap cat-segment <hash>` for raw bytes. Then do the
+actual work; use `skip -m "why"` in place of `done` to pass on one deliberately.)
 
 Each `next` / `current` / `peek` prints one parseable line per task —
 `<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally
-dumps the frozen bytes, so the loop's stdout stays terse by default.
+prints the same numbered content block as `show` (`--content-plain` selects raw
+bytes), so the loop's stdout stays terse by default.
 
 The enumeration guarantee is what makes "visit every segment exactly once"
 a property the tool enforces: `next` advances to the first pending task

@@ -175,7 +175,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `hydrate [<C>]` | Reconstruct missing live cache objects from source that matches the covering hash. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
 | `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
-| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
+| `show <addr> [--content\|--content-plain] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. `--content` adds numbered source lines; `--content-plain` adds raw segment bytes. Partial-line numbered views mark measured omitted columns with `.`; if drift or missing source prevents measuring the remainder, a separate `REST-OF-LINE-UNKNOWN` diagnostic follows the recorded line. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |

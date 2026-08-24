@@ -388,27 +388,6 @@ covmap ls-links queue_links
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
 
-The script commits each repository's sources and `.covmap/` artifact, then
-clones them into a different directory layout. It also creates local iterator,
-report, and temporary files before the commit to prove that the default policy
-excludes them. The clone contains the tracked selection policy, covering and
-connection refs, but no object cache, peer binding, iterator state, report, or
-temporary file:
-
-```sh
-git add queue.md errors.md .covmap
-git commit -m "tutorial spec"
-# clone spec and impl elsewhere
-cd <spec-clone>
-covmap fsck --offline --hydrate
-covmap peer bind impl ../deps/implementation
-covmap fsck
-```
-
-The connection bytes are identical in both checkouts. Hydration and the new
-binding change only ignored local state, so `git status` reports a clean
-working tree.
-
 The target may also be a covering in the current repository. In
 `connect main main local_preview`, the first `main` is the source covering,
 the second `main` is the target covering, and `local_preview` is the
@@ -468,8 +447,7 @@ covmap fsck                 # verify policy, partitions, and endpoints
 covmap status
 ```
 
-`cover alt` creates the covering at the point where it is first needed, so
-there is no earlier setup to remember. It uses the same repository include as
+`cover alt` creates a new covering. It uses the same repository include as
 `main`, but it has not been refined: `queue.md` and `errors.md` each remain one
 whole-file segment. The diff therefore demonstrates a useful fact: coverings
 can partition the same selected sources differently. `fsck: ok` confirms every

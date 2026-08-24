@@ -5,10 +5,10 @@ maps a small Markdown **spec** to a Rust **implementation**, then edits
 the spec three different ways to exercise covmap's drift repair — the
 names, diff-remap, and fingerprinting layers.
 
-Everything here is executed by the companion script
-[`run_tutorial.sh`](run_tutorial.sh), which is the source of truth: this
-document narrates exactly the commands it runs, and the script asserts
-the key outcomes so it doubles as an integration test.
+The companion script [`run_tutorial.sh`](run_tutorial.sh) executes the same
+scenario and asserts the key outcomes, so it doubles as an integration test.
+This guide orders concepts for learning; the script runs a few robustness
+checks earlier than they are explained here.
 
 ```sh
 cd covmap/tutorial
@@ -24,10 +24,8 @@ builds `covmap` (release) if the binary isn't present, or honours a
 
 ### Following along by hand
 
-First make sure the `covmap` you'll type is the **current** build. The
-positional addresses used below (`main:queue.md:5`) are a recent
-feature, so a stale binary on your `PATH` will reject them with
-`no segment matches 'queue.md:5'`. Build and use the fresh one:
+First make sure the `covmap` you'll type is the **current** build. Build
+and use the fresh one:
 
 ```sh
 cd covmap
@@ -81,14 +79,8 @@ from `_play/spec`, where you are). That is exactly what the script does,
 so your hashes and line numbers will match this document. When you're
 done, `rm -rf tutorial/_play` to clean up.
 
-This tutorial touches every requirement in
-[`../REQUIREMENTS.md`](../REQUIREMENTS.md) except the connection
-*algebra* (inverse / composition / union, req11), which is part of the
-formal model but has no CLI surface yet. Each step is annotated with the
-requirements it exercises. For the agent-facing reference, see
-[`../SKILL.md`](../SKILL.md); for fixture-based evaluation tasks, see
-[`../skill_playground/`](../skill_playground/README.md) (this tour folds
-in the scenarios from tasks T1–T11).
+For the agent-facing command and workflow reference, see
+[`../SKILL.md`](../SKILL.md).
 
 ---
 
@@ -112,12 +104,11 @@ preamble; `spec/errors.md` lists two error codes.
 
 ---
 
-## 1. Initialize, select, cover  (req1, req6, req7, req18)
+## 1. Initialize, select, cover
 
 Each repository gets its own `.covmap/`. **Before the first `cover`**, define
-the source-of-truth set positively. The repository include is the default for
-all coverings; ignore is a hard veto. A covering-specific include replaces
-the global include for that covering.
+the source-of-truth set positively. The repository include selects the files
+that matter; ignore is a hard veto for generated or irrelevant paths.
 
 ```sh
 covmap init                          # in _play/spec
@@ -126,8 +117,6 @@ covmap init                          # in _play/spec
 printf '/queue.md\n/errors.md\n' > .covmap/include
 printf 'build/\n' > .covmap/ignore
 printf '/queue.rs\n' > ../impl_rs/.covmap/include
-mkdir -p .covmap/selections/alt
-printf '/queue.md\n' > .covmap/selections/alt/include
 
 covmap cover
 (cd ../impl_rs && covmap cover)
@@ -136,8 +125,7 @@ covmap cover
 `cover` adds one whole-file `unknown` segment per selected readable file it
 has not yet covered — this first, unrefined covering is the *initial cover*.
 It is additive and idempotent. `build/artifact.txt` is absent because the
-global ignore vetoes it. The predeclared `alt` policy is valid before the
-covering exists and is exercised in step 10.
+global ignore vetoes it.
 
 Selection affects future discovery only. Narrowing it later does not remove
 an existing covered path; `cover` warns and leaves the ref unchanged. A
@@ -148,11 +136,12 @@ no discoverable file warn with their policy file and line number.
 Covering 'main': 2 segments, 20 lines (2 added)
 ```
 
-## 2. Inspect the covering  (req12, req20)
+## 2. Inspect the covering
 
 ```sh
 covmap status
 covmap ls -l
+covmap show main:queue.md --content
 ```
 
 ```
@@ -160,55 +149,39 @@ covering main: segments=2 lines=20
   drift: clean
 238857a21a1ee053	unknown	errors.md:1..4	4	-
 c7da83ee193093c5	unknown	queue.md:1..16	16	-
+region main queue.md · 1 segment(s)
+  c7da83ee193093c5  unknown  queue.md:1..16
+    (unlinked)
+--- content c7da83ee193093c5 ---
+ 1 | # Task Queue Spec
+ 2 |
+ 3 | A bounded FIFO queue of tasks, processed oldest-first.
+ 4 |
+ 5 | ## Enqueue
+ 6 |
+ 7 | `enqueue(t)` appends task t to the back. It must reject the task with a
+ 8 | QueueFull error when the queue is already at capacity.
+ 9 |
+10 | ## Dequeue
+11 |
+12 | `dequeue()` removes and returns the front task, or None when empty.
+13 |
+14 | ## Size
+15 |
+16 | `size()` returns the number of queued tasks, always within capacity.
 ```
 
-`ls -l` columns are: hash, label, location (`file:a..b`), line count, and
-name (`-` when anonymous). `status` reports cardinality, line count, and
-drift.
+`status` summarizes the covering and its drift. `ls -l` gives one compact row
+per segment: hash, label, location (`file:a..b`), line count, and name (`-`
+when anonymous). `show main:queue.md --content` is the human inspection view:
+it selects the `queue.md` region, prints the segment metadata, and includes
+the numbered source text you are about to refine.
 
-The script now clears both repositories' live object caches to model a clean
-checkout that has refs and matching source but no cached content. Verification
-accepts that state without silently populating it. Bare hash lookup still
-searches the live refs, so plumbing can resolve and read a clean live segment;
-content inspection warms its object, and normal `status` warms the remaining
-selected objects:
+That is enough internal state for the normal workflow. Keep using the
+porcelain commands below; the optional cache and plumbing details come after
+the iterator section.
 
-```sh
-rm -rf .covmap/objects/*
-covmap fsck --offline
-find .covmap/objects -type f          # still empty
-covmap rev-parse 238857a2             # resolves from the live covering ref
-covmap cat-segment 238857a2           # verified source read; warms one object
-covmap status                         # best-effort warming fills the other
-rm -rf .covmap/objects/*
-covmap hydrate main                   # verify source hashes, then fill main
-```
-
-If source is edited before that first hydration, a live hash still resolves
-but its historical bytes are unavailable. The tutorial temporarily edits
-`queue.md`, verifies that `cat-segment` refuses the drifted bytes with
-restore-and-hydrate guidance, restores the clean file, and hydrates before
-continuing.
-
-On the implementation side it demonstrates the combined form:
-
-```sh
-covmap fsck --offline --hydrate
-```
-
-A missing live object is not corruption when source reproduces the covering
-hash. A present object with the wrong content is corruption, and drifted source
-is never written under the old hash. Hydration does not overwrite corruption;
-delete the offending cache entry before hydrating it from matching source.
-Likewise, a valid cache entry does not make unavailable covered source healthy:
-live verification still fails until that source is restored or the covering is
-changed. Hydration changes only the local cache, not the covering ref. `split`
-and `merge` use this same verified reconstruction rule when recorded input
-objects are absent. Inspection warming is best-effort: an unwritable cache
-does not make otherwise-valid inspection fail, but drift, unavailable bytes,
-and corrupt objects remain visible.
-
-## 3. Refine into one segment per section  (req5, req8)
+## 3. Refine into one segment per section
 
 There are no automatic segmentation rules — you refine by hand with
 `split`. A file selector such as `main:queue.md` inserts several cuts
@@ -246,7 +219,7 @@ Size	queue.md:14..16	3	-
 (Hashes omitted above for readability — yours will match a fresh run,
 since identity is content-addressed, but you never need to type them.)
 
-## 4. Refinement is reversible: merge, then re-split  (req8)
+## 4. Refinement is reversible: merge, then re-split
 
 Merge the two adjacent segments (Enqueue covers line 5, Dequeue covers
 line 10), then split the result — which now covers line 5 — back at
@@ -259,12 +232,12 @@ covmap label main:queue.md:5 Enqueue
 covmap label main:queue.md:10 Dequeue
 ```
 
-`merge` requires the two segments to be adjacent; `split` puts them back.
-Because identity is content-addressed, splitting back to the same
-boundaries restores the original segment hashes exactly (the label does
-not enter the hash, so it does not affect this).
+`merge` requires adjacent segments. Splitting the merged byte range at the
+original line-10 boundary recreates the same Enqueue and Dequeue byte ranges.
+Because identity is content-addressed, those ranges regain their original
+hashes exactly; the labels do not affect the hashes.
 
-## 5. Character-level split: isolate a clause inside a line  (req5)
+## 5. Character-level split: isolate a clause inside a line
 
 A boundary need not fall on a line break. `errors.md` line 3 packs a code
 and its meaning — *"QueueFull means the queue is at capacity …"*. We
@@ -298,15 +271,15 @@ QueueFull-meaning errors.md:3:17..4	2	-
 ```
 
 Three things to notice. The locations `errors.md:3..3:16` and
-`errors.md:3:17..4` are character-precise — the cut is between columns
-16 and 17 of line 3. Both fragments initially became `unknown`, and the
-labels were applied separately. On a split **the name and message stay
-with the first fragment** (`QueueFull-code` kept `@qf-line`); later
-fragments are anonymous and un-messaged. If you wanted the name on the
-meaning clause instead, just re-`name` it — which is exactly what the
-next step does with proper names.
+`errors.md:3:17..4` are character-precise: the cut is between columns 16
+and 17. When split output says metadata was **inherited**, it means the
+first fragment retained the parent segment's name and message. Labels are
+not inherited: every fragment starts `unknown`, and later fragments start
+without a name or message. Here the code fragment kept `@qf-line`; the labels
+were then applied explicitly. The next step moves to durable names for the
+segments that will be mapped.
 
-## 6. Label a segment  (req4)
+## 6. Label a segment
 
 A label is covering-local status metadata — *not* part of the segment
 hash, so relabelling leaves the hash unchanged and never breaks a link.
@@ -316,7 +289,7 @@ Use labels for coarse status: `unknown`, `reviewed`, `mapped`, `ignored`.
 covmap label main:queue.md:14 reviewed     # the Size segment covers line 14
 ```
 
-## 7. Name the segments you intend to map  (req3, req8)
+## 7. Name the segments you intend to map
 
 A **name** gives a segment a stable, covering-local identity (a
 *segment*), independent of its bytes. This is the key to drift-resistant
@@ -344,7 +317,7 @@ a51b8db403cc3096	reviewed	        queue.md:14..16	    3	-
 The name is *not* part of the segment hash — naming, relabelling, or
 recutting a segment never touches the shared object store.
 
-## 8. Annotate a segment with why it was cut  (req22)
+## 8. Annotate a segment with why it was cut
 
 A **message** records free-form rationale *about a segment itself* — why
 this boundary exists, what the chunk is, why it is (or isn't) mapped. It is
@@ -357,11 +330,12 @@ covmap annotate main:@enqueue-op \
   -m "Core enqueue op — mapped to the Rust impl." \
   -m "Cut as its own segment so the spec<->impl link is 1:1."
 covmap annotate main:@enqueue-op    # no -m: print the message
-covmap show main:@enqueue-op        # message shown under the segment header
+covmap show main:@enqueue-op --content  # include numbered source text
 ```
 
 `covmap ls -l` shows the message's first line as a trailing column; `show`
-prints the whole thing.
+prints the full message with the segment header, and `--content` includes the
+Enqueue text with source line numbers beneath it.
 
 This is the fifth and last place text lives in covmap — keep the five
 straight by *what the text is about*:
@@ -374,22 +348,30 @@ straight by *what the text is about*:
 | link note | why *this mapping* (A↔B) | n/a |
 | iterator task note | *this sweep's* verdict on a segment | n/a |
 
-## 9. Connect, repair a rename, and disconnect  (req2, req10, req14, req16)
+## 9. Connect, repair a rename, and disconnect
 
 A **connection** records links between segments of two coverings. Create
 it, then add links. When you link a *named* segment, covmap stores the link
 by `@name` (resilient), not by hash.
 
-Bind the durable peer alias `impl` to the sibling `impl_rs` checkout, then
-store that alias in the connection. The machine-specific path stays in ignored
-local state. The impl side is a single whole-file segment, which we address
-positionally as `queue.rs:1`. Link each named spec segment to it:
-because the spec side is named, the link is stored by `@name` and
-survives later edits.
+These two commands do different jobs:
+
+- `covmap peer bind <alias> <checkout-path>` teaches this checkout where a
+  peer repository currently lives. Here `impl` is the durable alias and
+  `../impl_rs` is its machine-local path. This does not create a connection.
+- `covmap connect <source-covering> <alias>:<target-covering>
+  <connection-name>` creates the portable relation. Here the source covering
+  is the spec's `main`, `impl:main` means covering `main` in peer `impl`, and
+  `queue_links` names the new connection.
+
+The connection stores `impl`, not `../impl_rs`, so another checkout can bind
+the same alias to a different path. The implementation side is currently one
+whole-file segment, addressed as `queue.rs:1`. Because each spec endpoint is
+named, the links below are stored by `@name` and survive later content edits.
 
 ```sh
-covmap peer bind impl ../impl_rs
-covmap connect main impl:main queue_links
+covmap peer bind impl ../impl_rs             # alias -> local checkout path
+covmap connect main impl:main queue_links    # source -> peer:target, named relation
 covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
 covmap link queue_links @dequeue-op        queue.rs:1 \
   "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
@@ -406,33 +388,16 @@ covmap ls-links queue_links
 (All three map to the single whole-file impl segment here; in a real
 project you would refine the impl side too.)
 
-The script commits each repository's sources and `.covmap/` artifact, then
-clones them into a different directory layout. It also creates local iterator,
-report, and temporary files before the commit to prove that the default policy
-excludes them. The clone contains the tracked selection policy, covering and
-connection refs, but no object cache, peer binding, iterator state, report, or
-temporary file:
+The target may also be a covering in the current repository. In
+`connect main main local_preview`, the first `main` is the source covering,
+the second `main` is the target covering, and `local_preview` is the
+connection name. There is no `<peer>:` prefix because both sides are local.
+Since both covering names are also the same, `status` and `show` mark this
+relation as a self-map. It starts with no links, and `disconnect` removes only
+its connection ref:
 
 ```sh
-git add queue.md errors.md .covmap
-git commit -m "tutorial spec"
-# clone spec and impl elsewhere
-cd <spec-clone>
-covmap fsck --offline --hydrate
-covmap peer bind impl ../deps/implementation
-covmap fsck
-```
-
-The connection bytes are identical in both checkouts. Hydration and the new
-binding change only ignored local state, so `git status --short` remains empty.
-
-The target may also be another covering in the current repository. Omit the
-`<peer>:` prefix to create a same-repository connection; `status` and `show`
-mark it as a self-map. This temporary connection has no links, and
-`disconnect` removes only its ref:
-
-```sh
-covmap connect main main local_preview
+covmap connect main main local_preview   # source covering, target covering, name
 covmap show local_preview
 # connection local_preview   main -> main (self-map)
 #   0 links · source 0/7 segments · target 0/7 segments
@@ -441,9 +406,12 @@ covmap disconnect local_preview
 # disconnected 'local_preview': removed 0 link(s) from main -> main (self-map)
 ```
 
-Names are covering-local. Renaming `@queuefull-meaning` does not silently
-rewrite `queue_links`; the command reports the exact stored endpoint that is
-now broken and prints an explicit repair:
+Now return to the external connection created at the start of this section.
+Step 7 named the error-clause segment `@queuefull-meaning`, and the
+`queue_links` connection stored that name as one of its source endpoints.
+Names are covering-local, so renaming it does not silently rewrite the
+connection. Instead, the command identifies the now-broken stored endpoint
+and prints an explicit repair:
 
 ```sh
 covmap name main:@queuefull-meaning queuefull-clause
@@ -467,22 +435,24 @@ a broken far endpoint or a replacement collision, it emits no repair block;
 do not invent one. A fan-out rename still emits one block, with every safe
 `link` before any `unlink`.
 
-## 10. Inspect: show, grep, diff, fsck, status  (req15, req19, req20)
+## 10. Inspect: show, grep, diff, fsck, status
 
 ```sh
 covmap show queue_links     # connection metadata + links
 covmap grep capacity        # segments whose label or content matches
-covmap cover alt            # specific include selects queue.md only
+covmap cover alt            # create alt now, using the repository include
+covmap status alt           # verify that the new covering exists
 covmap diff main alt        # added (-) / only-in-alt (+) / shared (=)
 covmap fsck                 # verify policy, partitions, and endpoints
 covmap status
 ```
 
-The `alt` covering uses `.covmap/selections/alt/include`, which replaces the
-global include, so it contains `queue.md` but not `errors.md`. `fsck: ok`
-confirms every covering is a valid partition, selection layout is valid, and
-every connection endpoint resolves. `status` now shows the connection with its
-**coverage** — how much of each side is mapped:
+`cover alt` creates a new covering. It uses the same repository include as
+`main`, but it has not been refined: `queue.md` and `errors.md` each remain one
+whole-file segment. The diff therefore demonstrates a useful fact: coverings
+can partition the same selected sources differently. `fsck: ok` confirms every
+covering is a valid partition and every connection endpoint resolves.
+`status` shows the connection's **coverage**: how much of each side is mapped.
 
 ```
 covering main: segments=7 lines=21
@@ -491,7 +461,7 @@ connections:
   queue_links: main -> impl:main : 3 links, 0 broken · coverage source 3/7, target 1/1
 ```
 
-## 10b. Bounded drill-down: understand a region  (req23)
+## 10b. Bounded drill-down: understand a region
 
 The point of inspection is *understanding*: seeing a piece of the spec
 **together with** the implementation it maps to. You don't dump whole
@@ -540,7 +510,7 @@ one call. And `covmap show main:@enqueue-op` on a single segment shows its
 links in both directions plus its drift state, naming the fix command if it
 has drifted.
 
-## 11. Iterators: work the covering as a worklist  (req21)
+## 11. Iterators: work the covering as a worklist
 
 A covering says *what* the pieces are. An **iterator** freezes it into an
 *ordered, stateful worklist*: each segment becomes a **task** you pull one
@@ -573,23 +543,24 @@ loop. Do the work between `next` and `done`:
 
 ```sh
 until covmap iter review finished; do
-  covmap iter review next
+  covmap iter review next --content
   covmap iter review done -m "audited"
 done
 covmap iter review status                # 7/7 resolved (7 done, 0 skipped) — finished
-covmap iter review current               # the resume affordance: reprint the cursor's task
+covmap iter review current --content     # reprint the cursor and its frozen bytes
 ```
 
-(Between `next` and `done` you would inspect the task — `covmap iter review
-next --content` hands you its numbered frozen content as you advance, or fetch
-it any time with `covmap iter review current --content`; use
-`--content-plain` or `covmap cat-segment <hash>` for raw bytes. Then do the
-actual work; use `skip -m "why"` in place of `done` to pass on one deliberately.)
+Between `next` and `done`, inspect the frozen content and do the actual work.
+`current --content` is the resume command after an interruption because it
+reprints both the active task and the numbered content block you were reviewing.
+Use `--content-plain` when raw bytes are more useful. Content remains explicit;
+without either flag these commands print only the compact task row. Use
+`skip -m "why"` in place of `done` to pass deliberately.
 
 Each `next` / `current` / `peek` prints one parseable line per task —
 `<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally
-prints the same numbered content block as `show` (`--content-plain` selects raw
-bytes), so the loop's stdout stays terse by default.
+prints the same numbered content block as `show`, so the loop's stdout stays
+terse by default.
 
 The enumeration guarantee is what makes "visit every segment exactly once"
 a property the tool enforces: `next` advances to the first pending task
@@ -619,12 +590,13 @@ Because `choose` never changes a task's state and `rewind` can undo any
 resolution, jumping around and skipping cannot strand a task — the covering
 is always fully reachable.
 
-An iterator can be **filtered to one label** — a backfill of just the
-not-yet-refined `unknown` segments, say. Here `alt` (from step 10) selects
-only `queue.md`, so this freezes its one whole-file `unknown` segment:
+An iterator can be **filtered to one label**: a backfill of just the
+not-yet-refined `unknown` segments, for example. Here `alt` (created visibly
+in step 10) still has one whole-file segment for each selected source, so the
+filter freezes two tasks:
 
 ```sh
-covmap iter backfill new alt --label unknown   # froze ... 1 task(s), label=unknown
+covmap iter backfill new alt --label unknown   # froze ... 2 task(s), label=unknown
 covmap iter                                    # bare `iter` lists every iterator
 ```
 
@@ -636,21 +608,66 @@ covmap iter review rm
 covmap iter backfill rm
 ```
 
-(This is playground task T8. Note an iterator is *not* a drift tracker:
-`iter new` ensures every frozen task object is cached and retained, so a task
-never goes stale; drift stays a property of the covering, repaired below with
-`recut`.)
+An iterator is *not* a drift tracker. `iter new` retains every frozen task's
+recorded bytes, so the worklist remains stable; drift belongs to the live
+covering and is repaired below with `recut`.
+
+## 11b. Advanced: object cache and plumbing
+
+Most workflows do not need to manage `.covmap/objects` directly. A covering
+records each source range and its content hash; `.covmap/objects` is a local,
+reconstructible cache of the corresponding bytes. If the cache is empty but
+the checked-out source still matches the covering, normal commands can verify
+and reconstruct what they need.
+
+The companion script clears the cache to exercise that recovery path:
+
+```sh
+rm -rf .covmap/objects/*
+covmap fsck --offline                 # verify refs without filling the cache
+covmap rev-parse 238857a2             # resolve an abbreviated segment address
+covmap cat-segment 238857a2           # print recorded bytes; cache if verified
+covmap hydrate main                   # reconstruct all missing objects for main
+covmap fsck --offline --hydrate       # verify and hydrate in one pass
+```
+
+`rev-parse` and `cat-segment` are plumbing commands, not prerequisites for
+everyday use. `rev-parse` turns an address or unique hash prefix into the full
+segment hash. `cat-segment` prints the immutable bytes recorded by that hash;
+it can reconstruct them from source only when the source still verifies.
+Prefer `show <address> --content` for human inspection and `hydrate` when you
+need to repopulate a whole covering.
+
+A missing object is not corruption when the current source reproduces its
+recorded hash. Drifted source is never cached under the old hash, and a
+present object with the wrong bytes is corruption. `hydrate` changes only the
+local cache; it does not change a covering, repair drift, or overwrite a
+corrupt object.
 
 ---
 
-# Drift: three edits, three repair layers
+# Drift: choose the repair by what moved
 
-A covering exists to be reused after the source is edited. covmap detects
-when files diverge from their recorded segments (**drift**) and offers a
-layered repair path. The next three steps each make a different kind of
-edit.
+A covering records both segment bytes and segment boundaries. Keep these
+operations distinct:
 
-## 12. In-place edit → `recut`; the named link survives  (req13, req14)
+- `split` defines a new boundary in a clean covering.
+- `recut <segment>` accepts new bytes inside an existing boundary.
+- `recut --remap` moves line-aligned boundaries through insertions and
+  deletions when the segment order is unchanged.
+
+Start with `covmap status`, then choose by the shape of the edit:
+
+| Edit shape | Repair |
+| ---------- | ------ |
+| Bytes changed, boundary still correct | `recut` the affected segment |
+| Lines inserted or deleted, segment order unchanged | `recut --remap` the file or covering |
+| A segment moved, was reordered, or has character-level boundaries | Verify the new range, then rebuild the affected local partition manually |
+
+The next three steps demonstrate the first two repairs and the diagnostic
+support covmap provides for the harder third case.
+
+## 12. In-place edit → `recut`; the named link survives
 
 Tighten the Dequeue wording — *"…or None when empty."* becomes *"…or
 None when the queue is empty."* (stage `files/queue.reworded.md`). The
@@ -677,10 +694,11 @@ covmap recut main:@dequeue-op          # address the segment by its name
 covmap status                          # drift: clean, still 3 links, 0 broken
 ```
 
-No unlink/relink needed — contrast this with a hash-based link, which
-would have broken (playground task T3 vs. T5).
+No unlink/relink is needed. An anonymous, hash-based link would still point to
+the old hash after the recut, so it would become broken and require explicit
+replacement.
 
-## 13. Inserted lines → `recut --remap` (diff-remap)  (req13)
+## 13. Inserted lines → `recut --remap` (diff-remap)
 
 Add two lines to the preamble (stage `files/queue.inserted.md`). Now
 every section below shifts down — **boundary drift**. A per-segment
@@ -729,16 +747,26 @@ re-fit cleanly, so only the moved one is unresolved.)
 
 Fingerprinting is **propose-only**: a similarity score is a likelihood,
 not a proof, so covmap never relinks on a fuzzy match by itself. You
-confirm the candidate (read those lines), then re-cut the segment at its new
-home and re-link. Tune which guesses appear with `--threshold <f>`
-(default 0.4). This is playground task T7.
+must repair the covering geometry; changing a link alone cannot move a
+segment. Tune which guesses appear with `--threshold <f>` (default 0.4).
 
-The three repair layers form a chain: **name** keeps a link *alive*
-across content edits → **diff-remap** deterministically re-fits
-boundaries that survived in place → **fingerprint** proposes a relocation
-for whatever remains.
+For an unresolved move, use this sequence:
 
-## 15. Drop a genuinely broken link: `prune`  (req14)
+1. Stop after the proposal. The file's covering was left unchanged; do not
+   `prune` temporarily broken links.
+2. Compare the recorded segment (`covmap show main:@enqueue-op --content`)
+   with the proposed source lines. Treat the score only as a pointer.
+3. Record the affected segments' names, labels, messages, and link notes.
+   Merge the smallest adjacent span that contains the old and new boundaries,
+   recut that span from the verified file, then split it at every new boundary.
+4. Reapply the recorded metadata to the correct new segments. Recreating the
+   same names makes name-based links resolve again; only anonymous hash-based
+   links require unlinking and relinking.
+5. Run `covmap status`, `covmap fsck`, and `covmap show queue_links`. Finish
+   only when drift is clean, no endpoint is broken, and the resolved mapping
+   shows the intended source text.
+
+## 15. Drop a genuinely broken link: `prune`
 
 A link is *broken* only when its endpoint no longer resolves — for a
 named segment, when that segment is deleted or its covering-local name is
@@ -755,7 +783,7 @@ broken: @queuefull-clause (missing in source covering) -> … (ok): dropped
 prune: 1 link(s) dropped, 2 kept
 ```
 
-## 16. Render the HTML report  (req20)
+## 16. Render the HTML report
 
 ```sh
 covmap html
@@ -796,22 +824,19 @@ the List / Source views of HEAD's covering.
 
 ## What this covered
 
-| Feature | Step | Requirement |
-| ------- | ---- | ----------- |
-| init / cover / ignore | 1 | req1, req6, req7, req18 |
-| status, ls, cache verification / hydration | 2, 10 | req12, req15, req17, req20 |
-| atomic multi-cut (line + character) | 3, 5 | req4, req5, req8 |
-| merge / recut / label | 4, 6, 12 | req8, req4, req13 |
-| names (segments) | 7 | req3, req8 |
-| annotate (segment message) | 8 | req22 |
-| connect / link / addressing / rename repair / disconnect | 9 | req2, req10, req14, req16 |
-| show / grep / diff / fsck | 10 | req15, req19, req20 |
-| iterator: freeze + sweep a worklist | 11 | req21 |
-| drift: recut (named link survives) | 12 | req13, req14 |
-| drift: diff-remap | 13 | req13 |
-| drift: fingerprint proposal | 14 | req13, req14 |
-| prune | 15 | req14 |
-| HTML report | 16 | req20 |
-
-Not shown: connection algebra (inverse / composition / union, req11),
-which is defined in the model but not yet exposed on the CLI.
+| Feature | Step |
+| ------- | ---- |
+| init / cover / ignore | 1 |
+| status, ls, cache verification / hydration | 2, 10, 11b |
+| atomic multi-cut (line + character) | 3, 5 |
+| merge / recut / label | 4, 6, 12 |
+| names (segments) | 7 |
+| annotate (segment message) | 8 |
+| connect / link / addressing / rename repair / disconnect | 9 |
+| show / grep / diff / fsck | 10 |
+| iterator: freeze + sweep a worklist | 11 |
+| drift: recut (named link survives) | 12 |
+| drift: diff-remap | 13 |
+| drift: fingerprint proposal | 14 |
+| prune | 15 |
+| HTML report | 16 |

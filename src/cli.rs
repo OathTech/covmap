@@ -3,6 +3,7 @@
 //! See covmap/theory/main.tex §5 for the model. Output is line-oriented
 //! and pipe-friendly.
 
+mod content;
 mod inspect;
 
 use crate::cache::{self, HydrateOutcome};
@@ -13,6 +14,7 @@ use crate::peer;
 use crate::repo::Repo;
 use crate::segment::{self, Segment, HASH_LEN};
 use crate::walk::{self, DEFAULT_LABEL};
+use content::{ContentFormat, ContentRange, SourceContext};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -114,7 +116,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
         "show" => {
-            "covmap show <addr> [--content] [--all]   inspect a segment, covering, region, link, or connection"
+            "covmap show <addr> [--content|--content-plain] [--all]   inspect a segment, covering, region, link, or connection"
         }
         "ls" => {
             "covmap ls [-l] [<covering>] [<region> ...] [--label <l>] [--linked|--unlinked]   list segments, optionally narrowed to regions"
@@ -174,7 +176,9 @@ PORCELAIN
   cover [<covering>]                  add selected missing files; report policy diagnostics
   hydrate [<covering>]                reconstruct missing live objects from matching source
   status [<covering>]                 cardinality, lines, drift, broken links
-  show <addr> [--content] [--all]     inspect a segment, covering, region, link, or connection
+  show <addr> [--content|--content-plain] [--all]
+                                      inspect a segment, covering, region, link, or connection
+                                      numbered content, or raw content with --content-plain
   ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
@@ -199,10 +203,12 @@ PORCELAIN
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
-  <name> next [--content] | current [--content]       advance to / reprint the current task
+  <name> next [--content|--content-plain] | current [--content|--content-plain]
+                                                      advance to / reprint the current task
   <name> done [-m <msg>] | skip [-m <msg>]            resolve the current task (does not advance)
   <name> choose <addr> | rewind [<addr>]              jump the cursor / reset a task to pending
-  <name> peek [--all] [--content] | status | finished  look ahead / summarize / test exhaustion
+  <name> peek [--all] [--content|--content-plain] | status | finished
+                                                      look ahead / summarize / test exhaustion
   <name> rm                                           delete the iterator (never touches the covering)
   (bare `covmap iter` lists all iterators)
 
@@ -1840,16 +1846,34 @@ fn cmd_iter(args: &[String]) -> io::Result<u8> {
     }
 }
 
-/// Print the frozen content of a task to stdout (used by `--content`).
-fn print_task_content(repo: &Repo, t: &Task) -> io::Result<()> {
+/// Print the frozen content of a task using the same renderer as `show`.
+fn print_task_content(
+    repo: &Repo,
+    t: &Task,
+    format: ContentFormat,
+    source_context: &mut SourceContext,
+) -> io::Result<()> {
     match segment::read_object(&repo.objects_dir(), &t.hash) {
         Ok(content) => {
+            let range = ContentRange {
+                first_line: t.a,
+                first_col: t.a_col,
+                last_line: t.b,
+                last_col: t.b_col,
+            };
+            let source_widths = (format == ContentFormat::Numbered)
+                .then(|| source_context.matching_widths(repo, &t.file, range, &content))
+                .flatten();
+            let handle = t.handle();
             let mut out = io::stdout().lock();
-            out.write_all(content.as_bytes())?;
-            if !content.ends_with('\n') {
-                out.write_all(b"\n")?;
-            }
-            Ok(())
+            content::write_content_block(
+                &mut out,
+                Some(&handle),
+                &content,
+                range,
+                format,
+                source_widths.as_deref(),
+            )
         }
         Err(_) => {
             eprintln!("(content for {} unavailable in object store)", t.handle());
@@ -1958,26 +1982,50 @@ fn cmd_iter_new(name: &str, args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-/// Parse the optional `--content` flag accepted by `next`/`current`/`peek`.
+/// Parse the optional content flag accepted by `next`/`current`/`peek`.
 /// (`peek` also takes `--all`, so it parses its own args.)
-fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<bool> {
-    let mut content = false;
+fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<ContentFormat> {
+    let mut format = ContentFormat::None;
     for a in args {
         match a.as_str() {
-            "--content" => content = true,
+            "--content" => {
+                set_iter_content_format(verb, &mut format, ContentFormat::Numbered, "--content")?
+            }
+            "--content-plain" => {
+                set_iter_content_format(verb, &mut format, ContentFormat::Plain, "--content-plain")?
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("iter {verb}: unexpected arg '{other}' (only --content is accepted)"),
+                    format!(
+                        "iter {verb}: unexpected arg '{other}' \
+                         (only --content or --content-plain is accepted)"
+                    ),
                 ));
             }
         }
     }
-    Ok(content)
+    Ok(format)
+}
+
+fn set_iter_content_format(
+    verb: &str,
+    current: &mut ContentFormat,
+    requested: ContentFormat,
+    flag: &str,
+) -> io::Result<()> {
+    if *current != ContentFormat::None {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("iter {verb}: content format specified more than once (at '{flag}')"),
+        ));
+    }
+    *current = requested;
+    Ok(())
 }
 
 fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
-    let content = parse_content_flag("next", args)?;
+    let content_format = parse_content_flag("next", args)?;
     let repo = current_repo()?;
     let mut it = Iter::read(&repo, name)?;
     // Enumeration guarantee: refuse to advance off a still-pending task.
@@ -1995,8 +2043,9 @@ fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
             it.cursor = Some(idx);
             it.write(&repo)?;
             println!("{}", it.tasks[idx].print_line());
-            if content {
-                print_task_content(&repo, &it.tasks[idx])?;
+            if content_format != ContentFormat::None {
+                let mut source_context = SourceContext::default();
+                print_task_content(&repo, &it.tasks[idx], content_format, &mut source_context)?;
             }
             Ok(0)
         }
@@ -2008,14 +2057,15 @@ fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
 }
 
 fn cmd_iter_current(name: &str, args: &[String]) -> io::Result<u8> {
-    let content = parse_content_flag("current", args)?;
+    let content_format = parse_content_flag("current", args)?;
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
     match it.cursor {
         Some(idx) => {
             println!("{}", it.tasks[idx].print_line());
-            if content {
-                print_task_content(&repo, &it.tasks[idx])?;
+            if content_format != ContentFormat::None {
+                let mut source_context = SourceContext::default();
+                print_task_content(&repo, &it.tasks[idx], content_format, &mut source_context)?;
             }
             Ok(0)
         }
@@ -2081,11 +2131,22 @@ fn cmd_iter_rewind(name: &str, args: &[String]) -> io::Result<u8> {
 
 fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
     let mut all = false;
-    let mut content = false;
+    let mut content_format = ContentFormat::None;
     for a in args {
         match a.as_str() {
             "--all" => all = true,
-            "--content" => content = true,
+            "--content" => set_iter_content_format(
+                "peek",
+                &mut content_format,
+                ContentFormat::Numbered,
+                "--content",
+            )?,
+            "--content-plain" => set_iter_content_format(
+                "peek",
+                &mut content_format,
+                ContentFormat::Plain,
+                "--content-plain",
+            )?,
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -2096,13 +2157,14 @@ fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
     }
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
+    let mut source_context = SourceContext::default();
     if all {
         // The whole worklist in frozen order, each line tagged with its
         // state (and note) — an audit view including done/skipped tasks.
         for t in &it.tasks {
             println!("{}", t.print_line_stateful());
-            if content {
-                print_task_content(&repo, t)?;
+            if content_format != ContentFormat::None {
+                print_task_content(&repo, t, content_format, &mut source_context)?;
             }
         }
         return Ok(0);
@@ -2117,8 +2179,8 @@ fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
     }
     for &idx in &pending {
         println!("{}", it.tasks[idx].print_line());
-        if content {
-            print_task_content(&repo, &it.tasks[idx])?;
+        if content_format != ContentFormat::None {
+            print_task_content(&repo, &it.tasks[idx], content_format, &mut source_context)?;
         }
     }
     Ok(0)

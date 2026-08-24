@@ -1,8 +1,11 @@
 //! Read-only CLI inspection commands and their text renderers.
 
 use super::{
-    connection_route, current_repo, parse_addr, print_cache_warnings, resolve_covering,
-    resolve_target_repo, short,
+    connection_route,
+    content::{
+        content_line_count, write_content_block, ContentFormat, ContentRange, SourceContext,
+    },
+    current_repo, parse_addr, print_cache_warnings, resolve_covering, resolve_target_repo, short,
 };
 
 use crate::cache;
@@ -11,7 +14,7 @@ use crate::covering::{self, Covering, CoveringEntry};
 use crate::repo::Repo;
 use crate::segment;
 use crate::walk;
-use std::io;
+use std::io::{self, Write};
 
 /// "Drift" for a hand-curated covering means: a file the covering
 /// claims to partition has been edited so that the recorded segments
@@ -167,10 +170,17 @@ fn file_matches_segments(lines: &[String], entries: &[&CoveringEntry]) -> bool {
 
 // ---- show -----------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ShowOptions {
+    /// `None` means no CLI override. Covering views then omit content, while
+    /// bare hashes retain their content-first behavior.
+    content: Option<ContentFormat>,
+}
+
 pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
     // Split off flags (--label <l>, --content) from positionals.
     let mut label_lens: Option<String> = None;
-    let mut with_content = false;
+    let mut options = ShowOptions::default();
     let mut with_all = false;
     let mut pos: Vec<String> = Vec::new();
     let mut i = 0;
@@ -183,12 +193,22 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
                 i += 2;
             }
             "--content" => {
-                with_content = true;
+                set_content_format(&mut options, ContentFormat::Numbered, "--content")?;
+                i += 1;
+            }
+            "--content-plain" => {
+                set_content_format(&mut options, ContentFormat::Plain, "--content-plain")?;
                 i += 1;
             }
             "--all" => {
                 with_all = true;
                 i += 1;
+            }
+            other if other.starts_with('-') => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("show: unexpected flag '{other}'"),
+                ));
             }
             other => {
                 pos.push(other.to_string());
@@ -200,9 +220,15 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
 
     // --label <l> [<C>] — the cross-cutting "understand" call.
     if let Some(l) = label_lens {
+        reject_extra_show_args(&pos, 1, options)?;
         let cname = pos.first().cloned().unwrap_or_else(|| "HEAD".to_string());
         let c = resolve_covering(&repo, &cname)?;
-        return show_label(&repo, &c, &l);
+        return show_label(
+            &repo,
+            &c,
+            &l,
+            options.content.unwrap_or(ContentFormat::None),
+        );
     }
 
     let addr = pos
@@ -212,11 +238,22 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
     // Connection selectors: `<K>` (list links) or `<K> <a> <b>` (one link).
     if repo.connections_dir().join(addr).is_file() {
         let k = Connection::read(&repo, addr)?;
-        if pos.len() >= 3 {
-            return show_link(&repo, &k, &pos[1], &pos[2]);
+        match pos.len() {
+            1 => return show_connection(&repo, &k, with_all),
+            3 => return show_link(&repo, &k, &pos[1], &pos[2]),
+            count => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "show connection '{addr}': expected no endpoints or exactly <A> <B>; \
+                         got {} endpoint argument(s)",
+                        count - 1
+                    ),
+                ))
+            }
         }
-        return show_connection(&repo, &k, with_all);
     }
+    reject_extra_show_args(&pos, 1, options)?;
 
     let (covering, prefix) = parse_addr(addr);
 
@@ -226,7 +263,12 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
         if repo.covering_exists(cname).unwrap_or(false) {
             let c = Covering::read(&repo, cname)?;
             if let Some(region) = parse_region(&c, &prefix) {
-                return show_region(&repo, &c, &region?);
+                return show_region(
+                    &repo,
+                    &c,
+                    &region?,
+                    options.content.unwrap_or(ContentFormat::None),
+                );
             }
         }
     } else if repo.covering_exists(addr).unwrap_or(false) {
@@ -235,7 +277,41 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
     }
 
     // Otherwise a single segment — DETAIL.
-    show_segment(&repo, covering.as_deref(), &prefix, with_content)
+    show_segment(&repo, covering.as_deref(), &prefix, options)
+}
+
+fn set_content_format(
+    options: &mut ShowOptions,
+    format: ContentFormat,
+    flag: &str,
+) -> io::Result<()> {
+    if options.content.replace(format).is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("show: content format specified more than once (at '{flag}')"),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_extra_show_args(
+    positionals: &[String],
+    allowed: usize,
+    options: ShowOptions,
+) -> io::Result<()> {
+    if positionals.len() <= allowed {
+        return Ok(());
+    }
+    let extra = &positionals[allowed];
+    let detail = if options.content == Some(ContentFormat::Numbered) && extra == "plain" {
+        "; use --content-plain for plain content"
+    } else {
+        ""
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("show: unexpected argument '{extra}'{detail}"),
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -339,7 +415,7 @@ fn show_segment(
     repo: &Repo,
     covering: Option<&str>,
     prefix: &str,
-    with_content: bool,
+    options: ShowOptions,
 ) -> io::Result<u8> {
     // Label, name and message are covering-local, so they are available
     // only when addressed through a covering; a bare hash names content
@@ -402,14 +478,47 @@ fn show_segment(
         }
     }
 
-    if with_content || entry.is_none() {
-        // A bare-hash address has no covering context, so content is all we
-        // can show; through a covering, content is opt-in (`--content`).
-        println!("--- content ---");
-        print!("{content}");
-        if !content.ends_with('\n') {
-            println!();
+    let content_format = options.content.unwrap_or_else(|| {
+        if entry.is_none() {
+            ContentFormat::Numbered
+        } else {
+            ContentFormat::None
         }
+    });
+    if content_format != ContentFormat::None {
+        // A bare-hash address has no covering context, so content is all we
+        // can show; through a covering, content is opt-in.
+        let range = entry
+            .as_ref()
+            .map(|e| ContentRange {
+                first_line: e.a,
+                first_col: e.a_col,
+                last_line: e.b,
+                last_col: e.b_col,
+            })
+            .unwrap_or_else(|| ContentRange::whole_lines(1, content_line_count(&content)));
+        let mut source_context = SourceContext::default();
+        let source_widths = (content_format == ContentFormat::Numbered)
+            .then(|| {
+                entry
+                    .as_ref()
+                    .and_then(|e| source_context.matching_widths(repo, &e.file, range, &content))
+            })
+            .flatten();
+        let handle = entry
+            .as_ref()
+            .and_then(|e| e.name.as_deref().map(|name| format!("@{name}")))
+            .unwrap_or_else(|| short(&full).to_string());
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        write_content_block(
+            &mut out,
+            Some(&handle),
+            &content,
+            range,
+            content_format,
+            source_widths.as_deref(),
+        )?;
     }
     Ok(0)
 }
@@ -824,7 +933,12 @@ fn endpoints_match(stored: &str, given: &str) -> bool {
         || format!("@{given}") == *stored
 }
 
-fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
+fn show_region(
+    repo: &Repo,
+    c: &Covering,
+    region: &Region,
+    content_format: ContentFormat,
+) -> io::Result<u8> {
     let mut segs: Vec<&CoveringEntry> = c
         .entries
         .iter()
@@ -841,11 +955,17 @@ fn show_region(repo: &Repo, c: &Covering, region: &Region) -> io::Result<u8> {
         None => region.file.clone(),
     };
     println!("region {} {} · {} segment(s)", c.name, where_, segs.len());
-    print_region_segs(&rel, &segs);
+    let segments = prepare_region_segments(repo, segs, content_format)?;
+    print_region_segs(&rel, &segments, content_format)?;
     Ok(0)
 }
 
-fn show_label(repo: &Repo, c: &Covering, label: &str) -> io::Result<u8> {
+fn show_label(
+    repo: &Repo,
+    c: &Covering,
+    label: &str,
+    content_format: ContentFormat,
+) -> io::Result<u8> {
     let mut segs: Vec<&CoveringEntry> = c.entries.iter().filter(|e| e.label == label).collect();
     segs.sort_by_key(|e| e.sort_key());
     print_cache_warnings(
@@ -859,38 +979,117 @@ fn show_label(repo: &Repo, c: &Covering, label: &str) -> io::Result<u8> {
         c.name,
         segs.len()
     );
-    print_region_segs(&rel, &segs);
+    let segments = prepare_region_segments(repo, segs, content_format)?;
+    print_region_segs(&rel, &segments, content_format)?;
     Ok(0)
+}
+
+struct RegionSegmentView<'a> {
+    entry: &'a CoveringEntry,
+    content: Option<String>,
+    source_widths: Option<Vec<usize>>,
+}
+
+fn prepare_region_segments<'a>(
+    repo: &Repo,
+    segs: Vec<&'a CoveringEntry>,
+    content_format: ContentFormat,
+) -> io::Result<Vec<RegionSegmentView<'a>>> {
+    let mut source_context = SourceContext::default();
+    segs.into_iter()
+        .map(|entry| {
+            let content = match content_format {
+                ContentFormat::None => None,
+                ContentFormat::Plain | ContentFormat::Numbered => {
+                    Some(cache::read_live_content(repo, entry)?)
+                }
+            };
+            let source_widths = (content_format == ContentFormat::Numbered)
+                .then(|| {
+                    content.as_ref().and_then(|recorded| {
+                        source_context.matching_widths(
+                            repo,
+                            &entry.file,
+                            ContentRange {
+                                first_line: entry.a,
+                                first_col: entry.a_col,
+                                last_line: entry.b,
+                                last_col: entry.b_col,
+                            },
+                            recorded,
+                        )
+                    })
+                })
+                .flatten();
+            Ok(RegionSegmentView {
+                entry,
+                content,
+                source_widths,
+            })
+        })
+        .collect()
 }
 
 /// Shared relationship-view body: each segment then its resolved
 /// counterparts (the compare view, in text).
-fn print_region_segs(rel: &crate::resolve::Relation, segs: &[&CoveringEntry]) {
-    for e in segs {
+fn print_region_segs(
+    rel: &crate::resolve::Relation,
+    segments: &[RegionSegmentView<'_>],
+    content_format: ContentFormat,
+) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    write_region_segs(&mut out, rel, segments, content_format)
+}
+
+fn write_region_segs(
+    out: &mut impl Write,
+    rel: &crate::resolve::Relation,
+    segments: &[RegionSegmentView<'_>],
+    content_format: ContentFormat,
+) -> io::Result<()> {
+    for segment in segments {
+        let e = segment.entry;
         let handle = e
             .name
             .as_deref()
             .map(|n| format!("@{n}"))
             .unwrap_or_else(|| short(&e.hash).to_string());
         let lbl = if e.label.is_empty() { "-" } else { &e.label };
-        println!("  {handle}  {lbl}  {}", e.loc());
+        writeln!(out, "  {handle}  {lbl}  {}", e.loc())?;
         let links = rel.links_of(&e.hash);
         if links.outgoing.is_empty() && links.incoming.is_empty() {
-            println!("    (unlinked)");
+            writeln!(out, "    (unlinked)")?;
         }
         for l in &links.outgoing {
-            println!("    -> {}   {}", far_label(l), resolved_loc(l));
+            writeln!(out, "    -> {}   {}", far_label(l), resolved_loc(l))?;
             if !l.note.is_empty() {
-                println!("       {}", l.note);
+                writeln!(out, "       {}", l.note)?;
             }
         }
         for l in &links.incoming {
-            println!("    <- {}   {}", far_label(l), resolved_loc(l));
+            writeln!(out, "    <- {}   {}", far_label(l), resolved_loc(l))?;
             if !l.note.is_empty() {
-                println!("       {}", l.note);
+                writeln!(out, "       {}", l.note)?;
             }
         }
+        if let Some(content) = &segment.content {
+            write_content_block(
+                out,
+                Some(&handle),
+                content,
+                ContentRange {
+                    first_line: e.a,
+                    first_col: e.a_col,
+                    last_line: e.b,
+                    last_col: e.b_col,
+                },
+                content_format,
+                segment.source_widths.as_deref(),
+            )?;
+        }
     }
+    Ok(())
 }
 
 // ---- ls -------------------------------------------------------------------
@@ -1163,6 +1362,101 @@ mod tests {
 
         let changed = vec!["changed\n".to_string(), "beta\n".to_string()];
         assert!(!file_matches_segments(&changed, &[&entry]));
+    }
+
+    #[test]
+    fn region_renderer_includes_content_for_each_selected_segment() {
+        let repo = temp_repo("region-content");
+        initialize_test_repo(&repo);
+        fs::write(repo.root.join("file.txt"), "alpha\nbeta").unwrap();
+        let first_hash = segment::hash_of("alpha\n");
+        let second_hash = segment::hash_of("beta");
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: first_hash,
+                    file: "file.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "first".to_string(),
+                    name: Some("alpha".to_string()),
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: second_hash.clone(),
+                    file: "file.txt".to_string(),
+                    a: 2,
+                    a_col: None,
+                    b: 2,
+                    b_col: None,
+                    label: "second".to_string(),
+                    name: None,
+                    message: None,
+                },
+            ],
+        };
+        covering.write(&repo).unwrap();
+        let rel = crate::resolve::Relation::build(&repo, "main", &covering).unwrap();
+
+        let segments = prepare_region_segments(
+            &repo,
+            covering.entries.iter().collect(),
+            ContentFormat::None,
+        )
+        .unwrap();
+        let mut metadata_only = Vec::new();
+        write_region_segs(&mut metadata_only, &rel, &segments, ContentFormat::None).unwrap();
+        assert!(!String::from_utf8(metadata_only)
+            .unwrap()
+            .contains("--- content"));
+
+        let segments = prepare_region_segments(
+            &repo,
+            covering.entries.iter().collect(),
+            ContentFormat::Numbered,
+        )
+        .unwrap();
+        let mut numbered = Vec::new();
+        write_region_segs(&mut numbered, &rel, &segments, ContentFormat::Numbered).unwrap();
+        let numbered = String::from_utf8(numbered).unwrap();
+        assert_eq!(numbered.matches("--- content ").count(), 2);
+        assert!(numbered.contains("--- content @alpha ---\n1 | alpha\n"));
+        assert!(numbered.contains(&format!("--- content {second_hash} ---\n2 | beta\n")));
+
+        let segments = prepare_region_segments(
+            &repo,
+            covering.entries.iter().collect(),
+            ContentFormat::Plain,
+        )
+        .unwrap();
+        let mut plain = Vec::new();
+        write_region_segs(&mut plain, &rel, &segments, ContentFormat::Plain).unwrap();
+        let plain = String::from_utf8(plain).unwrap();
+        assert!(plain.contains("--- content @alpha ---\nalpha\n"));
+        assert!(plain.contains(&format!("--- content {second_hash} ---\nbeta\n")));
+        assert!(!plain.contains("1 | alpha"));
+
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn show_rejects_plain_as_a_trailing_content_value() {
+        let options = ShowOptions {
+            content: Some(ContentFormat::Numbered),
+        };
+        let error = reject_extra_show_args(
+            &["main:file.txt".to_string(), "plain".to_string()],
+            1,
+            options,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "show: unexpected argument 'plain'; use --content-plain for plain content"
+        );
     }
 
     #[test]

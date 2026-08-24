@@ -4,6 +4,7 @@
 //! the porcelain + plumbing described in §5 of that note.
 
 use std::env;
+use std::io;
 use std::process::ExitCode;
 
 mod cache;
@@ -24,11 +25,32 @@ mod walk;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    match cli::dispatch(args) {
-        Ok(code) => ExitCode::from(code),
+    ExitCode::from(report_dispatch_result(cli::dispatch(args)))
+}
+
+fn report_dispatch_result(result: io::Result<u8>) -> u8 {
+    match result {
+        Ok(code) => code,
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(e) => {
             eprintln!("covmap: {e}");
-            ExitCode::from(1)
+            1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broken_pipe_is_a_clean_consumer_exit() {
+        assert_eq!(
+            report_dispatch_result(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "consumer closed"
+            ))),
+            0
+        );
     }
 }

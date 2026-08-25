@@ -211,7 +211,8 @@ address resolve against it.
 **HTML report / Compare view** **[R][S]** — the static browser produced
 by `covmap html`, with List, Source, Target, and Compare views. Compare
 shows the two coverings of a connection side by side for navigating
-segment ↔ segment.
+segment ↔ segment; Source, Target, and Compare display every file line with
+its original 1-indexed line number.
 
 **Hydration** **[T][R][S]** — atomically recreating a missing live
 **object cache** entry from its checked-out source range after verifying that

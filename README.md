@@ -295,7 +295,8 @@ annotation and its resolved links to the other side](docs/screenshot.png)
 shows how many of its segments are linked; linked segments are highlighted
 in the panels; and hovering a segment reveals its annotation and the
 segments it maps to on the other side. (List, Source, and Target views
-offer other ways in.)*
+offer other ways in.) Source, Target, and Compare show the original line
+number beside every file line.*
 
 ## Address forms
 

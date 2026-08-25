@@ -823,7 +823,8 @@ Open `.covmap/report.html` (i.e. `tutorial/_play/spec/.covmap/report.html`
 if you followed along by hand, or `tutorial/_work/spec/.covmap/report.html`
 when the script is run with `KEEP=1`) in a browser for the List / Source /
 Target / Compare views, with character-level chunks rendered inline and linked
-segments highlighted.
+segments highlighted. Every source and target file line carries its original
+1-indexed line number in the Source, Target, and Compare views.
 
 In the Compare view, clicking a segment highlights all its counterparts on
 the other side; clicking the *same* segment again cycles through them one

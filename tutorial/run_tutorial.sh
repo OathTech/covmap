@@ -592,6 +592,8 @@ hr "16. render the HTML report  (REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run html )
 echo "  open: $WORK/spec/.covmap/report.html"
+assert "HTML source, target, and compare views include file line numbers" \
+  bash -c "test \"\$(grep -o 'class=\\\"line-number\\\"' '$WORK/spec/.covmap/report.html' | wc -l | tr -d ' ')\" -ge 3"
 
 #############################################################################
 hr "Done"

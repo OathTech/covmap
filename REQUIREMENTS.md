@@ -243,6 +243,9 @@ Focused `show` views of a single segment or link shall include recorded
 content by default, and spatial views of an explicitly selected file or line
 range shall include the selected source segments' recorded content in file
 order. Each shall accept an explicit compact override.
+The HTML browser's Source, Target, and Compare file views shall show the
+original 1-indexed file line number for every rendered source line, including
+lines divided into character-level segments.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
 Connection link listings shall place an existing note on wrapped, indented

@@ -969,6 +969,9 @@ content. Label lenses and covering/connection summaries remain compact by
 default. \texttt{--no-content} requests the compact form; \texttt{--content}
 pins numbered content and \texttt{--content-plain} requests raw bytes on
 content-capable routes.
+File-oriented visual inspection preserves source coordinates by displaying
+the original 1-indexed file line number beside every rendered source line,
+including a line partitioned among several character-level segments.
 When inspection needs live segment bytes whose cache entry is absent, it
 reconstructs them only from source that reproduces the recorded hash.
 \texttt{status}, \texttt{show}, and \texttt{ls} may publish those verified

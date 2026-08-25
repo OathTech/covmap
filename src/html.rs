@@ -489,6 +489,41 @@ fn links_block(links: &[OutgoingLink]) -> String {
     s
 }
 
+/// Escape segment content and insert one visual line-number marker at each
+/// physical source-line start. Character-level segments may begin mid-line,
+/// so the first marker is omitted until their content crosses a newline.
+/// The covering partition invariant guarantees that exactly one rendered
+/// fragment owns column 1 of each physical line and therefore emits its marker.
+fn numbered_content(e: &CoveringEntry, content: &str) -> String {
+    let mut s = String::new();
+    let mut line = e.a;
+    let mut at_line_start = matches!(e.a_col, None | Some(1));
+    let mut rest = content;
+
+    while !rest.is_empty() {
+        if at_line_start {
+            s.push_str(&format!(
+                "<span class=\"line-number\" data-line=\"{line}\" aria-hidden=\"true\"></span>"
+            ));
+        }
+        match rest.find('\n') {
+            Some(index) => {
+                let end = index + 1;
+                s.push_str(&esc(&rest[..end]));
+                rest = &rest[end..];
+                line += 1;
+                at_line_start = true;
+            }
+            None => {
+                s.push_str(&esc(rest));
+                break;
+            }
+        }
+    }
+
+    s
+}
+
 // ----- source view --------------------------------------------------------
 
 fn render_source_view(
@@ -524,7 +559,7 @@ fn render_source_view(
                 esc(fname),
                 esc(&tip_json(e, &links))
             ));
-            s.push_str(&esc(&content));
+            s.push_str(&numbered_content(e, &content));
             s.push_str("</span>");
         }
         s.push_str("</pre></div>\n");
@@ -602,7 +637,7 @@ fn render_target_view(
                     target_id,
                     &e.hash
                 ));
-                s.push_str(&esc(&content));
+                s.push_str(&numbered_content(e, &content));
                 if !inc.is_empty() {
                     s.push_str("<span class=\"tgt-markers\">");
                     for l in &inc {
@@ -724,7 +759,7 @@ fn render_compare_view(
                     esc(&link_targets.join(" ")),
                     esc(&tip_json(e, &links))
                 ));
-                s.push_str(&esc(&content));
+                s.push_str(&numbered_content(e, &content));
                 s.push_str("</span>");
             }
             s.push_str("</pre></div>\n");
@@ -795,7 +830,7 @@ fn render_compare_view(
                         &target_id,
                     ))
                 ));
-                s.push_str(&esc(&content));
+                s.push_str(&numbered_content(e, &content));
                 s.push_str("</span>");
             }
             s.push_str("</pre></div>\n");
@@ -1068,7 +1103,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 .src-pre {
   margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.85rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
-  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.75rem 1rem;
+  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px;
+  padding: 0.75rem 1rem 0.75rem 4.75rem;
 }
 .src-seg {
   display: block; border-left: 4px solid transparent; padding: 0.15rem 0.4rem 0.15rem 0.6rem;
@@ -1119,7 +1155,8 @@ section { padding: 1.5rem; overflow-y: auto; }
 .tgt-pre {
   margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.85rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
-  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.75rem 1rem;
+  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px;
+  padding: 0.75rem 1rem 0.75rem 4.75rem;
 }
 .tgt-block { display: block; padding: 0.15rem 0.4rem; margin: 0.2rem -0.4rem; border-left: 4px solid transparent; }
 .tgt-block.inline {
@@ -1175,8 +1212,15 @@ main.compare-active { grid-template-columns: 1fr; }
 .cmp-pre {
   margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
-  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px; padding: 0.6rem 0.8rem;
+  background: #fafafa; border: 1px solid #e5e7eb; border-radius: 4px;
+  padding: 0.6rem 0.8rem 0.6rem 4.55rem;
 }
+.line-number {
+  display: inline-block; box-sizing: border-box; width: 3.75rem; margin-left: -3.75rem;
+  padding-right: 0.75rem; color: #94a3b8; text-align: right;
+  font-variant-numeric: tabular-nums; user-select: none; pointer-events: none;
+}
+.line-number::before { content: attr(data-line); }
 .cmp-seg {
   display: block; border-left: 4px solid transparent; padding: 0.12rem 0.35rem 0.12rem 0.5rem;
   margin: 0.3rem -0.8rem; cursor: pointer; position: relative;
@@ -1646,6 +1690,88 @@ mod tests {
     }
 
     #[test]
+    fn numbered_content_marks_each_physical_line_once_across_inline_segments() {
+        let mut first = entry("first", "example.txt", 4, "first");
+        first.b_col = Some(5);
+        let mut second = entry("second", "example.txt", 4, "second");
+        second.a_col = Some(6);
+        second.b = 5;
+
+        let html = format!(
+            "{}{}",
+            numbered_content(&first, "alpha"),
+            numbered_content(&second, " beta\nnext\n")
+        );
+
+        assert_eq!(html.matches("data-line=\"4\"").count(), 1);
+        assert_eq!(html.matches("data-line=\"5\"").count(), 1);
+        assert!(html.contains("data-line=\"4\" aria-hidden=\"true\"></span>alpha beta\n"));
+        assert!(html.contains("data-line=\"5\" aria-hidden=\"true\"></span>next\n"));
+    }
+
+    #[test]
+    fn numbered_content_marks_interior_lines_of_a_multiline_inline_segment() {
+        let mut first = entry("first", "example.txt", 1, "first");
+        first.b_col = Some(5);
+
+        let mut middle = entry("middle", "example.txt", 1, "middle");
+        middle.a_col = Some(6);
+        middle.b = 3;
+        middle.b_col = Some(5);
+
+        let mut last = entry("last", "example.txt", 3, "last");
+        last.a_col = Some(6);
+        last.b = 4;
+
+        let html = format!(
+            "{}{}{}",
+            numbered_content(&first, "left "),
+            numbered_content(&middle, "middle\nwhole-two\nthird"),
+            numbered_content(&last, " rest\nfourth\n")
+        );
+
+        for line in 1..=4 {
+            assert_eq!(
+                html.matches(&format!("data-line=\"{line}\"")).count(),
+                1,
+                "line {line} should have exactly one marker"
+            );
+        }
+        assert!(html.contains("data-line=\"2\" aria-hidden=\"true\"></span>whole-two\n"));
+        assert!(html.contains("data-line=\"3\" aria-hidden=\"true\"></span>third rest\n"));
+    }
+
+    #[test]
+    fn source_only_report_numbers_every_file_line() {
+        let repo = temp_repo("source-only-line-numbers");
+        let content = "first\nsecond\n";
+        fs::write(repo.root.join("notes.txt"), content).unwrap();
+
+        let mut source = entry(&segment::hash_of(content), "notes.txt", 1, "notes");
+        source.b = 2;
+        Covering {
+            name: "source".to_string(),
+            entries: vec![source],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let html = render(&repo, Some("source"), None).unwrap();
+        let source_view = html
+            .split_once("<div id=\"view-source\" class=\"hidden\">")
+            .unwrap()
+            .1
+            .split_once("<div id=\"view-target\" class=\"hidden\">")
+            .unwrap()
+            .0;
+
+        assert_eq!(source_view.matches("data-line=\"1\"").count(), 1);
+        assert_eq!(source_view.matches("data-line=\"2\"").count(), 1);
+
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
     fn duplicate_target_hashes_keep_distinct_navigation_occurrences() {
         let repo = temp_repo("duplicate-targets");
         fs::write(repo.root.join("help.txt"), "status help\n").unwrap();
@@ -1685,6 +1811,22 @@ mod tests {
 
         let html = render(&repo, Some("source"), Some("map")).unwrap();
 
+        assert!(html.contains("class=\"src-seg status-linked zebra-0\""));
+        assert!(html.contains("class=\"tgt-block covered cov-linked zebra-0\""));
+        assert!(html.contains("class=\"cmp-seg cmp-seg-a status-linked zebra-0\""));
+        assert!(html.contains("class=\"cmp-seg cmp-seg-b status-linked zebra-0\""));
+        assert_eq!(
+            html.matches("data-line=\"1\" aria-hidden=\"true\"").count(),
+            4
+        );
+        assert_eq!(
+            html.matches("data-line=\"2\" aria-hidden=\"true\"").count(),
+            2
+        );
+        assert_eq!(
+            html.matches("data-line=\"3\" aria-hidden=\"true\"").count(),
+            2
+        );
         assert!(html.contains("data-cmp-links=\"t0-0 t0-1 t0-2\""));
         assert!(html.contains("3 incoming link(s)"));
         for line in 1..=3 {

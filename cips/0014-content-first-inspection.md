@@ -1,6 +1,6 @@
 # Content-first inspection
 
-Stage: **Accepted**
+Stage: **Landed**
 
 ## Relationship to landed CIPs
 

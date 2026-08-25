@@ -51,7 +51,7 @@ number is an identifier, not a priority.
 | [0010](0010-git-tracked-artifacts.md) | git-tracked-artifacts | Landed | Track portable covering and connection refs in Git while keeping reconstructible objects, peer paths, and work state local. |
 | [0011](0011-covering-input-selection.md) | covering-input-selection | Landed | Add portable positive selection with global defaults and covering-specific policy overrides. |
 | [0013](0013-uniform-multiline-messages.md) | uniform-multiline-messages | Landed | Give every message-bearing command repeatable paragraph input and add multiline-safe link/task note storage with one-line plumbing. |
-| [0014](0014-content-first-inspection.md) | content-first-inspection | Accepted | Make focused segment, spatial file/range, link, and iterator-cursor views content-first; keep open-ended views compact and add `--no-content`. |
+| [0014](0014-content-first-inspection.md) | content-first-inspection | Landed | Make focused segment, spatial file/range, link, and iterator-cursor views content-first; keep open-ended views compact and add `--no-content`. |
 
 ## Writing a cip
 

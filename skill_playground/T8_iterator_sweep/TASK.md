@@ -35,7 +35,7 @@
 
    ```sh
    until covmap iter review finished; do
-     covmap iter review next --content     # first pending task + its frozen bytes
+     covmap iter review next               # first pending task + its frozen bytes
      covmap iter review done -m "<verdict>"  # or: skip -m "<why>"
    done
    ```
@@ -51,8 +51,9 @@
 4. **Report the tally** with `covmap iter review status`
    (e.g. `5/5 resolved (4 done, 1 skipped) — finished`).
 
-The resume affordance is `covmap iter review current`: after any
-interruption it reprints exactly the task the cursor is on.
+The resume affordance is `covmap iter review current`: after any interruption
+it reprints exactly the task the cursor is on together with its frozen bytes.
+Use `--no-content` only when a script needs the compact task row.
 
 ## Why this matters
 

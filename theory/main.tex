@@ -956,10 +956,19 @@ region of the mapping should take a short, bounded sequence of commands
 whose final step resolves the relation fully (endpoints shown as
 \texttt{covering:label loc}, not bare hashes), so no follow-up lookup is
 forced. Listing commands print one condensed line per item; a command that
-names one item prints all covmap holds about it. The region view and the
-label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
-of file/range regions or a label, presenting each selected segment together
-with its image.
+names one item prints all covmap holds about it. The region view and the label
+lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union of
+file/range regions or a label, presenting each selected segment together with
+its image.
+Presentation is \emph{content-first} when the selector names one segment, one
+link, or one explicit file/range region. Segment and region views include the
+selected source segments' recorded content; a link view includes both resolved
+endpoints' content. Region content follows file order, and a line range renders
+each intersecting segment in full without recursively expanding mapped target
+content. Label lenses and covering/connection summaries remain compact by
+default. \texttt{--no-content} requests the compact form; \texttt{--content}
+pins numbered content and \texttt{--content-plain} requests raw bytes on
+content-capable routes.
 When inspection needs live segment bytes whose cache entry is absent, it
 reconstructs them only from source that reproduces the recorded hash.
 \texttt{status}, \texttt{show}, and \texttt{ls} may publish those verified
@@ -975,14 +984,17 @@ read-only unless hydration is requested explicitly.
       their segments were recorded and names each edited or unreadable
       path. Per connection: link count, broken count, and source/target
       coverage (Definition~\ref{def:coverage}).
-\item \texttt{covmap show <addr>}\\
+\item \texttt{covmap show <addr>
+      [--content|--content-plain|--no-content] [--all]}\\
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
       link shows its resolved links, a region/label its image. \texttt{--label
       $\ell$} runs the label lens. A connection view reports resolved degree
       maxima and bounded non-trivial hubs (Definition~\ref{def:degree});
       \texttt{--all} expands its link list, with link notes on wrapped lines
-      below their resolved endpoint pair.
+      below their resolved endpoint pair, and is invalid on every other
+      route. Positive content modes are invalid on covering and connection
+      summaries, while \texttt{--no-content} is an idempotent compact request.
 \item \texttt{covmap ls [-l] [$C$] [region \ldots] [--label $\ell$] [--linked|--unlinked]}\\
       List segments of $C$ in file-and-line order, optionally narrowed to the
       union of several file/range regions and intersected with a label or link
@@ -1047,15 +1059,15 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       (Definition~\ref{def:iterator}). \texttt{--order} defaults to
       \texttt{file}; \texttt{--label $\ell$} restricts $\tau$ to the
       segments labelled $\ell$. The cursor starts at $\bot$.
-\item \texttt{covmap iter $I$ next [--content]}\\
+\item \texttt{covmap iter $I$ next [--content|--content-plain|--no-content]}\\
       \emph{Advance} (Definition~\ref{def:advance}): move the cursor to
       the $<$-least \textsc{pending} task and print it. Refused while the
       current task is still \textsc{pending}; exits non-zero when none
-      remains. \texttt{--content} also prints the task's frozen bytes.
-\item \texttt{covmap iter $I$ current [--content]}\\
+      remains. Numbered frozen bytes are printed by default;
+      \texttt{--no-content} requests only the task row.
+\item \texttt{covmap iter $I$ current [--content|--content-plain|--no-content]}\\
       Reprint the cursor's task in any state --- the resume affordance
-      after a crash or context loss. \texttt{--content} also prints the
-      task's frozen bytes.
+      after a crash or context loss, with numbered frozen bytes by default.
 \item \texttt{covmap iter $I$ done [-m <msg>]\ldots} /
       \texttt{skip [-m <msg>]\ldots}\\
       Set $\mathrm{st}(\gamma)$ to \textsc{done} / \textsc{skipped},
@@ -1067,11 +1079,13 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
 \item \texttt{covmap iter $I$ rewind [<addr>]}\\
       Reset a \textsc{done}/\textsc{skipped} task to \textsc{pending}
       (default: the cursor's task).
-\item \texttt{covmap iter $I$ peek [--all] [--content]}\\
+\item \texttt{covmap iter $I$ peek [--all]
+      [--content|--content-plain|--no-content]}\\
       Look ahead, without advancing, at the \textsc{pending} tasks in order
       (the set \texttt{choose} may target, including the active one);
       \texttt{--all} lists the whole worklist tagged with each task's state,
-      and \texttt{--content} also prints frozen bytes.
+      and explicit \texttt{--content} or \texttt{--content-plain} also prints
+      frozen bytes. Peek remains compact by default.
 \item \texttt{covmap iter $I$ status}\\
       Reports the resolved fraction $(k+m)/n$ (done $k$ plus skipped $m$ of
       $n$ tasks), which reaches $n/n$ exactly at exhaustion, and marks the

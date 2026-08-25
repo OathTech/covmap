@@ -107,6 +107,8 @@ There are no runtime dependencies beyond `sha2`.
   plan layered over the covering — it never mutates it. Creation retains every
   selected task object; a missing clean object is reconstructed, while a
   drifted cache miss refuses the freeze with restore-and-hydrate guidance.
+  `next` and `current` include the frozen task content by default;
+  `--no-content` selects the compact task row.
 
 There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
@@ -181,7 +183,7 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `hydrate [<C>]` | Reconstruct missing live cache objects from source that matches the covering hash. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
 | `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
-| `show <addr> [--content\|--content-plain] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. `--content` adds numbered source lines; `--content-plain` adds raw segment bytes. Partial-line numbered views mark measured omitted columns with `.`; if drift or missing source prevents measuring the remainder, a separate `REST-OF-LINE-UNKNOWN` diagnostic follows the recorded line. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
+| `show <addr> [--content\|--content-plain\|--no-content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Focused segment/link and file/range views include numbered content by default; links show both endpoints, while regions show selected source content only. `--no-content` selects compact metadata/relationships and `--content-plain` selects raw bytes. Label lenses and covering/connection summaries remain compact. Partial-line numbered views mark measured omitted columns with `.`; if drift or missing source prevents measuring the remainder, a separate `REST-OF-LINE-UNKNOWN` diagnostic follows the recorded line. `--all` is connection-summary only. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
 | `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
@@ -220,6 +222,12 @@ degree and bounded fan-in/fan-out hubs. Hash and `@name` endpoints resolving
 to the same content hash count as one node; repeated covering locations with
 that hash produce one hub row at the first covering-order location. Broken
 links do not contribute.
+
+`show <C>:<file>[:a..b]` presents the selected file slice as ordered segments
+with their resolved relationships and recorded content. A line range renders
+each intersecting segment in full. Use `--no-content` for relationships only;
+mapped target content is available through focused `show <K> <A> <B>`, not
+recursively expanded by a region view.
 
 Long and multiline link notes are wrapped beneath their resolved endpoint
 pair with explicit paragraph breaks preserved. In `ls-links` and

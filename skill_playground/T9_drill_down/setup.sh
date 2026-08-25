@@ -42,7 +42,8 @@ set -euo pipefail
 ( cd impl_rs && "$COVMAP_BIN" name main:handlers.rs:30 impl-health ) >/dev/null
 
 # --- connect + link each endpoint to its handler -----------------------
-( cd spec && "$COVMAP_BIN" connect main "../impl_rs:main" apimap ) >/dev/null
+( cd spec && "$COVMAP_BIN" peer bind impl ../impl_rs ) >/dev/null
+( cd spec && "$COVMAP_BIN" connect main impl:main apimap ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @spec-get    @impl-list   -m "GET list"        ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @spec-post   @impl-create -m "POST create"     ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @spec-delete @impl-delete -m "DELETE by id"    ) >/dev/null

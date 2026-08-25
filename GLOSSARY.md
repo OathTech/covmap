@@ -80,6 +80,14 @@ future direction, to be implemented once a concrete workflow needs it
 (e.g. composing a docs→code map with a code→test map to derive
 docs→test).
 
+**Content-first inspection** **[T][R][S]** — the porcelain presentation
+policy for a focused segment, one link, or an explicitly selected file/range
+region. These views include numbered recorded content by default; a link
+shows both endpoints, while a region walks selected source segments in file
+order without recursively expanding mapped target content. `--no-content`
+selects the compact metadata/relationship form. Label lenses and
+covering/connection summaries remain compact by default.
+
 **Cover** **[T][R][S]** — the `covmap cover` operation that seeds a
 covering with one **whole-file segment** (labelled `unknown`) per
 selected readable UTF-8 file. Additive and idempotent: re-running adds only
@@ -250,6 +258,8 @@ currently on (the theory's `γ`), unset before the first `next`. A task is
 active when the cursor points at a `pending` task. `next` moves it to the
 first pending task; `choose` moves it deliberately (a jump); `current`
 reprints it (the resume affordance after a crash or context loss).
+`next`/`current` include frozen task content by default; `--no-content`
+requests only the task row.
 Sub-concept of **iterator**.
 
 **Complete enumeration** **[T][R][S]** — the invariant an **iterator**
@@ -271,8 +281,9 @@ regardless of label, and re-labelling never changes a hash.
 <l>`) returning every segment of a covering carrying label `<l>` together
 with the segments each maps to. Formally the image `κ(S)` of the
 label-selected subset `S = C ↾ l` under a connection; the way covmap turns a
-cross-cutting concern spread across files into one call. See **Region** for
-the file/range-selected analogue.
+cross-cutting concern spread across files into one compact call. Content
+remains explicit because the selected set may span many files. See **Region**
+for the file/range-selected analogue.
 
 **Line map** **[T][S]** — a monotone partial injection from old to new
 line indices (line `i` maps to `j` only if the lines are equal),
@@ -413,8 +424,11 @@ plumbing set is thin.)
 **Region** **[R][S]** — an inspection selector naming a slice of a covering:
 a covered file, or a line range within it (`<C>:<file>[:a..b]`). Not stored —
 just a filter over the covering's entries. `covmap show <region>` presents
-each segment in the slice with the segments it maps to (the image `κ(S)` for
-`S` = the region's segments). The file/range analogue of the **label lens**.
+each selected source segment's full recorded content in file order together
+with the segments it maps to (the image `κ(S)` for `S` = the region's
+segments). A line range selects intersecting segments without clipping them.
+`--no-content` selects the compact relationship form. The file/range analogue
+of the **label lens**.
 
 **Position** **[T][S]** — a `(line, optional column)` point in a file. An
 absent column (`⊥` / `None`) means the first character of the line for a

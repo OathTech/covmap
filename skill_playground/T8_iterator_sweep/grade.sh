@@ -45,6 +45,12 @@ check "no task is still pending" bash -c "
   (cd spec && \"$COVMAP_BIN\" iter '$ITER' peek --all) \
     | awk -F'\t' '\$4 == \"pending\" {found=1} END {exit found ? 1 : 0}'
 "
+check "current defaults to frozen content" bash -c "
+  (cd spec && \"$COVMAP_BIN\" iter '$ITER' current) | grep -q '^--- content '
+"
+check "current --no-content is a single compact row" bash -c "
+  [[ \$(cd spec && \"$COVMAP_BIN\" iter '$ITER' current --no-content | wc -l) -eq 1 ]]
+"
 
 # Each of the four named endpoint tasks carries a non-empty verdict note.
 # `peek --all` columns: handle, label, location, state, optional escaped note.

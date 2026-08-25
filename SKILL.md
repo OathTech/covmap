@@ -138,7 +138,7 @@ are unique.
 | `covmap hydrate [<C>]` | Verify live source against covering hashes and atomically recreate missing cache objects; omitted `<C>` means every covering. | **yes** |
 | `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
 | `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
-| `covmap show <addr> [--content\|--content-plain] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). A segment/link shows its **resolved links** both directions + drift state; a region shows each segment with its mapped image. A connection shows resolved degree hubs and wraps mapping notes. `--label <l> [<C>]` = the **label lens** (one call for a cross-cutting concern). `--content` adds numbered source lines; `--content-plain` adds raw segment bytes. Partial-line numbered views mark measured omitted columns with `.`; an unmeasurable trailing remainder is reported separately as `REST-OF-LINE-UNKNOWN`. `--all` expands a large connection. | yes |
+| `covmap show <addr> [--content\|--content-plain\|--no-content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). Focused segment/link and file/range views include numbered content by default; a link shows both endpoints, while a region shows each selected source segment with its mapped image. `--no-content` selects compact metadata/relationships, and `--content-plain` selects raw bytes. The **label lens** (`--label <l> [<C>]`) and covering/connection summaries stay compact by default. Partial-line numbered views mark measured omitted columns with `.`; an unmeasurable trailing remainder is reported separately as `REST-OF-LINE-UNKNOWN`. `--all` is connection-summary only. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
 | `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
@@ -372,9 +372,10 @@ Drill down in ≤3 calls, ending on a self-sufficient view:
    If a filename also names a covering, pass the covering explicitly first,
    such as `covmap ls -l HEAD main` to select file `main` in `HEAD`.
 3. **Understand** — `covmap show <C>:<file>[:a..b]` prints each segment in
-   the region *with the segment(s) it maps to*, resolved to
-   `label loc` — the combined view, in one call. For a single segment,
-   `covmap show <C>:@name` shows its links both directions plus drift state.
+   the region, its recorded content, and the segment(s) it maps to, resolved
+   to `label loc` — the combined view, in one call. A line range includes
+   every intersecting segment in full. For a single segment, `covmap show
+   <C>:@name` shows its content, links in both directions, and drift state.
 
 To review the relation's shape and rationale, run `covmap show <K>`. Read
 `max-out` as the widest fan-out and `max-in` as the widest fan-in; the bounded
@@ -384,12 +385,15 @@ one content-hash node and produce one hub row at the first covering-order
 location. Mapping notes appear on wrapped lines beneath each resolved pair;
 add `--all` when the command suppresses a large link list.
 
-You can open the files yourself, so these views never dump content unless
-requested. Use `--content` for numbered source lines or `--content-plain` for
-raw segment bytes. Numbered character-level segments mark measured omitted
-columns with `.`. If drift or unavailable source makes the trailing remainder
-unmeasurable, covmap preserves the recorded fragment verbatim and follows it
-with `! covmap: REST-OF-LINE-UNKNOWN`.
+An explicit file/range selector authorizes the source-content walkthrough.
+Use `--no-content` when you need only relationships, `--content` to pin the
+numbered format, or `--content-plain` for raw bytes. Region views do not
+recursively expand mapped target content; inspect one link with `covmap show
+<K> <A> <B>` for the two-sided content view. Numbered character-level
+segments mark measured omitted columns with `.`. If drift or unavailable
+source makes the trailing remainder unmeasurable, covmap preserves the
+recorded fragment verbatim and follows it with
+`! covmap: REST-OF-LINE-UNKNOWN`.
 
 ### A3. Trace a cross-cutting concern (label lens)
 
@@ -400,6 +404,10 @@ call:
 ```
 covmap show --label <l> <C>     # every segment labelled <l>, each with its image
 ```
+
+The label lens stays compact by default because its selection may cross many
+files. Add `--content` for numbered content across the selected set, or
+`--content-plain` for raw bytes.
 
 Labels are ref-local and non-hashed, so tagging is free and never breaks a
 link. `label` is singular per segment, so it doubles as the segment's status;
@@ -603,18 +611,17 @@ between `next` and `done`:
 ```sh
 covmap iter sweep new main --order file
 until covmap iter sweep finished; do
-  covmap iter sweep next --content    # advance + read the task's frozen bytes
-covmap iter sweep done -m "verdict" -m "validation performed"
+  covmap iter sweep next              # advance + read the task's frozen bytes
+  covmap iter sweep done -m "verdict" -m "validation performed"
 done
 ```
 
-Between `next` and `done`, work on the current task: `next --content`
-already handed you its frozen bytes (or fetch them any time with `covmap
-iter sweep current --content` / `covmap cat-segment <hash>`), edit code, run
-tests — whatever the job is. Use `covmap iter sweep skip -m "why"` instead of
-`done` to pass on a task deliberately. If you are auditing a *connection*,
-`covmap show <C>:@name` is often better than raw content — it shows the
-segment together with its resolved links.
+Between `next` and `done`, work on the current task: `next` already handed you
+its frozen bytes (or fetch them any time with `covmap iter sweep current` /
+`covmap cat-segment <hash>`), edit code, run tests — whatever the job is. Use
+`covmap iter sweep skip -m "why"` instead of `done` to pass on a task
+deliberately. If you are auditing a *connection*, `covmap show <C>:@name`
+adds its resolved links to that content.
 
 Each `next` / `current` / `peek` prints one parseable line per task:
 
@@ -622,9 +629,10 @@ Each `next` / `current` / `peek` prints one parseable line per task:
 <@name|hash>	<label>	<file>:<a>..<b>
 ```
 
-Add `--content` (to `next`/`current`/`peek`) for the same numbered content
-block used by `show`, or `--content-plain` for raw frozen bytes. By default
-stdout stays terse so the loop is easy to parse.
+`next` and `current` include the same numbered content block as `show` by
+default. Add `--no-content` when a script needs only the task row, or
+`--content-plain` for raw frozen bytes. `peek` stays compact unless
+`--content` or `--content-plain` is explicit.
 
 **The enumeration guarantee — why you can't lose a task:**
 

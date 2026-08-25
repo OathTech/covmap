@@ -239,6 +239,10 @@ and location — not leave them as bare hashes — and `status` shall report
 the path of each edited or unreadable covered file plus per-connection
 source/target coverage (req12), so a reader sees a mapping's integrity,
 completeness, and relations without hand-joining separate outputs.
+Focused `show` views of a single segment or link shall include recorded
+content by default, and spatial views of an explicitly selected file or line
+range shall include the selected source segments' recorded content in file
+order. Each shall accept an explicit compact override.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
 Connection link listings shall place an existing note on wrapped, indented

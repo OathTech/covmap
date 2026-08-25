@@ -172,24 +172,31 @@ fn file_matches_segments(lines: &[String], entries: &[&CoveringEntry]) -> bool {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ShowOptions {
-    /// `None` means no CLI override. Covering views then omit content, while
-    /// bare hashes retain their content-first behavior.
+    /// `None` means use the route default. `Some(ContentFormat::None)` is the
+    /// explicit `--no-content` override.
     content: Option<ContentFormat>,
+    all: bool,
 }
 
 pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
-    // Split off flags (--label <l>, --content) from positionals.
+    // Parse flags before resolving the route so malformed and conflicting
+    // flags win over route-specific errors.
     let mut label_lens: Option<String> = None;
     let mut options = ShowOptions::default();
-    let mut with_all = false;
     let mut pos: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--label" => {
-                label_lens = Some(args.get(i + 1).cloned().ok_or_else(|| {
+                let value = args.get(i + 1).cloned().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "--label needs a value")
-                })?);
+                })?;
+                if label_lens.replace(value).is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "show: --label specified more than once",
+                    ));
+                }
                 i += 2;
             }
             "--content" => {
@@ -200,8 +207,18 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
                 set_content_format(&mut options, ContentFormat::Plain, "--content-plain")?;
                 i += 1;
             }
+            "--no-content" => {
+                set_content_format(&mut options, ContentFormat::None, "--no-content")?;
+                i += 1;
+            }
             "--all" => {
-                with_all = true;
+                if options.all {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "show: --all specified more than once",
+                    ));
+                }
+                options.all = true;
                 i += 1;
             }
             other if other.starts_with('-') => {
@@ -223,6 +240,7 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
         reject_extra_show_args(&pos, 1, options)?;
         let cname = pos.first().cloned().unwrap_or_else(|| "HEAD".to_string());
         let c = resolve_covering(&repo, &cname)?;
+        reject_show_all("a label view", options.all)?;
         return show_label(
             &repo,
             &c,
@@ -239,8 +257,20 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
     if repo.connections_dir().join(addr).is_file() {
         let k = Connection::read(&repo, addr)?;
         match pos.len() {
-            1 => return show_connection(&repo, &k, with_all),
-            3 => return show_link(&repo, &k, &pos[1], &pos[2]),
+            1 => {
+                reject_summary_content("connection", &k.name, options.content)?;
+                return show_connection(&repo, &k, options.all);
+            }
+            3 => {
+                reject_show_all("a single-link view", options.all)?;
+                return show_link(
+                    &repo,
+                    &k,
+                    &pos[1],
+                    &pos[2],
+                    options.content.unwrap_or(ContentFormat::Numbered),
+                );
+            }
             count => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -263,16 +293,20 @@ pub(super) fn cmd_show(args: &[String]) -> io::Result<u8> {
         if repo.covering_exists(cname).unwrap_or(false) {
             let c = Covering::read(&repo, cname)?;
             if let Some(region) = parse_region(&c, &prefix) {
+                let region = region?;
+                reject_show_all("a region view", options.all)?;
                 return show_region(
                     &repo,
                     &c,
-                    &region?,
-                    options.content.unwrap_or(ContentFormat::None),
+                    &region,
+                    options.content.unwrap_or(ContentFormat::Numbered),
                 );
             }
         }
     } else if repo.covering_exists(addr).unwrap_or(false) {
         let c = Covering::read(&repo, addr)?;
+        reject_summary_content("covering", &c.name, options.content)?;
+        reject_show_all("a covering summary", options.all)?;
         return show_covering(&repo, &c);
     }
 
@@ -289,6 +323,46 @@ fn set_content_format(
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("show: content format specified more than once (at '{flag}')"),
+        ));
+    }
+    Ok(())
+}
+
+fn content_flag(format: ContentFormat) -> &'static str {
+    match format {
+        ContentFormat::None => "--no-content",
+        ContentFormat::Plain => "--content-plain",
+        ContentFormat::Numbered => "--content",
+    }
+}
+
+fn reject_summary_content(
+    kind: &str,
+    name: &str,
+    content: Option<ContentFormat>,
+) -> io::Result<()> {
+    let Some(format @ (ContentFormat::Plain | ContentFormat::Numbered)) = content else {
+        return Ok(());
+    };
+    let guidance = if kind == "covering" {
+        "select a segment or region"
+    } else {
+        "select a single link"
+    };
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "show {kind} '{name}': {} is not valid for a {kind} summary; {guidance}",
+            content_flag(format)
+        ),
+    ))
+}
+
+fn reject_show_all(route: &str, all: bool) -> io::Result<()> {
+    if all {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("show: --all is only valid for a connection summary, not {route}"),
         ));
     }
     Ok(())
@@ -420,7 +494,7 @@ fn show_segment(
     // Label, name and message are covering-local, so they are available
     // only when addressed through a covering; a bare hash names content
     // across every covering that shares it.
-    let (full, cname, entry, content) = match covering {
+    let (full, cname, entry) = match covering {
         Some(cname) => {
             let c = resolve_covering(repo, cname)?;
             let idx = covering::resolve_segment(&c, prefix)?;
@@ -429,13 +503,19 @@ fn show_segment(
                 entry.hash.clone(),
                 Some(cname.to_string()),
                 Some(entry.clone()),
-                cache::read_live_content(repo, &entry)?,
             )
         }
         None => {
             let resolved = cache::resolve_local_hash(repo, prefix)?;
-            let content = cache::read_resolved_content(repo, &resolved)?;
-            (resolved.hash, None, None, content)
+            (resolved.hash, None, None)
+        }
+    };
+    reject_show_all("a segment view", options.all)?;
+    let content = match &entry {
+        Some(entry) => cache::read_live_content(repo, entry),
+        None => {
+            let resolved = cache::resolve_local_hash(repo, &full)?;
+            cache::read_resolved_content(repo, &resolved)
         }
     };
     println!("segment {full}");
@@ -457,12 +537,20 @@ fn show_segment(
             }
         );
     }
-    println!("  bytes     {}", content.len());
+    match &content {
+        Ok(content) => println!("  bytes     {}", content.len()),
+        Err(_) => println!("  bytes     unavailable"),
+    }
 
     // Drift state (only meaningful when we know the covering + location).
     if let (Some(cn), Some(e)) = (&cname, &entry) {
-        let state = segment_drift_state(repo, cn, e, &content);
-        println!("  state     {state}");
+        match &content {
+            Ok(content) => {
+                let state = segment_drift_state(repo, cn, e, content);
+                println!("  state     {state}");
+            }
+            Err(_) => println!("  state     unavailable (recorded bytes could not be read)"),
+        }
         // Resolved links, both directions.
         let c = resolve_covering(repo, cn)?;
         let rel = crate::resolve::Relation::build(repo, cn, &c)?;
@@ -478,16 +566,20 @@ fn show_segment(
         }
     }
 
-    let content_format = options.content.unwrap_or_else(|| {
-        if entry.is_none() {
-            ContentFormat::Numbered
-        } else {
-            ContentFormat::None
+    let content = match content {
+        Ok(content) => content,
+        Err(error) => {
+            let handle = entry
+                .as_ref()
+                .and_then(|entry| entry.name.as_deref().map(|name| format!("@{name}")))
+                .unwrap_or_else(|| short(&full).to_string());
+            eprintln!("show segment {handle}: content unavailable: {error}");
+            return Ok(1);
         }
-    });
+    };
+
+    let content_format = options.content.unwrap_or(ContentFormat::Numbered);
     if content_format != ContentFormat::None {
-        // A bare-hash address has no covering context, so content is all we
-        // can show; through a covering, content is opt-in.
         let range = entry
             .as_ref()
             .map(|e| ContentRange {
@@ -864,7 +956,13 @@ fn coverage<'a>(c: &Covering, eps: impl Iterator<Item = &'a str>) -> (usize, usi
     (seen.len(), c.entries.len())
 }
 
-fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
+fn show_link(
+    repo: &Repo,
+    k: &Connection,
+    a: &str,
+    b: &str,
+    content_format: ContentFormat,
+) -> io::Result<u8> {
     let link = k
         .links
         .iter()
@@ -876,13 +974,14 @@ fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
             )
         })?;
     let src = Covering::read(repo, &k.source_covering)?;
-    let tgt = resolve_target_repo(repo, k)
-        .ok()
-        .and_then(|target| Covering::read(&target, &k.target_covering).ok());
+    let target = resolve_target_repo(repo, k).ok().and_then(|target_repo| {
+        Covering::read(&target_repo, &k.target_covering)
+            .ok()
+            .map(|covering| (target_repo, covering))
+    });
+    let tgt = target.as_ref().map(|(_, covering)| covering);
     let a_ok = covering::endpoint_resolves(&src, &link.a);
-    let b_ok = tgt
-        .as_ref()
-        .is_some_and(|t| covering::endpoint_resolves(t, &link.b));
+    let b_ok = tgt.is_some_and(|target| covering::endpoint_resolves(target, &link.b));
 
     println!("link in {}", k.name);
     if link.note.is_empty() {
@@ -893,7 +992,7 @@ fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
             println!("{line}");
         }
     }
-    let status = match (&tgt, a_ok, b_ok) {
+    let status = match (tgt, a_ok, b_ok) {
         (None, true, _) => {
             "target unchecked (covering unavailable; source endpoint resolves)".to_string()
         }
@@ -920,7 +1019,7 @@ fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
         k.source_covering,
         resolve_display(&src, &link.a)
     );
-    match &tgt {
+    match tgt {
         Some(t) => println!(
             "  target  {} : {}",
             k.target_covering,
@@ -928,7 +1027,106 @@ fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
         ),
         None => println!("  target  {} : (covering unavailable)", k.target_covering),
     }
-    Ok(0)
+    if content_format == ContentFormat::None {
+        return Ok(0);
+    }
+
+    let mut failures = Vec::new();
+    let mut out = io::stdout().lock();
+    let mut source_context = SourceContext::default();
+    if let Some(entry) = resolve_endpoint_entry(&src, &link.a) {
+        if let Err(error) = write_link_endpoint_content(
+            &mut out,
+            repo,
+            &k.source_covering,
+            "source",
+            entry,
+            content_format,
+            &mut source_context,
+        ) {
+            failures.push(format!(
+                "show link '{}': source {}:{} content unavailable: {error}",
+                k.name,
+                k.source_covering,
+                entry_handle(entry)
+            ));
+        }
+    }
+    if let Some((target_repo, target_covering)) = &target {
+        if let Some(entry) = resolve_endpoint_entry(target_covering, &link.b) {
+            let mut target_context = SourceContext::default();
+            if let Err(error) = write_link_endpoint_content(
+                &mut out,
+                target_repo,
+                &k.target_covering,
+                "target",
+                entry,
+                content_format,
+                &mut target_context,
+            ) {
+                failures.push(format!(
+                    "show link '{}': target {}:{} content unavailable: {error}",
+                    k.name,
+                    k.target_covering,
+                    entry_handle(entry)
+                ));
+            }
+        }
+    }
+    drop(out);
+    for failure in &failures {
+        eprintln!("{failure}");
+    }
+    Ok(u8::from(!failures.is_empty()))
+}
+
+fn resolve_endpoint_entry<'a>(covering: &'a Covering, endpoint: &str) -> Option<&'a CoveringEntry> {
+    if let Some(name) = endpoint.strip_prefix('@') {
+        return covering
+            .entries
+            .iter()
+            .find(|entry| entry.name.as_deref() == Some(name));
+    }
+    let hash = covering::endpoint_to_hash(covering, endpoint)?;
+    covering.entries.iter().find(|entry| entry.hash == hash)
+}
+
+fn entry_handle(entry: &CoveringEntry) -> String {
+    entry
+        .name
+        .as_deref()
+        .map(|name| format!("@{name}"))
+        .unwrap_or_else(|| short(&entry.hash).to_string())
+}
+
+fn write_link_endpoint_content(
+    out: &mut impl Write,
+    repo: &Repo,
+    covering: &str,
+    role: &str,
+    entry: &CoveringEntry,
+    content_format: ContentFormat,
+    source_context: &mut SourceContext,
+) -> io::Result<()> {
+    let content = cache::read_live_content(repo, entry)?;
+    let range = ContentRange {
+        first_line: entry.a,
+        first_col: entry.a_col,
+        last_line: entry.b,
+        last_col: entry.b_col,
+    };
+    let source_widths = (content_format == ContentFormat::Numbered)
+        .then(|| source_context.matching_widths(repo, &entry.file, range, &content))
+        .flatten();
+    let handle = format!("{role} {covering}:{}", entry_handle(entry));
+    write_content_block(
+        out,
+        Some(&handle),
+        &content,
+        range,
+        content_format,
+        source_widths.as_deref(),
+    )
 }
 
 fn endpoints_match(stored: &str, given: &str) -> bool {
@@ -961,9 +1159,12 @@ fn show_region(
         None => region.file.clone(),
     };
     println!("region {} {} · {} segment(s)", c.name, where_, segs.len());
-    let segments = prepare_region_segments(repo, segs, content_format)?;
-    print_region_segs(&rel, &segments, content_format)?;
-    Ok(0)
+    let segments = prepare_region_segments(repo, segs, content_format);
+    let failures = print_region_segs(&rel, &segments, content_format)?;
+    for failure in &failures {
+        eprintln!("{failure}");
+    }
+    Ok(u8::from(!failures.is_empty()))
 }
 
 fn show_label(
@@ -985,14 +1186,18 @@ fn show_label(
         c.name,
         segs.len()
     );
-    let segments = prepare_region_segments(repo, segs, content_format)?;
-    print_region_segs(&rel, &segments, content_format)?;
-    Ok(0)
+    let segments = prepare_region_segments(repo, segs, content_format);
+    let failures = print_region_segs(&rel, &segments, content_format)?;
+    for failure in &failures {
+        eprintln!("{failure}");
+    }
+    Ok(u8::from(!failures.is_empty()))
 }
 
 struct RegionSegmentView<'a> {
     entry: &'a CoveringEntry,
     content: Option<String>,
+    content_error: Option<String>,
     source_widths: Option<Vec<usize>>,
 }
 
@@ -1000,14 +1205,17 @@ fn prepare_region_segments<'a>(
     repo: &Repo,
     segs: Vec<&'a CoveringEntry>,
     content_format: ContentFormat,
-) -> io::Result<Vec<RegionSegmentView<'a>>> {
+) -> Vec<RegionSegmentView<'a>> {
     let mut source_context = SourceContext::default();
     segs.into_iter()
         .map(|entry| {
-            let content = match content_format {
-                ContentFormat::None => None,
+            let (content, content_error) = match content_format {
+                ContentFormat::None => (None, None),
                 ContentFormat::Plain | ContentFormat::Numbered => {
-                    Some(cache::read_live_content(repo, entry)?)
+                    match cache::read_live_content(repo, entry) {
+                        Ok(content) => (Some(content), None),
+                        Err(error) => (None, Some(error.to_string())),
+                    }
                 }
             };
             let source_widths = (content_format == ContentFormat::Numbered)
@@ -1027,11 +1235,12 @@ fn prepare_region_segments<'a>(
                     })
                 })
                 .flatten();
-            Ok(RegionSegmentView {
+            RegionSegmentView {
                 entry,
                 content,
+                content_error,
                 source_widths,
-            })
+            }
         })
         .collect()
 }
@@ -1042,7 +1251,7 @@ fn print_region_segs(
     rel: &crate::resolve::Relation,
     segments: &[RegionSegmentView<'_>],
     content_format: ContentFormat,
-) -> io::Result<()> {
+) -> io::Result<Vec<String>> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     write_region_segs(&mut out, rel, segments, content_format)
@@ -1053,14 +1262,11 @@ fn write_region_segs(
     rel: &crate::resolve::Relation,
     segments: &[RegionSegmentView<'_>],
     content_format: ContentFormat,
-) -> io::Result<()> {
+) -> io::Result<Vec<String>> {
+    let mut failures = Vec::new();
     for segment in segments {
         let e = segment.entry;
-        let handle = e
-            .name
-            .as_deref()
-            .map(|n| format!("@{n}"))
-            .unwrap_or_else(|| short(&e.hash).to_string());
+        let handle = entry_handle(e);
         let lbl = if e.label.is_empty() { "-" } else { &e.label };
         writeln!(out, "  {handle}  {lbl}  {}", e.loc())?;
         let links = rel.links_of(&e.hash);
@@ -1094,8 +1300,14 @@ fn write_region_segs(
                 segment.source_widths.as_deref(),
             )?;
         }
+        if let Some(error) = &segment.content_error {
+            failures.push(format!(
+                "show {}: content unavailable for {handle}: {error}",
+                e.loc()
+            ));
+        }
     }
-    Ok(())
+    Ok(failures)
 }
 
 // ---- ls -------------------------------------------------------------------
@@ -1411,10 +1623,11 @@ mod tests {
             &repo,
             covering.entries.iter().collect(),
             ContentFormat::None,
-        )
-        .unwrap();
+        );
         let mut metadata_only = Vec::new();
-        write_region_segs(&mut metadata_only, &rel, &segments, ContentFormat::None).unwrap();
+        let failures =
+            write_region_segs(&mut metadata_only, &rel, &segments, ContentFormat::None).unwrap();
+        assert!(failures.is_empty());
         assert!(!String::from_utf8(metadata_only)
             .unwrap()
             .contains("--- content"));
@@ -1423,10 +1636,11 @@ mod tests {
             &repo,
             covering.entries.iter().collect(),
             ContentFormat::Numbered,
-        )
-        .unwrap();
+        );
         let mut numbered = Vec::new();
-        write_region_segs(&mut numbered, &rel, &segments, ContentFormat::Numbered).unwrap();
+        let failures =
+            write_region_segs(&mut numbered, &rel, &segments, ContentFormat::Numbered).unwrap();
+        assert!(failures.is_empty());
         let numbered = String::from_utf8(numbered).unwrap();
         assert_eq!(numbered.matches("--- content ").count(), 2);
         assert!(numbered.contains("--- content @alpha ---\n1 | alpha\n"));
@@ -1436,10 +1650,11 @@ mod tests {
             &repo,
             covering.entries.iter().collect(),
             ContentFormat::Plain,
-        )
-        .unwrap();
+        );
         let mut plain = Vec::new();
-        write_region_segs(&mut plain, &rel, &segments, ContentFormat::Plain).unwrap();
+        let failures =
+            write_region_segs(&mut plain, &rel, &segments, ContentFormat::Plain).unwrap();
+        assert!(failures.is_empty());
         let plain = String::from_utf8(plain).unwrap();
         assert!(plain.contains("--- content @alpha ---\nalpha\n"));
         assert!(plain.contains(&format!("--- content {second_hash} ---\nbeta\n")));
@@ -1449,9 +1664,170 @@ mod tests {
     }
 
     #[test]
+    fn region_renderer_keeps_context_and_continues_after_content_failure() {
+        let repo = temp_repo("region-content-failure");
+        initialize_test_repo(&repo);
+        fs::write(repo.root.join("file.txt"), "changed\nbeta\n").unwrap();
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: segment::hash_of("alpha\n"),
+                    file: "file.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "first".to_string(),
+                    name: Some("alpha".to_string()),
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: segment::hash_of("beta\n"),
+                    file: "file.txt".to_string(),
+                    a: 2,
+                    a_col: None,
+                    b: 2,
+                    b_col: None,
+                    label: "second".to_string(),
+                    name: Some("beta".to_string()),
+                    message: None,
+                },
+            ],
+        };
+        covering.write(&repo).unwrap();
+        let rel = crate::resolve::Relation::build(&repo, "main", &covering).unwrap();
+        let segments = prepare_region_segments(
+            &repo,
+            covering.entries.iter().collect(),
+            ContentFormat::Numbered,
+        );
+        let mut output = Vec::new();
+
+        let failures =
+            write_region_segs(&mut output, &rel, &segments, ContentFormat::Numbered).unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("content unavailable for @alpha"));
+        assert!(output.contains("  @alpha  first  file.txt:1..1\n    (unlinked)\n"));
+        assert!(output.contains("--- content @beta ---\n2 | beta\n"));
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn named_link_endpoint_selects_its_concrete_duplicate_hash_occurrence() {
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "first.txt".to_string(),
+                    a: 1,
+                    a_col: None,
+                    b: 1,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: Some("first".to_string()),
+                    message: None,
+                },
+                CoveringEntry {
+                    hash: "aaaaaaaaaaaaaaaa".to_string(),
+                    file: "second.txt".to_string(),
+                    a: 7,
+                    a_col: None,
+                    b: 7,
+                    b_col: None,
+                    label: "mapped".to_string(),
+                    name: Some("second".to_string()),
+                    message: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            resolve_endpoint_entry(&covering, "@second").unwrap().file,
+            "second.txt"
+        );
+        assert_eq!(
+            resolve_endpoint_entry(&covering, "aaaaaaaaaaaaaaaa")
+                .unwrap()
+                .file,
+            "first.txt"
+        );
+    }
+
+    #[test]
+    fn link_content_header_includes_role_covering_and_concrete_name() {
+        let repo = temp_repo("link-content-header");
+        initialize_test_repo(&repo);
+        fs::write(repo.root.join("file.txt"), "alpha\n").unwrap();
+        let entry = CoveringEntry {
+            hash: segment::hash_of("alpha\n"),
+            file: "file.txt".to_string(),
+            a: 1,
+            a_col: None,
+            b: 1,
+            b_col: None,
+            label: "mapped".to_string(),
+            name: Some("alpha".to_string()),
+            message: None,
+        };
+        let mut output = Vec::new();
+
+        write_link_endpoint_content(
+            &mut output,
+            &repo,
+            "main",
+            "source",
+            &entry,
+            ContentFormat::Numbered,
+            &mut SourceContext::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "--- content source main:@alpha ---\n1 | alpha\n"
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn summary_validation_rejects_positive_content_but_allows_compact_override() {
+        assert!(reject_summary_content("connection", "map", Some(ContentFormat::None)).is_ok());
+        assert_eq!(
+            reject_summary_content("connection", "map", Some(ContentFormat::Numbered))
+                .unwrap_err()
+                .to_string(),
+            "show connection 'map': --content is not valid for a connection summary; select a single link"
+        );
+        assert_eq!(
+            reject_summary_content("covering", "main", Some(ContentFormat::Plain))
+                .unwrap_err()
+                .to_string(),
+            "show covering 'main': --content-plain is not valid for a covering summary; select a segment or region"
+        );
+    }
+
+    #[test]
+    fn no_content_participates_in_show_content_mode_conflicts() {
+        let mut options = ShowOptions::default();
+        set_content_format(&mut options, ContentFormat::None, "--no-content").unwrap();
+        assert_eq!(options.content, Some(ContentFormat::None));
+        assert!(
+            set_content_format(&mut options, ContentFormat::Numbered, "--content")
+                .unwrap_err()
+                .to_string()
+                .contains("content format specified more than once")
+        );
+    }
+
+    #[test]
     fn show_rejects_plain_as_a_trailing_content_value() {
         let options = ShowOptions {
             content: Some(ContentFormat::Numbered),
+            all: false,
         };
         let error = reject_extra_show_args(
             &["main:file.txt".to_string(), "plain".to_string()],

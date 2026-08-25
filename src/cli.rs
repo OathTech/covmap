@@ -116,7 +116,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "status" => "covmap status [<covering>]                   cardinality, lines, drift, broken links",
         "show" => {
-            "covmap show <addr> [--content|--content-plain] [--all]   inspect a segment, covering, region, link, or connection"
+            "covmap show <addr> [--content|--content-plain|--no-content] [--all]\n  inspect a segment, covering, region, link, or connection\n  focused segments, file/range regions, and links include numbered content by default\n  --no-content selects compact metadata/relationships; --all is connection-summary only"
         }
         "ls" => {
             "covmap ls [-l] [<covering>] [<region> ...] [--label <l>] [--linked|--unlinked]   list segments, optionally narrowed to regions"
@@ -148,7 +148,7 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
-            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  done/skip [-m <msg>]...  resolve current task; repeated messages form paragraphs; no flag clears its prior note\n  peek                     list pending tasks\n  peek --all               list the complete frozen worklist with state and escaped notes"
+            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  next/current [--content|--content-plain|--no-content]\n                           print numbered frozen content by default\n  done/skip [-m <msg>]...  resolve current task; repeated messages form paragraphs; no flag clears its prior note\n  peek [--all] [--content|--content-plain|--no-content]\n                           list tasks compactly unless content is requested"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
         "migrate" => {
@@ -176,9 +176,10 @@ PORCELAIN
   cover [<covering>]                  add selected missing files; report policy diagnostics
   hydrate [<covering>]                reconstruct missing live objects from matching source
   status [<covering>]                 cardinality, lines, drift, broken links
-  show <addr> [--content|--content-plain] [--all]
+  show <addr> [--content|--content-plain|--no-content] [--all]
                                       inspect a segment, covering, region, link, or connection
-                                      numbered content, or raw content with --content-plain
+                                      focused and file/range views include numbered content
+                                      --no-content is compact; --content-plain is raw bytes
   ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
@@ -203,11 +204,12 @@ PORCELAIN
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
-  <name> next [--content|--content-plain] | current [--content|--content-plain]
-                                                      advance to / reprint the current task
+  <name> next [--content|--content-plain|--no-content]
+  <name> current [--content|--content-plain|--no-content]
+                                                      advance/reprint with numbered frozen content by default
   <name> done [-m <msg>]... | skip [-m <msg>]...      resolve current task (does not advance)
   <name> choose <addr> | rewind [<addr>]              jump the cursor / reset a task to pending
-  <name> peek [--all] [--content|--content-plain] | status | finished
+  <name> peek [--all] [--content|--content-plain|--no-content] | status | finished
                                                       look ahead / summarize / test exhaustion
   <name> rm                                           delete the iterator (never touches the covering)
   (bare `covmap iter` lists all iterators)
@@ -1961,10 +1963,11 @@ fn cmd_iter_new(name: &str, args: &[String]) -> io::Result<u8> {
     Ok(0)
 }
 
-/// Parse the optional content flag accepted by `next`/`current`/`peek`.
-/// (`peek` also takes `--all`, so it parses its own args.)
-fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<ContentFormat> {
-    let mut format = ContentFormat::None;
+/// Parse the optional content override accepted by `next` and `current`.
+/// `None` means use the verb's default; `Some(ContentFormat::None)` is an
+/// explicit `--no-content`.
+fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<Option<ContentFormat>> {
+    let mut format = None;
     for a in args {
         match a.as_str() {
             "--content" => {
@@ -1973,12 +1976,15 @@ fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<ContentFormat> 
             "--content-plain" => {
                 set_iter_content_format(verb, &mut format, ContentFormat::Plain, "--content-plain")?
             }
+            "--no-content" => {
+                set_iter_content_format(verb, &mut format, ContentFormat::None, "--no-content")?
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
                         "iter {verb}: unexpected arg '{other}' \
-                         (only --content or --content-plain is accepted)"
+                         (only --content, --content-plain, or --no-content is accepted)"
                     ),
                 ));
             }
@@ -1989,22 +1995,21 @@ fn parse_content_flag(verb: &str, args: &[String]) -> io::Result<ContentFormat> 
 
 fn set_iter_content_format(
     verb: &str,
-    current: &mut ContentFormat,
+    current: &mut Option<ContentFormat>,
     requested: ContentFormat,
     flag: &str,
 ) -> io::Result<()> {
-    if *current != ContentFormat::None {
+    if current.replace(requested).is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("iter {verb}: content format specified more than once (at '{flag}')"),
         ));
     }
-    *current = requested;
     Ok(())
 }
 
 fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
-    let content_format = parse_content_flag("next", args)?;
+    let content_format = parse_content_flag("next", args)?.unwrap_or(ContentFormat::Numbered);
     let repo = current_repo()?;
     let mut it = Iter::read(&repo, name)?;
     // Enumeration guarantee: refuse to advance off a still-pending task.
@@ -2036,7 +2041,7 @@ fn cmd_iter_next(name: &str, args: &[String]) -> io::Result<u8> {
 }
 
 fn cmd_iter_current(name: &str, args: &[String]) -> io::Result<u8> {
-    let content_format = parse_content_flag("current", args)?;
+    let content_format = parse_content_flag("current", args)?.unwrap_or(ContentFormat::Numbered);
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
     match it.cursor {
@@ -2110,21 +2115,35 @@ fn cmd_iter_rewind(name: &str, args: &[String]) -> io::Result<u8> {
 
 fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
     let mut all = false;
-    let mut content_format = ContentFormat::None;
+    let mut content_override = None;
     for a in args {
         match a.as_str() {
-            "--all" => all = true,
+            "--all" => {
+                if all {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "iter peek: --all specified more than once",
+                    ));
+                }
+                all = true;
+            }
             "--content" => set_iter_content_format(
                 "peek",
-                &mut content_format,
+                &mut content_override,
                 ContentFormat::Numbered,
                 "--content",
             )?,
             "--content-plain" => set_iter_content_format(
                 "peek",
-                &mut content_format,
+                &mut content_override,
                 ContentFormat::Plain,
                 "--content-plain",
+            )?,
+            "--no-content" => set_iter_content_format(
+                "peek",
+                &mut content_override,
+                ContentFormat::None,
+                "--no-content",
             )?,
             other => {
                 return Err(io::Error::new(
@@ -2134,6 +2153,7 @@ fn cmd_iter_peek(name: &str, args: &[String]) -> io::Result<u8> {
             }
         }
     }
+    let content_format = content_override.unwrap_or(ContentFormat::None);
     let repo = current_repo()?;
     let it = Iter::read(&repo, name)?;
     let mut source_context = SourceContext::default();
@@ -2752,6 +2772,24 @@ mod tests {
         fs::create_dir_all(repo.coverings_dir()).unwrap();
         fs::create_dir_all(repo.connections_dir()).unwrap();
         fs::write(repo.head_file(), "main\n").unwrap();
+    }
+
+    #[test]
+    fn iterator_content_overrides_distinguish_default_from_no_content() {
+        assert_eq!(parse_content_flag("next", &[]).unwrap(), None);
+        assert_eq!(
+            parse_content_flag("next", &["--no-content".to_string()]).unwrap(),
+            Some(ContentFormat::None)
+        );
+        assert_eq!(
+            parse_content_flag("current", &["--content-plain".to_string()]).unwrap(),
+            Some(ContentFormat::Plain)
+        );
+        let conflict = ["--no-content", "--content"].map(String::from).to_vec();
+        assert!(parse_content_flag("next", &conflict)
+            .unwrap_err()
+            .to_string()
+            .contains("content format specified more than once"));
     }
 
     #[test]

@@ -5,8 +5,9 @@ maps a small Markdown **spec** to a Rust **implementation**, then edits
 the spec three different ways to exercise covmap's drift repair — the
 names, diff-remap, and fingerprinting layers.
 
-The companion script [`run_tutorial.sh`](run_tutorial.sh) executes the same
-scenario and asserts the key outcomes, so it doubles as an integration test.
+This document defines the walkthrough. The companion script
+[`run_tutorial.sh`](run_tutorial.sh) derives from it, executes the same
+scenario, and asserts the key outcomes, so it doubles as an integration test.
 This guide orders concepts for learning; the script runs a few robustness
 checks earlier than they are explained here.
 
@@ -141,7 +142,7 @@ Covering 'main': 2 segments, 20 lines (2 added)
 ```sh
 covmap status
 covmap ls -l
-covmap show main:queue.md --content
+covmap show main:queue.md
 ```
 
 ```
@@ -173,9 +174,10 @@ region main queue.md · 1 segment(s)
 
 `status` summarizes the covering and its drift. `ls -l` gives one compact row
 per segment: hash, label, location (`file:a..b`), line count, and name (`-`
-when anonymous). `show main:queue.md --content` is the human inspection view:
-it selects the `queue.md` region, prints the segment metadata, and includes
-the numbered source text you are about to refine.
+when anonymous). `show main:queue.md` is the human inspection view: an
+explicit file selector presents the file as ordered covmap segments, each with
+its relationships and numbered recorded content. Add `--no-content` when you
+need only the compact relationship view.
 
 That is enough internal state for the normal workflow. Keep using the
 porcelain commands below; the optional cache and plumbing details come after
@@ -305,13 +307,13 @@ covmap ls -l
 ```
 
 ```
-6fefd6238c5bb0e3	head	            errors.md:1..2	    2	-
-4a68e8bf8cbc096f	QueueFull-code	    errors.md:3..3:16	1	-
-3b6f97be0726dc24	QueueFull-meaning	errors.md:3:17..4	2	@queuefull-meaning
-89c0950692f71928	preamble	        queue.md:1..4	    4	-
-f6d8bf2f060c7830	Enqueue	            queue.md:5..9	    5	@enqueue-op
-2e57336943c86e53	Dequeue	            queue.md:10..13	    4	@dequeue-op
-a51b8db403cc3096	reviewed	        queue.md:14..16	    3	-
+62ba072cd07be785	head	            errors.md:1..2	    2	-
+d34ef5055873d546	QueueFull-code	    errors.md:3..3:16	1	-
+934ef24fe0e3628e	QueueFull-meaning	errors.md:3:17..4	2	@queuefull-meaning
+79c6668c1fcd99cd	preamble	        queue.md:1..4	    4	-
+5eaec7059e0d1be3	Enqueue	            queue.md:5..9	    5	@enqueue-op
+1287cbcf2aa0a3b2	Dequeue	            queue.md:10..13	    4	@dequeue-op
+d3ed903c33afcf9d	reviewed	        queue.md:14..16	    3	-
 ```
 
 The name is *not* part of the segment hash — naming, relabelling, or
@@ -330,12 +332,12 @@ covmap annotate main:@enqueue-op \
   -m "Core enqueue op — mapped to the Rust impl." \
   -m "Cut as its own segment so the spec<->impl link is 1:1."
 covmap annotate main:@enqueue-op    # no -m: print the message
-covmap show main:@enqueue-op --content  # include numbered source text
+covmap show main:@enqueue-op        # metadata, links, and numbered source text
 ```
 
 `covmap ls -l` shows the message's first line as a trailing column; `show`
-prints the full message with the segment header, and `--content` includes the
-Enqueue text with source line numbers beneath it.
+prints the full message with the segment header and includes the Enqueue text
+with source line numbers beneath it. Use `--no-content` for metadata only.
 
 This is the fifth and last place text lives in covmap — keep the five
 straight by *what the text is about*:
@@ -391,8 +393,8 @@ On an existing pair, a bare re-link preserves the note and `-m ""` clears it.
 and LF in the note field.
 
 ```
-@enqueue-op	b5368af9628e9079	fn enqueue
 @dequeue-op	b5368af9628e9079	The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.
+@enqueue-op	b5368af9628e9079	fn enqueue
 @queuefull-meaning	b5368af9628e9079	QueueFull guard
 ```
 
@@ -453,7 +455,7 @@ covmap show queue_links     # connection metadata + links
 covmap grep capacity        # segments whose label or content matches
 covmap cover alt            # create alt now, using the repository include
 covmap status alt           # verify that the new covering exists
-covmap diff main alt        # added (-) / only-in-alt (+) / shared (=)
+covmap diff main alt        # only-in-main (-) / only-in-alt (+) / shared (=)
 covmap fsck                 # verify policy, partitions, and endpoints
 covmap status
 ```
@@ -481,23 +483,35 @@ resolves the relation for you.
 
 ```sh
 covmap ls -l main queue.md errors.md # narrow: union of two files
-covmap show main:queue.md            # understand: segment + mapped image
+covmap show main:queue.md            # decomposition: content + mapped image
+covmap show main:queue.md:8..11      # both intersecting segments, in full
 covmap show --label reviewed main    # label lens: concern across files
+covmap show queue_links @enqueue-op <impl-hash> # both endpoint contents
 covmap show queue_links              # degree hubs + readable notes
 ```
 
 `ls` accepts several file or `file:a..b` regions, unions them without
 duplicates, and prints the result in covering order. `show <C>:<file>` (add
-`:a..b` for a line range) prints each segment with its resolved
-counterpart(s), so one call answers "how does this map?":
+`:a..b` for a line range) prints each selected source segment's full recorded
+content with its resolved counterpart(s), so one call answers both "what is
+this file made of?" and "how does this map?":
 
 ```
 region main queue.md · 4 segment(s)
   @enqueue-op  Enqueue  queue.md:5..9
     -> unknown   queue.rs:1..15
        fn enqueue
+--- content @enqueue-op ---
+5 | ## Enqueue
+...
   ...
 ```
+
+A range includes every segment it intersects, in full, even when the query
+starts or ends inside that segment. Region views do not recursively print
+mapped target content; inspect one exact link with `covmap show <K> <A> <B>`
+for role-qualified source and target content blocks. Use `--no-content` when
+you want the compact relationship-only form.
 
 The connection view reports resolved degree and bounded hubs. Here all three
 source segments map to the same implementation segment:
@@ -517,9 +531,10 @@ plumbing form.
 
 `covmap show --label <l>` is the same view selected by label instead of
 file — the way to pull a cross-cutting concern (spread over many files) into
-one call. And `covmap show main:@enqueue-op` on a single segment shows its
-links in both directions plus its drift state, naming the fix command if it
-has drifted.
+one compact call; add `--content` only when the whole label-selected set is
+intended. `covmap show main:@enqueue-op` on a single segment shows its content,
+links in both directions, and drift state, naming the fix command if it has
+drifted.
 
 ## 11. Iterators: work the covering as a worklist
 
@@ -554,27 +569,27 @@ loop. Do the work between `next` and `done`:
 
 ```sh
 until covmap iter review finished; do
-  covmap iter review next --content
+  covmap iter review next
   covmap iter review done -m "audited" -m "validation performed"
 done
 covmap iter review status                # 7/7 resolved (7 done, 0 skipped) — finished
-covmap iter review current --content     # reprint the cursor and its frozen bytes
+covmap iter review current               # reprint the cursor and its frozen bytes
 ```
 
 Between `next` and `done`, inspect the frozen content and do the actual work.
-`current --content` is the resume command after an interruption because it
-reprints both the active task and the numbered content block you were reviewing.
-Use `--content-plain` when raw bytes are more useful. Content remains explicit;
-without either flag these commands print only the compact task row. Use
-`skip -m "why" -m "remaining risk"` in place of `done` to pass deliberately.
+`current` is the resume command after an interruption because it reprints both
+the active task and the numbered content block you were reviewing. Use
+`--no-content` when a script needs only the compact task row, or
+`--content-plain` when raw bytes are more useful. Use `skip -m "why" -m
+"remaining risk"` in place of `done` to pass deliberately.
 Repeated values become paragraphs in one task note. Resolving without a
 message clears any earlier task note; `peek --all` escapes its line breaks so
 each task stays on one physical output line.
 
-Each `next` / `current` / `peek` prints one parseable line per task —
-`<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally
-prints the same numbered content block as `show`, so the loop's stdout stays
-terse by default.
+Each task starts with one parseable row,
+`<@name|hash>\t<label>\t<file>:<a>..<b>`. `next` and `current` append the same
+numbered content block as `show` by default. `peek` remains a compact
+multi-task listing unless `--content` or `--content-plain` is explicit.
 
 The enumeration guarantee is what makes "visit every segment exactly once"
 a property the tool enforces: `next` advances to the first pending task
@@ -649,7 +664,7 @@ covmap fsck --offline --hydrate       # verify and hydrate in one pass
 everyday use. `rev-parse` turns an address or unique hash prefix into the full
 segment hash. `cat-segment` prints the immutable bytes recorded by that hash;
 it can reconstruct them from source only when the source still verifies.
-Prefer `show <address> --content` for human inspection and `hydrate` when you
+Prefer `show <address>` for human inspection and `hydrate` when you
 need to repopulate a whole covering.
 
 A missing object is not corruption when the current source reproduces its
@@ -705,7 +720,7 @@ recorded content with a single `recut`:
 
 ```sh
 covmap recut main:@dequeue-op          # address the segment by its name
-covmap status                          # drift: clean, still 3 links, 0 broken
+covmap status main                     # main is clean, still 3 links, 0 broken
 ```
 
 No unlink/relink is needed. An anonymous, hash-based link would still point to
@@ -732,7 +747,7 @@ remap: 1 file(s) healed, 1 segment(s) refreshed, 0 unresolved
 It reconstructs the pre-edit file from the covering, diffs it against
 disk, and re-fits every line-aligned segment's boundaries through the
 unchanged regions — following the insertion automatically. Names (hence
-the `queue_links` links) are preserved, so `status` is clean again and
+the `queue_links` links) are preserved, so `status main` is clean again and
 the connection is still 3 links, 0 broken. No relinking.
 
 ## 14. Moved section → fingerprint proposal (propose-only)
@@ -768,7 +783,7 @@ For an unresolved move, use this sequence:
 
 1. Stop after the proposal. The file's covering was left unchanged; do not
    `prune` temporarily broken links.
-2. Compare the recorded segment (`covmap show main:@enqueue-op --content`)
+2. Compare the recorded segment (`covmap show main:@enqueue-op`)
    with the proposed source lines. Treat the score only as a pointer.
 3. Record the affected segments' names, labels, messages, and link notes.
    Merge the smallest adjacent span that contains the old and new boundaries,
@@ -806,9 +821,9 @@ covmap html
 
 Open `.covmap/report.html` (i.e. `tutorial/_play/spec/.covmap/report.html`
 if you followed along by hand, or `tutorial/_work/spec/.covmap/report.html`
-from the script) in a browser for the List / Source / Target / Compare
-views, with character-level chunks rendered inline and linked segments
-highlighted.
+when the script is run with `KEEP=1`) in a browser for the List / Source /
+Target / Compare views, with character-level chunks rendered inline and linked
+segments highlighted.
 
 In the Compare view, clicking a segment highlights all its counterparts on
 the other side; clicking the *same* segment again cycles through them one

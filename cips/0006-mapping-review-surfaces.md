@@ -2,7 +2,7 @@
 
 Stage: **Landed**
 
-## Relationship to CIPs 0007 and 0009
+## Relationship to CIPs 0007, 0009, and 0013
 
 This proposal has landed and is independent of
 [CIP 0009](0009-atomic-multi-cut.md). Both operate on the existing complete
@@ -13,6 +13,11 @@ read-only inspection.
 same-repository routes and endpoint forms. This proposal preserves those
 conventions and changes only how existing connections are summarized and
 rendered.
+
+[CIP 0013](0013-uniform-multiline-messages.md) later superseded only this
+proposal's single-line link-note constraint. Its multiline storage and
+line-aware rendering preserve the region, degree, and wrapped-note inspection
+behavior defined here.
 
 ## Idea
 

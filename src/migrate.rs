@@ -40,23 +40,43 @@ pub(crate) fn run(args: &[String]) -> io::Result<u8> {
 
     let repo = Repo::discover_unchecked(&env::current_dir()?)?;
     let mut version = repo.read_version().unwrap_or_default();
-    if !matches!(version.as_str(), "1" | "2" | "3" | "4") {
+    if !matches!(
+        version.as_str(),
+        "1" | "2" | "3" | "4" | "5" | FORMAT4_TO_5_TRANSITION
+    ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("cannot migrate from format '{version}' (expected '1', '2', '3', or '4')"),
+            format!(
+                "cannot migrate from format '{version}' \
+                 (expected '1', '2', '3', '4', '5', or '{FORMAT4_TO_5_TRANSITION}')"
+            ),
         ));
     }
-    if version == "4" {
-        if !recoveries.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "migrate: --recover-covering applies only to legacy formats",
-            ));
-        }
+    if matches!(version.as_str(), "4" | "5" | FORMAT4_TO_5_TRANSITION) && !recoveries.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "migrate: --recover-covering applies only to legacy formats",
+        ));
+    }
+    if version == "5" {
         ensure_format4_gitignore(&repo)?;
+        cleanup_format4_to_5(&repo)?;
         cleanup_published_migration(&repo)?;
         cleanup_name_migration(&repo)?;
-        println!("repository format is 4 - no version migration needed");
+        println!("repository format is 5 - no version migration needed");
+        return Ok(0);
+    }
+    if version == FORMAT4_TO_5_TRANSITION {
+        publish_format4_to_5(&repo)?;
+        finish_terminal_migration(&repo)?;
+        println!("resumed migration and published repository format 5");
+        println!("run `covmap fsck` to confirm every partition and endpoint resolves");
+        return Ok(0);
+    }
+    if version == "4" {
+        migrate_v4_to_v5(&repo)?;
+        finish_terminal_migration(&repo)?;
+        println!("run `covmap fsck` to confirm every partition and endpoint resolves");
         return Ok(0);
     }
 
@@ -78,8 +98,20 @@ pub(crate) fn run(args: &[String]) -> io::Result<u8> {
         migrate_v2_to_v3(&repo)?;
     }
     migrate_v3_to_v4(&repo)?;
+    migrate_v4_to_v5(&repo)?;
+    finish_terminal_migration(&repo)?;
     println!("run `covmap fsck` to confirm every partition and endpoint resolves");
     Ok(0)
+}
+
+const FORMAT4_TO_5_TRANSITION: &str = "migrating-4-to-5";
+
+fn finish_terminal_migration(repo: &Repo) -> io::Result<()> {
+    ensure_format4_gitignore(repo)?;
+    cleanup_published_migration(repo)?;
+    cleanup_name_migration(repo)?;
+    cleanup_format4_to_5(repo)?;
+    Ok(())
 }
 
 const ESCAPED_COVERING_PREFIX: &str = "covmap-escaped-";
@@ -135,7 +167,7 @@ fn hex_decode(value: &str) -> io::Result<String> {
     if value.len() % 2 != 0 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "invalid hex field in covering-name migration manifest",
+            "invalid hex field in migration manifest",
         ));
     }
     let mut bytes = Vec::with_capacity(value.len() / 2);
@@ -144,7 +176,7 @@ fn hex_decode(value: &str) -> io::Result<String> {
             u8::from_str_radix(&value[offset..offset + 2], 16).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "invalid hex field in covering-name migration manifest",
+                    "invalid hex field in migration manifest",
                 )
             })?,
         );
@@ -152,7 +184,7 @@ fn hex_decode(value: &str) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "non-UTF-8 field in covering-name migration manifest",
+            "non-UTF-8 field in migration manifest",
         )
     })
 }
@@ -743,7 +775,7 @@ fn stage_rewritten_metadata(
                 LegacyConnection::parse(name, &rewritten)?;
             }
             "3" => {
-                Connection::parse(name, &rewritten)?;
+                Connection::parse_format4(name, &rewritten)?;
             }
             other => {
                 return Err(io::Error::new(
@@ -757,7 +789,7 @@ fn stage_rewritten_metadata(
     for (name, path) in iterator_files {
         let raw = fs::read_to_string(path)?;
         let rewritten = rewrite_metadata_fields(&raw, &["# covering="], &manifest.mappings)?;
-        Iter::parse(name, &rewritten)?;
+        Iter::parse_format4(name, &rewritten)?;
         crate::store::atomic_write(&staged.join("iterators").join(name), &rewritten)?;
     }
     for old in &manifest.selections {
@@ -909,14 +941,14 @@ fn migrate_v1_to_v2(repo: &Repo) -> io::Result<()> {
     // a hash, so it needs no rewrite).
     let mut iter_tasks = 0usize;
     for iname in crate::iterator::Iter::list(repo)? {
-        let mut it = crate::iterator::Iter::read(repo, &iname)?;
+        let mut it = crate::iterator::Iter::read_format4(repo, &iname)?;
         for t in &mut it.tasks {
             if let Some(n) = remap.get(&t.hash) {
                 t.hash = n.clone();
                 iter_tasks += 1;
             }
         }
-        it.write(repo)?;
+        it.write_format4(repo)?;
     }
 
     crate::store::atomic_write(&repo.dot().join("version"), "2\n")?;
@@ -1153,7 +1185,7 @@ fn stage_v2_to_v3(repo: &Repo) -> io::Result<Vec<(String, String)>> {
         };
         crate::store::atomic_write(
             &staged.join("connections").join(&connection.name),
-            &connection.serialize(),
+            &connection.serialize_format4(),
         )?;
     }
     crate::store::atomic_write(
@@ -1232,10 +1264,10 @@ fn migrate_v3_to_v4(repo: &Repo) -> io::Result<()> {
         Covering::read(repo, &name)?;
     }
     for name in Connection::list(repo)? {
-        Connection::read(repo, &name)?;
+        Connection::read_format4(repo, &name)?;
     }
     for name in Iter::list(repo)? {
-        Iter::read(repo, &name)?;
+        Iter::read_format4(repo, &name)?;
     }
     let policy_issues = walk::layout_issues(repo);
     if !policy_issues.is_empty() {
@@ -1255,6 +1287,250 @@ fn migrate_v3_to_v4(repo: &Repo) -> io::Result<()> {
         "migrated to format 4: covering-input selection is tracked; \
          existing ignore-only discovery behavior is unchanged"
     );
+    Ok(())
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Format4To5Manifest {
+    connections: BTreeSet<String>,
+    iterators: BTreeSet<String>,
+}
+
+fn format4_to_5_dir(repo: &Repo) -> PathBuf {
+    repo.local_dir().join("migrate-4-to-5")
+}
+
+fn format4_to_5_manifest(repo: &Repo) -> PathBuf {
+    format4_to_5_dir(repo).join("manifest")
+}
+
+fn cleanup_format4_to_5(repo: &Repo) -> io::Result<bool> {
+    let path = format4_to_5_dir(repo);
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn serialize_format4_to_5_manifest(manifest: &Format4To5Manifest) -> String {
+    let mut out = String::from("ready\n");
+    for name in &manifest.connections {
+        out.push_str(&format!("connection\t{}\n", hex_encode(name)));
+    }
+    for name in &manifest.iterators {
+        out.push_str(&format!("iterator\t{}\n", hex_encode(name)));
+    }
+    out
+}
+
+fn read_format4_to_5_manifest(repo: &Repo) -> io::Result<Format4To5Manifest> {
+    let path = format4_to_5_manifest(repo);
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unfinished format migration has no ready manifest at {}; \
+                     restore the migration journal or recover from version control",
+                    path.display()
+                ),
+            )
+        } else {
+            error
+        }
+    })?;
+    let mut lines = raw.lines();
+    if lines.next() != Some("ready") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid format 4 -> 5 manifest at {}", path.display()),
+        ));
+    }
+    let mut manifest = Format4To5Manifest::default();
+    for line in lines {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let (kind, encoded) = match fields.as_slice() {
+            [kind @ ("connection" | "iterator"), encoded] => (*kind, *encoded),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid format 4 -> 5 manifest record '{line}'"),
+                ))
+            }
+        };
+        let name = hex_decode(encoded)?;
+        let inserted = match kind {
+            "connection" => manifest.connections.insert(name),
+            "iterator" => manifest.iterators.insert(name),
+            _ => unreachable!(),
+        };
+        if !inserted {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("duplicate format 4 -> 5 manifest record '{line}'"),
+            ));
+        }
+    }
+    Ok(manifest)
+}
+
+fn regular_file_names(dir: &Path) -> io::Result<BTreeSet<String>> {
+    Ok(legacy_regular_files(dir, false)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect())
+}
+
+fn require_staged_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "format 4 -> 5 staged snapshot is missing directory {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "format 4 -> 5 staged snapshot path is not a regular directory: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_format4_to_5(repo: &Repo) -> io::Result<Format4To5Manifest> {
+    let root = format4_to_5_dir(repo);
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
+    }
+    let staged = root.join("staged");
+    fs::create_dir_all(staged.join("connections"))?;
+    fs::create_dir_all(staged.join("iterators"))?;
+
+    let mut manifest = Format4To5Manifest::default();
+    for (name, path) in legacy_regular_files(&repo.connections_dir(), false)? {
+        let raw = fs::read_to_string(&path)?;
+        let connection = Connection::parse_format4(&name, &raw)?;
+        crate::store::atomic_write(
+            &staged.join("connections").join(&name),
+            &connection.serialize(),
+        )?;
+        manifest.connections.insert(name);
+    }
+    for (name, path) in legacy_regular_files(&repo.iterators_dir(), false)? {
+        let raw = fs::read_to_string(&path)?;
+        let iterator = Iter::parse_format4(&name, &raw)?;
+        crate::store::atomic_write(&staged.join("iterators").join(&name), &iterator.serialize())?;
+        manifest.iterators.insert(name);
+    }
+    crate::store::atomic_write(
+        &format4_to_5_manifest(repo),
+        &serialize_format4_to_5_manifest(&manifest),
+    )?;
+    Ok(manifest)
+}
+
+fn validate_format4_to_5_snapshot(repo: &Repo, manifest: &Format4To5Manifest) -> io::Result<()> {
+    let staged = format4_to_5_dir(repo).join("staged");
+    let staged_connections = staged.join("connections");
+    let staged_iterators = staged.join("iterators");
+    require_staged_directory(&staged_connections)?;
+    require_staged_directory(&staged_iterators)?;
+    let connection_names = regular_file_names(&staged_connections)?;
+    let iterator_names = regular_file_names(&staged_iterators)?;
+    if connection_names != manifest.connections || iterator_names != manifest.iterators {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "format 4 -> 5 staged snapshot does not match its ready manifest",
+        ));
+    }
+    for name in &manifest.connections {
+        let raw = fs::read_to_string(staged.join("connections").join(name))?;
+        Connection::parse(name, &raw)?;
+    }
+    for name in &manifest.iterators {
+        let raw = fs::read_to_string(staged.join("iterators").join(name))?;
+        Iter::parse(name, &raw)?;
+    }
+    Ok(())
+}
+
+fn publish_staged_ref(path: &Path, raw: &str) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(live) if live == raw => Ok(()),
+        Ok(_) => crate::store::atomic_write(path, raw),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            crate::store::atomic_write(path, raw)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn activate_format4_to_5(repo: &Repo) -> io::Result<()> {
+    if repo.read_version()? != "4" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "format 4 -> 5 activation requires published version 4",
+        ));
+    }
+    let manifest = read_format4_to_5_manifest(repo)?;
+    validate_format4_to_5_snapshot(repo, &manifest)?;
+    crate::store::atomic_write(
+        &repo.dot().join("version"),
+        &format!("{FORMAT4_TO_5_TRANSITION}\n"),
+    )
+}
+
+fn publish_format4_to_5(repo: &Repo) -> io::Result<()> {
+    if repo.read_version()? != FORMAT4_TO_5_TRANSITION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("format 4 -> 5 publication requires version '{FORMAT4_TO_5_TRANSITION}'"),
+        ));
+    }
+    let manifest = read_format4_to_5_manifest(repo)?;
+    validate_format4_to_5_snapshot(repo, &manifest)?;
+    let staged = format4_to_5_dir(repo).join("staged");
+    for name in &manifest.connections {
+        let raw = fs::read_to_string(staged.join("connections").join(name))?;
+        publish_staged_ref(&repo.connections_dir().join(name), &raw)?;
+    }
+    for name in &manifest.iterators {
+        let raw = fs::read_to_string(staged.join("iterators").join(name))?;
+        publish_staged_ref(&repo.iterators_dir().join(name), &raw)?;
+    }
+    crate::store::atomic_write(&repo.dot().join("version"), "5\n")?;
+    fs::remove_dir_all(format4_to_5_dir(repo))?;
+    Ok(())
+}
+
+fn migrate_v4_to_v5(repo: &Repo) -> io::Result<()> {
+    let version = repo.read_version()?;
+    match version.as_str() {
+        "4" => {
+            // A ready snapshot under version 4 was never activated and may be
+            // stale because an older binary could have changed live refs.
+            cleanup_format4_to_5(repo)?;
+            prepare_format4_to_5(repo)?;
+            activate_format4_to_5(repo)?;
+        }
+        FORMAT4_TO_5_TRANSITION => {}
+        other => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("format 4 -> 5 migration expected version 4, found '{other}'"),
+            ))
+        }
+    }
+    publish_format4_to_5(repo)?;
+    println!("migrated to format 5: link and iterator notes use multiline-safe adjacent stanzas");
     Ok(())
 }
 
@@ -1325,6 +1601,14 @@ mod tests {
         repo
     }
 
+    fn format4_repo(tag: &str) -> Repo {
+        let repo = format2_repo(tag);
+        fs::create_dir_all(repo.local_dir()).unwrap();
+        fs::create_dir_all(repo.selections_dir()).unwrap();
+        fs::write(repo.dot().join("version"), "4\n").unwrap();
+        repo
+    }
+
     #[test]
     fn format2_migration_is_resumable_and_canonicalizes_self() {
         let repo = format2_repo("migrate-resume");
@@ -1349,7 +1633,10 @@ mod tests {
         migrate_v2_to_v3(&repo).unwrap();
 
         assert_eq!(repo.read_version().unwrap(), "3");
-        assert_eq!(Connection::read(&repo, "self").unwrap().target_peer, ".");
+        assert_eq!(
+            Connection::read_format4(&repo, "self").unwrap().target_peer,
+            "."
+        );
         assert_eq!(
             fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
             crate::repo::DEFAULT_GITIGNORE
@@ -1375,9 +1662,16 @@ mod tests {
 
         migrate_v2_to_v3(&repo).unwrap();
 
-        assert_eq!(Connection::read(&repo, "first").unwrap().target_peer, "api");
         assert_eq!(
-            Connection::read(&repo, "second").unwrap().target_peer,
+            Connection::read_format4(&repo, "first")
+                .unwrap()
+                .target_peer,
+            "api"
+        );
+        assert_eq!(
+            Connection::read_format4(&repo, "second")
+                .unwrap()
+                .target_peer,
             "api-2"
         );
         let bindings = peer::read_bindings(&repo).unwrap();
@@ -1408,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn format1_migration_chains_through_portable_format3() {
+    fn format1_migration_chains_through_format5() {
         use sha2::{Digest, Sha256};
 
         let repo = temp_repo("migrate-chain");
@@ -1463,9 +1757,11 @@ mod tests {
 
         migrate_v1_to_v2(&repo).unwrap();
         migrate_v2_to_v3(&repo).unwrap();
+        migrate_v3_to_v4(&repo).unwrap();
+        migrate_v4_to_v5(&repo).unwrap();
 
         let new_hash = segment::hash_of(content);
-        assert_eq!(repo.read_version().unwrap(), "3");
+        assert_eq!(repo.read_version().unwrap(), "5");
         assert_eq!(
             Covering::read(&repo, "main").unwrap().entries[0].hash,
             new_hash
@@ -1521,10 +1817,10 @@ mod tests {
         assert_eq!(repo.read_head().unwrap(), escaped);
         assert!(repo.covering_path(&escaped).unwrap().is_file());
         assert!(!repo.coverings_dir().join("foo:bar").exists());
-        let connection = Connection::read(&repo, "self").unwrap();
+        let connection = Connection::read_format4(&repo, "self").unwrap();
         assert_eq!(connection.source_covering, escaped);
         assert_eq!(connection.target_covering, escaped);
-        assert_eq!(Iter::read(&repo, "work").unwrap().covering, escaped);
+        assert_eq!(Iter::read_format4(&repo, "work").unwrap().covering, escaped);
         assert_eq!(
             fs::read_to_string(repo.selection_dir(&escaped).unwrap().join("include")).unwrap(),
             "src/\n"
@@ -1701,6 +1997,191 @@ mod tests {
         assert!(cleanup_published_migration(&repo).unwrap());
         assert!(!migration_dir(&repo).exists());
         assert!(!cleanup_published_migration(&repo).unwrap());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format4_to_5_preserves_inline_notes_and_publishes_stanzas() {
+        let repo = format4_repo("format5-notes");
+        fs::write(
+            repo.connections_dir().join("self"),
+            "# source_covering=main\n\
+             # target_peer=.\n\
+             # target_covering=main\n\
+             @alpha\t@alpha\tlink\twith-tab\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.iterators_dir().join("work"),
+            "# covering=main\n\
+             # order=file\n\
+             # cursor=0\n\
+             abc\tfile.txt\t1\t1\tmapped\talpha\tdone\ttask\twith-tab\n",
+        )
+        .unwrap();
+
+        migrate_v4_to_v5(&repo).unwrap();
+
+        assert_eq!(repo.read_version().unwrap(), "5");
+        let connection = Connection::read(&repo, "self").unwrap();
+        assert_eq!(connection.links[0].note, "link\twith-tab");
+        let iterator = Iter::read(&repo, "work").unwrap();
+        assert_eq!(iterator.tasks[0].note, "task\twith-tab");
+        assert!(fs::read_to_string(repo.connections_dir().join("self"))
+            .unwrap()
+            .contains("# note 1\nlink\twith-tab\n"));
+        assert!(fs::read_to_string(repo.iterators_dir().join("work"))
+            .unwrap()
+            .contains("# note 1\ntask\twith-tab\n"));
+        assert!(!format4_to_5_dir(&repo).exists());
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format4_to_5_without_notes_keeps_ref_bytes() {
+        let repo = format4_repo("format5-no-notes");
+        let connection = "# source_covering=main\n\
+                          # target_peer=.\n\
+                          # target_covering=main\n\
+                          @alpha\t@alpha\n";
+        let iterator = "# covering=main\n\
+                        # order=file\n\
+                        abc\tfile.txt\t1\t1\tmapped\talpha\tpending\n";
+        fs::write(repo.connections_dir().join("self"), connection).unwrap();
+        fs::write(repo.iterators_dir().join("work"), iterator).unwrap();
+
+        migrate_v4_to_v5(&repo).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(repo.connections_dir().join("self")).unwrap(),
+            connection
+        );
+        assert_eq!(
+            fs::read_to_string(repo.iterators_dir().join("work")).unwrap(),
+            iterator
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn malformed_format4_line_blocks_migration_before_mutation() {
+        let repo = format4_repo("format5-malformed");
+        let raw = "# source_covering=main\n\
+                   # target_peer=.\n\
+                   # target_covering=main\n\
+                   not-a-record\n";
+        fs::write(repo.connections_dir().join("broken"), raw).unwrap();
+
+        let error = migrate_v4_to_v5(&repo).unwrap_err().to_string();
+
+        assert!(error.contains("connection 'broken' line 4"));
+        assert_eq!(repo.read_version().unwrap(), "4");
+        assert_eq!(
+            fs::read_to_string(repo.connections_dir().join("broken")).unwrap(),
+            raw
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn version4_ready_snapshot_is_discarded_and_restaged() {
+        let repo = format4_repo("format5-restage");
+        let path = repo.connections_dir().join("self");
+        fs::write(
+            &path,
+            "# source_covering=main\n# target_peer=.\n# target_covering=main\n@a\t@b\told\n",
+        )
+        .unwrap();
+        prepare_format4_to_5(&repo).unwrap();
+        fs::write(
+            &path,
+            "# source_covering=main\n# target_peer=.\n# target_covering=main\n@a\t@b\tnew\n",
+        )
+        .unwrap();
+
+        migrate_v4_to_v5(&repo).unwrap();
+
+        assert_eq!(
+            Connection::read(&repo, "self").unwrap().links[0].note,
+            "new"
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn transitional_version_gates_commands_and_resumes_from_staged_bytes() {
+        let repo = format4_repo("format5-resume");
+        fs::write(
+            repo.connections_dir().join("self"),
+            "# source_covering=main\n# target_peer=.\n# target_covering=main\n@a\t@b\tnote\n",
+        )
+        .unwrap();
+        prepare_format4_to_5(&repo).unwrap();
+        activate_format4_to_5(&repo).unwrap();
+        let staged =
+            fs::read_to_string(format4_to_5_dir(&repo).join("staged/connections/self")).unwrap();
+        fs::write(repo.connections_dir().join("self"), &staged).unwrap();
+
+        let error = Repo::discover(&repo.root).unwrap_err().to_string();
+        assert!(error.contains("unfinished"));
+        migrate_v4_to_v5(&repo).unwrap();
+
+        assert_eq!(repo.read_version().unwrap(), "5");
+        assert_eq!(
+            Connection::read(&repo, "self").unwrap().links[0].note,
+            "note"
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn transitional_version_without_manifest_fails_without_touching_refs() {
+        let repo = format4_repo("format5-no-manifest");
+        let path = repo.connections_dir().join("self");
+        fs::write(
+            &path,
+            "# source_covering=main\n# target_peer=.\n# target_covering=main\n@a\t@b\n",
+        )
+        .unwrap();
+        fs::write(repo.dot().join("version"), "migrating-4-to-5\n").unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        let error = migrate_v4_to_v5(&repo).unwrap_err().to_string();
+
+        assert!(error.contains("no ready manifest"));
+        assert_eq!(fs::read_to_string(path).unwrap(), before);
+        assert_eq!(repo.read_version().unwrap(), "migrating-4-to-5");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn ready_snapshot_with_a_missing_staged_directory_cannot_activate() {
+        let repo = format4_repo("format5-missing-staged-dir");
+        prepare_format4_to_5(&repo).unwrap();
+        fs::remove_dir_all(format4_to_5_dir(&repo).join("staged/iterators")).unwrap();
+
+        let error = activate_format4_to_5(&repo).unwrap_err().to_string();
+
+        assert!(error.contains("staged snapshot is missing directory"));
+        assert_eq!(repo.read_version().unwrap(), "4");
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn format5_terminal_cleanup_removes_stale_journal_only() {
+        let repo = format4_repo("format5-cleanup");
+        fs::write(repo.dot().join("version"), "5\n").unwrap();
+        fs::create_dir_all(format4_to_5_dir(&repo).join("staged")).unwrap();
+        fs::write(format4_to_5_manifest(&repo), "ready\n").unwrap();
+        let before = fs::read_to_string(repo.coverings_dir().join("main")).unwrap();
+
+        cleanup_format4_to_5(&repo).unwrap();
+
+        assert!(!format4_to_5_dir(&repo).exists());
+        assert_eq!(
+            fs::read_to_string(repo.coverings_dir().join("main")).unwrap(),
+            before
+        );
         fs::remove_dir_all(repo.root).unwrap();
     }
 }

@@ -34,7 +34,7 @@ REF="spec/.covmap/iterators/$ITER"
 
 # One task per segment: the covering has 5 segments, so must the worklist.
 check "iterator has one task per segment (5)" bash -c "
-  [[ \$(grep -cvE '^#' '$REF') -eq 5 ]]
+  [[ \$(cd spec && \"$COVMAP_BIN\" iter '$ITER' peek --all | wc -l) -eq 5 ]]
 "
 
 # Complete enumeration: nothing left pending.
@@ -42,17 +42,22 @@ check "every task is resolved (finished)" bash -c "
   cd spec && \"$COVMAP_BIN\" iter '$ITER' finished
 "
 check "no task is still pending" bash -c "
-  ! grep -qE $'\tpending' '$REF'
+  (cd spec && \"$COVMAP_BIN\" iter '$ITER' peek --all) \
+    | awk -F'\t' '\$4 == \"pending\" {found=1} END {exit found ? 1 : 0}'
 "
 
 # Each of the four named endpoint tasks carries a non-empty verdict note.
-# Ref columns: hash file a b label name state [note] — so a task with a
-# name (col 6) that is resolved must have an 8th (note) field.
+# `peek --all` columns: handle, label, location, state, optional escaped note.
 for ep in get-widgets post-widgets delete-widget healthz; do
   check "@$ep carries a verdict note" bash -c "
-    awk -F'\t' -v n='$ep' '\$6==n && NF>=8 && \$8!=\"\" {ok=1} END{exit ok?0:1}' '$REF'
+    (cd spec && \"$COVMAP_BIN\" iter '$ITER' peek --all) \
+      | awk -F'\t' -v h='@$ep' '\$1==h && NF>=5 && \$5!=\"\" {ok=1} END{exit ok?0:1}'
   "
 done
+check "at least one endpoint verdict has two paragraphs" bash -c "
+  (cd spec && \"$COVMAP_BIN\" iter '$ITER' peek --all) \
+    | awk -F'\t' '\$1 ~ /^@(get-widgets|post-widgets|delete-widget|healthz)$/ && \$5 ~ /\\\\n\\\\n/ {ok=1} END{exit ok?0:1}'
+"
 
 # The iterator is a snapshot layered over the covering: sweeping it must
 # not mutate the covering. Structure is intact — still 5 segments and the

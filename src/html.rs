@@ -1047,7 +1047,7 @@ section { padding: 1.5rem; overflow-y: auto; }
 .segment .seg-message { font-size: 0.8rem; color: #475569; margin-bottom: 0.5rem; white-space: pre-wrap; border-left: 3px solid #cbd5e1; padding-left: 0.6rem; }
 .segment .links { margin-top: 0.5rem; font-size: 0.82rem; }
 .segment .links code { background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 3px; }
-.segment .note { font-style: italic; color: #4b5563; }
+.segment .note { font-style: italic; color: #4b5563; white-space: pre-wrap; }
 
 .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 10px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge.linked   { background: #dcfce7; color: #166534; }
@@ -1099,7 +1099,7 @@ section { padding: 1.5rem; overflow-y: auto; }
 #tooltip:not(.visible) { pointer-events: none; }
 #tooltip .tt-title { font-weight: 600; margin-bottom: 0.3rem; display: flex; align-items: center; gap: 0.4rem; }
 #tooltip .tt-meta { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #94a3b8; margin-bottom: 0.35rem; }
-#tooltip .tt-note { font-style: italic; color: #cbd5e1; margin: 0.35rem 0; }
+#tooltip .tt-note { font-style: italic; color: #cbd5e1; margin: 0.35rem 0; white-space: pre-wrap; }
 #tooltip .tt-links { margin: 0.35rem 0 0 0; padding-left: 1rem; }
 #tooltip .tt-links li { margin: 0.1rem 0; }
 #tooltip code { background: rgba(148,163,184,0.2); padding: 0.05rem 0.25rem; border-radius: 3px; font-size: 0.72rem; }
@@ -1141,7 +1141,7 @@ code { background: #f1f5f9; padding: 0 .25em; border-radius: 3px;
        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
 code.broken { color: #991b1b; }
 code.ok { color: #166534; }
-.note { color: #64748b; font-style: italic; }
+.note { color: #64748b; font-style: italic; white-space: pre-wrap; }
 .empty, .file-empty { padding: 1rem; color: #64748b; font-size: 0.88rem; }
 
 /* ---- compare view: 4 panels side by side ---- */
@@ -1636,6 +1636,13 @@ mod tests {
         let tag_start = html[..attribute_start].rfind("<span").unwrap();
         let tag_end = attribute_start + html[attribute_start..].find('>').unwrap() + 1;
         &html[tag_start..tag_end]
+    }
+
+    #[test]
+    fn multiline_notes_remain_literal_text_for_pre_wrapped_rendering() {
+        assert_eq!(esc("first\n<second>"), "first\n&lt;second&gt;");
+        assert!(HEAD_TEMPLATE.contains(".note {"));
+        assert!(HEAD_TEMPLATE.contains("white-space: pre-wrap"));
     }
 
     #[test]

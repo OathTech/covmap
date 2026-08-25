@@ -265,10 +265,14 @@ hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 ( cd "$WORK/spec" && run peer bind impl ../impl_rs )
 ( cd "$WORK/spec" && run connect main impl:main queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
-DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
-( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
-( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "$DEQUEUE_NOTE" )
-( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" "QueueFull guard" )
+DEQUEUE_NOTE_FIRST="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
+DEQUEUE_NOTE_SECOND="Validated against the empty-queue branch in queue.rs."
+DEQUEUE_NOTE=$'The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.'
+DEQUEUE_PLUMBING='The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.'
+( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" -m "fn enqueue" )
+( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" \
+    -m "$DEQUEUE_NOTE_FIRST" -m "$DEQUEUE_NOTE_SECOND" )
+( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" -m "QueueFull guard" )
 ( cd "$WORK/spec" && run ls-links queue_links )
 
 assert "connection has 3 links, all by @name" \
@@ -376,11 +380,12 @@ assert "show queue_links reports the resolved fan-in hub" bash -c "
 assert "show queue_links wraps the long mapping note" bash -c "
   out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
   printf '%s\n' \"\$out\" | grep -q '^    The dequeue operation delegates empty-queue handling to the same' \
-    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review'"
+    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review' \
+    && printf '%s\n' \"\$out\" | grep -q '^    Validated against the empty-queue branch in queue.rs.'"
 assert "ls-links --resolve keeps the long note on one TAB record" bash -c "
   out=\$(cd '$WORK/spec' && '$COVMAP' ls-links --resolve queue_links)
   [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 3 ]] \
-    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_NOTE\""
+    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_PLUMBING\""
 # `status` surfaces per-connection coverage.
 assert "status reports connection coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'coverage'"
@@ -423,7 +428,8 @@ assert "current --content-plain emits raw frozen content" \
   "
 # That advanced onto (and printed) the first task; resolve it so the
 # canonical loop below picks up cleanly from the next pending task.
-( cd "$WORK/spec" && "$COVMAP" iter review done -m "audited (with content)" >/dev/null )
+( cd "$WORK/spec" && "$COVMAP" iter review done \
+  -m "audited (with content)" -m "numbered bytes inspected" >/dev/null )
 
 # The manual controls — shown on a throwaway `plan` iterator so the `review`
 # sweep below stays pristine (iterators are cheap, independent overlays).
@@ -433,8 +439,13 @@ assert "current --content-plain emits raw frozen content" \
 # strand a task — rewind (or a later `next`) always brings it back.
 ( cd "$WORK/spec" && run iter plan new main )
 ( cd "$WORK/spec" && run iter plan choose @enqueue-op )
-( cd "$WORK/spec" && run iter plan skip -m "trivial — covered elsewhere" )
+( cd "$WORK/spec" && run iter plan skip \
+  -m "trivial — covered elsewhere" -m "no endpoint semantics" )
 ( cd "$WORK/spec" && run iter plan status )       # 1/7 resolved (0 done, 1 skipped) ...
+assert "iterator audit output escapes multiline notes onto one record" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' iter plan peek --all)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 7 ]] \
+    && printf '%s\n' \"\$out\" | grep -qF 'trivial — covered elsewhere\\n\\nno endpoint semantics'"
 ( cd "$WORK/spec" && run iter plan rewind @enqueue-op )
 ( cd "$WORK/spec" && run iter plan status )       # 0/7 resolved (0 done, 0 skipped) ...
 

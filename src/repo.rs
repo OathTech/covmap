@@ -4,7 +4,7 @@
 //! <repo>/
 //!   .covmap/
 //!     .gitignore          # tracked default publication policy
-//!     version             # on-disk format version (currently "4")
+//!     version             # on-disk format version (currently "5")
 //!     HEAD                # default covering name
 //!     include             # optional global positive selection
 //!     ignore              # optional global exclusions
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 /// the segment hash, object encoding, covering refs, or connection
 /// refs. covmap refuses to operate on a `.covmap/` whose version
 /// disagrees.
-pub const FORMAT_VERSION: &str = "4";
+pub const FORMAT_VERSION: &str = "5";
 
 pub fn valid_covering_name(name: &str) -> bool {
     !name.is_empty()
@@ -146,7 +146,13 @@ impl Repo {
         };
         let on_disk = raw.trim();
         if on_disk != FORMAT_VERSION {
-            let hint = if matches!(on_disk, "1" | "2" | "3") {
+            if on_disk == "migrating-4-to-5" {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "covmap format migration is unfinished; run `covmap migrate` to resume it",
+                ));
+            }
+            let hint = if matches!(on_disk, "1" | "2" | "3" | "4") {
                 format!(" Run `covmap migrate` to upgrade it to format {FORMAT_VERSION}.")
             } else {
                 String::new()
@@ -270,13 +276,13 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_format4_publication_policy() {
+    fn init_creates_format5_publication_policy() {
         let root = temp_root("init");
         fs::create_dir_all(&root).unwrap();
 
         let repo = Repo::init(&root).unwrap();
 
-        assert_eq!(repo.read_version().unwrap(), "4");
+        assert_eq!(repo.read_version().unwrap(), "5");
         assert_eq!(
             fs::read_to_string(repo.dot().join(".gitignore")).unwrap(),
             DEFAULT_GITIGNORE

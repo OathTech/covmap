@@ -17,7 +17,9 @@
 //! # order=file|label
 //! # label=<l>              (present only for a label-filtered freeze)
 //! # cursor=<index>         (the current task, 0-based; absent after `new`)
-//! <hash>\t<file>\t<a>\t<b>\t<label>\t<name>\t<state>[\t<note>]
+//! <hash>\t<file>\t<a>\t<b>\t<label>\t<name>\t<state>
+//! # note <line-count>
+//! <note body>
 //! ...
 //! ```
 //!
@@ -37,9 +39,8 @@
 //! whereas an index names the task unambiguously, matching the theory's
 //! cursor `γ ∈ τ ∪ {⊥}`.
 //!
-//! `iterators/` is a purely additive directory an older covmap never reads,
-//! so introducing it needs no `FORMAT_VERSION` bump (like the char-column
-//! and name fields before it).
+//! Format 5 stores every non-empty task note in an adjacent stanza so notes
+//! can safely contain newlines and record-looking text.
 
 use crate::covering::{self, Covering, CoveringEntry, Pos};
 use crate::repo::Repo;
@@ -172,7 +173,11 @@ impl Task {
         if self.note.is_empty() {
             format!("{base}\t{}", self.state.as_str())
         } else {
-            format!("{base}\t{}\t{}", self.state.as_str(), self.note)
+            format!(
+                "{base}\t{}\t{}",
+                self.state.as_str(),
+                crate::message::escape_field(&self.note)
+            )
         }
     }
 }
@@ -230,43 +235,21 @@ impl Iter {
     pub fn write(&self, repo: &Repo) -> io::Result<()> {
         crate::repo::validate_covering_name(&self.covering)?;
         let path = repo.iterators_dir().join(&self.name);
-        let mut buf = String::new();
-        buf.push_str(&format!("# covering={}\n", self.covering));
-        buf.push_str(&format!("# order={}\n", self.order.as_str()));
-        if let Some(l) = &self.label {
-            buf.push_str(&format!("# label={l}\n"));
-        }
-        if let Some(i) = self.cursor {
-            buf.push_str(&format!("# cursor={i}\n"));
-        }
-        for t in &self.tasks {
-            let a = covering::fmt_pos(Pos {
-                line: t.a,
-                col: t.a_col,
-            });
-            let b = covering::fmt_pos(Pos {
-                line: t.b,
-                col: t.b_col,
-            });
-            let name = t.name.as_deref().unwrap_or("");
-            let base = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                t.hash,
-                t.file,
-                a,
-                b,
-                t.label,
-                name,
-                t.state.as_str()
-            );
-            if t.note.is_empty() {
-                buf.push_str(&base);
-                buf.push('\n');
-            } else {
-                buf.push_str(&format!("{base}\t{}\n", t.note));
-            }
-        }
-        atomic_write(&path, &buf)
+        atomic_write(&path, &self.serialize())
+    }
+
+    pub fn serialize(&self) -> String {
+        serialize_iter(self, true)
+    }
+
+    pub(crate) fn serialize_format4(&self) -> String {
+        serialize_iter(self, false)
+    }
+
+    pub(crate) fn write_format4(&self, repo: &Repo) -> io::Result<()> {
+        crate::repo::validate_covering_name(&self.covering)?;
+        let path = repo.iterators_dir().join(&self.name);
+        atomic_write(&path, &self.serialize_format4())
     }
 
     pub fn read(repo: &Repo, name: &str) -> io::Result<Iter> {
@@ -281,77 +264,22 @@ impl Iter {
     }
 
     pub(crate) fn parse(name: &str, raw: &str) -> io::Result<Iter> {
-        let mut covering = String::new();
-        let mut order = Order::File;
-        let mut label: Option<String> = None;
-        let mut cursor: Option<usize> = None;
-        let mut tasks = Vec::new();
-        for line in raw.lines() {
-            if let Some(v) = line.strip_prefix("# covering=") {
-                covering = v.to_string();
-            } else if let Some(v) = line.strip_prefix("# order=") {
-                order = Order::parse(v)?;
-            } else if let Some(v) = line.strip_prefix("# label=") {
-                label = Some(v.to_string());
-            } else if let Some(v) = line.strip_prefix("# cursor=") {
-                cursor = Some(v.trim().parse().map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("bad cursor index '{v}'"),
-                    )
-                })?);
-            } else if line.is_empty() || line.starts_with('#') {
-                continue;
-            } else {
-                let parts: Vec<&str> = line.splitn(8, '\t').collect();
-                if parts.len() < 7 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("malformed iterator line: {line}"),
-                    ));
-                }
-                let (a, a_col) = covering::parse_pos_field(parts[2])?;
-                let (b, b_col) = covering::parse_pos_field(parts[3])?;
-                let name = if parts[5].is_empty() {
-                    None
-                } else {
-                    Some(parts[5].to_string())
-                };
-                tasks.push(Task {
-                    hash: parts[0].to_string(),
-                    file: parts[1].to_string(),
-                    a,
-                    a_col,
-                    b,
-                    b_col,
-                    label: parts[4].to_string(),
-                    name,
-                    state: TaskState::parse(parts[6])?,
-                    note: parts.get(7).copied().unwrap_or("").to_string(),
-                });
-            }
-        }
-        // A stored cursor must index an existing task; drop a stale one
-        // defensively rather than panicking on later access.
-        if let Some(i) = cursor {
-            if i >= tasks.len() {
-                cursor = None;
-            }
-        }
-        if !crate::repo::valid_covering_name(&covering) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("iterator '{name}' has invalid covering '{covering}'"),
-            ));
-        }
-        Ok(Iter {
-            name: name.to_string(),
-            covering,
-            order,
-            label,
-            cursor,
-            tasks,
-        })
+        parse_iter(name, raw, true)
+    }
+
+    pub(crate) fn parse_format4(name: &str, raw: &str) -> io::Result<Iter> {
+        parse_iter(name, raw, false)
+    }
+
+    pub(crate) fn read_format4(repo: &Repo, name: &str) -> io::Result<Iter> {
+        let path = repo.iterators_dir().join(name);
+        let raw = fs::read_to_string(&path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("iterator '{name}' not found at {}", path.display()),
+            )
+        })?;
+        Self::parse_format4(name, &raw)
     }
 
     pub fn list(repo: &Repo) -> io::Result<Vec<String>> {
@@ -506,6 +434,181 @@ impl Iter {
     }
 }
 
+fn serialize_iter(iter: &Iter, format5: bool) -> String {
+    let mut buf = String::new();
+    buf.push_str(&format!("# covering={}\n", iter.covering));
+    buf.push_str(&format!("# order={}\n", iter.order.as_str()));
+    if let Some(l) = &iter.label {
+        buf.push_str(&format!("# label={l}\n"));
+    }
+    if let Some(i) = iter.cursor {
+        buf.push_str(&format!("# cursor={i}\n"));
+    }
+    for t in &iter.tasks {
+        let a = covering::fmt_pos(Pos {
+            line: t.a,
+            col: t.a_col,
+        });
+        let b = covering::fmt_pos(Pos {
+            line: t.b,
+            col: t.b_col,
+        });
+        let name = t.name.as_deref().unwrap_or("");
+        let base = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            t.hash,
+            t.file,
+            a,
+            b,
+            t.label,
+            name,
+            t.state.as_str()
+        );
+        buf.push_str(&base);
+        if format5 {
+            buf.push('\n');
+            if !t.note.is_empty() {
+                crate::message::push_stanza(&mut buf, "# note", &t.note);
+            }
+        } else if t.note.is_empty() {
+            buf.push('\n');
+        } else {
+            buf.push_str(&format!("\t{}\n", t.note));
+        }
+    }
+    buf
+}
+
+fn parse_iter(name: &str, raw: &str, format5: bool) -> io::Result<Iter> {
+    let mut covering = String::new();
+    let mut order = Order::File;
+    let mut label: Option<String> = None;
+    let mut cursor: Option<usize> = None;
+    let mut tasks = Vec::new();
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(v) = line.strip_prefix("# covering=") {
+            covering = v.to_string();
+        } else if let Some(v) = line.strip_prefix("# order=") {
+            order = Order::parse(v)?;
+        } else if let Some(v) = line.strip_prefix("# label=") {
+            label = Some(v.to_string());
+        } else if let Some(v) = line.strip_prefix("# cursor=") {
+            cursor = Some(v.trim().parse().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("bad cursor index '{v}'"),
+                )
+            })?);
+        } else if crate::message::is_note_header(line) {
+            return Err(iterator_line_error(
+                name,
+                i + 1,
+                "note stanza does not immediately follow a task row",
+            ));
+        } else if !(line.is_empty() || line.starts_with('#')) {
+            let parts: Vec<&str> = if format5 {
+                line.split('\t').collect()
+            } else {
+                line.splitn(8, '\t').collect()
+            };
+            if (format5 && parts.len() != 7) || (!format5 && parts.len() < 7) {
+                return Err(iterator_line_error(
+                    name,
+                    i + 1,
+                    if format5 {
+                        "format-5 task row must have exactly seven TAB-delimited fields"
+                    } else {
+                        "format-4 task row needs at least seven TAB-delimited fields"
+                    },
+                ));
+            }
+            let (a, a_col) = covering::parse_pos_field(parts[2])
+                .map_err(|error| iterator_line_error(name, i + 1, &error.to_string()))?;
+            let (b, b_col) = covering::parse_pos_field(parts[3])
+                .map_err(|error| iterator_line_error(name, i + 1, &error.to_string()))?;
+            let task_name = if parts[5].is_empty() {
+                None
+            } else {
+                Some(parts[5].to_string())
+            };
+            let mut task = Task {
+                hash: parts[0].to_string(),
+                file: parts[1].to_string(),
+                a,
+                a_col,
+                b,
+                b_col,
+                label: parts[4].to_string(),
+                name: task_name,
+                state: TaskState::parse(parts[6])
+                    .map_err(|error| iterator_line_error(name, i + 1, &error.to_string()))?,
+                note: if format5 {
+                    String::new()
+                } else {
+                    parts.get(7).copied().unwrap_or("").to_string()
+                },
+            };
+            if format5 {
+                if let Some(header) = lines
+                    .get(i + 1)
+                    .filter(|line| crate::message::is_note_header(line))
+                {
+                    let count =
+                        crate::message::parse_line_count(header, "# note ").map_err(|_| {
+                            iterator_line_error(name, i + 2, "malformed note stanza header")
+                        })?;
+                    if count == 0 {
+                        return Err(iterator_line_error(
+                            name,
+                            i + 2,
+                            "note stanza must contain at least one line",
+                        ));
+                    }
+                    let (note, end) =
+                        crate::message::read_body(&lines, i + 2, count, "note stanza").map_err(
+                            |error| iterator_line_error(name, i + 2, &error.to_string()),
+                        )?;
+                    task.note = note;
+                    i = end - 1;
+                }
+            }
+            tasks.push(task);
+        }
+        i += 1;
+    }
+    // A stored cursor must index an existing task; drop a stale one
+    // defensively rather than panicking on later access.
+    if let Some(i) = cursor {
+        if i >= tasks.len() {
+            cursor = None;
+        }
+    }
+    if !crate::repo::valid_covering_name(&covering) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("iterator '{name}' has invalid covering '{covering}'"),
+        ));
+    }
+    Ok(Iter {
+        name: name.to_string(),
+        covering,
+        order,
+        label,
+        cursor,
+        tasks,
+    })
+}
+
+fn iterator_line_error(name: &str, line: usize, detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("iterator '{name}' line {line}: {detail}"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,16 +724,19 @@ mod tests {
             tasks: freeze(&cov, Order::File, None),
         };
         it.tasks[0].state = TaskState::Done;
-        it.tasks[0].note = "looks good".into();
+        it.tasks[0].note = "looks good\n\n# note 2\nfield\tvalue".into();
         it.tasks[1].state = TaskState::Skipped;
         it.write(&repo).unwrap();
+        let raw = std::fs::read_to_string(repo.iterators_dir().join("sweep")).unwrap();
+        assert!(raw.contains("# note 4\nlooks good\n\n# note 2\nfield\tvalue\n"));
+        assert!(!raw.contains("\tdone\tlooks good"));
         let back = Iter::read(&repo, "sweep").unwrap();
         assert_eq!(back.covering, "main");
         assert_eq!(back.cursor, Some(1));
         assert_eq!(back.tasks.len(), 2);
         assert_eq!(back.tasks[0].name.as_deref(), Some("intro"));
         assert_eq!(back.tasks[0].state, TaskState::Done);
-        assert_eq!(back.tasks[0].note, "looks good");
+        assert_eq!(back.tasks[0].note, "looks good\n\n# note 2\nfield\tvalue");
         assert_eq!(back.tasks[1].state, TaskState::Skipped);
         assert_eq!(back.tasks[1].name, None);
         std::fs::remove_dir_all(&repo.root).ok();
@@ -778,11 +884,43 @@ mod tests {
         assert!(it.tasks[0].print_line_stateful().ends_with("\tpending"));
         // Done with a note: both appended.
         it.tasks[0].state = TaskState::Done;
-        it.tasks[0].note = "looks good".into();
+        it.tasks[0].note = "looks\\good\twith\nlines".into();
         assert!(it.tasks[0]
             .print_line_stateful()
-            .ends_with("\tdone\tlooks good"));
+            .ends_with("\tdone\tlooks\\\\good\\twith\\nlines"));
         std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn format5_rejects_inline_or_orphan_notes() {
+        let metadata = "# covering=main\n# order=file\n";
+        let row = "abc\tf.txt\t1\t1\tunknown\t\tpending";
+        let inline = format!("{metadata}{row}\tlegacy\n");
+        let orphan = format!("{metadata}# note 1\ntext\n");
+        let malformed = format!("{metadata}{row}\n# note\ttwo\n");
+        let truncated = format!("{metadata}{row}\n# note 2\ntext\n");
+        let duplicate = format!("{metadata}{row}\n# note 1\nfirst\n# note 1\nsecond\n");
+
+        assert!(Iter::parse("work", &inline)
+            .unwrap_err()
+            .to_string()
+            .contains("exactly seven"));
+        assert!(Iter::parse("work", &orphan)
+            .unwrap_err()
+            .to_string()
+            .contains("line 3"));
+        assert!(Iter::parse("work", &malformed)
+            .unwrap_err()
+            .to_string()
+            .contains("malformed note stanza header"));
+        assert!(Iter::parse("work", &truncated)
+            .unwrap_err()
+            .to_string()
+            .contains("past end"));
+        assert!(Iter::parse("work", &duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("does not immediately follow"));
     }
 
     #[test]

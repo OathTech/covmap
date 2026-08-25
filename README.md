@@ -37,11 +37,13 @@ stable enough to use day-to-day but may change before 1.0. Cooperative
 single-writer assumed; concurrent writers from multiple processes are
 not supported.
 
-The on-disk format is **version 4**. `covmap migrate` upgrades format 1, 2,
-or 3 repositories through resumable stages. Format 4 adds tracked global and
-covering-specific input selection; migration also deterministically repairs
-legacy covering names that are unsafe as paths or addresses. CIP 0010,
-CIP 0011, and req24 define the Git-trackable project artifact.
+The on-disk format is **version 5**. `covmap migrate` upgrades formats 1
+through 4 through resumable stages. Format 5 stores link and iterator task
+notes as adjacent length-prefixed stanzas, allowing Git-reviewable multiline
+text without ambiguous record lines. During the final rewrite, the
+transitional version `migrating-4-to-5` gates ordinary commands; rerunning
+`covmap migrate` resumes from the complete staged snapshot. Do not run another
+covmap writer concurrently with migration.
 
 ## Install
 
@@ -81,6 +83,10 @@ There are no runtime dependencies beyond `sha2`.
   it was cut, what it is, why it is (not) mapped — set with `covmap annotate
   … -m`. Like a name it is covering-local and not part of the hash, so
   editing it never causes drift.
+- A **link note** is optional arbitrary multiline rationale about one mapping
+  pair. A **task note** is the verdict recorded by one iterator pass.
+  `annotate`, `link`, `iter done`, and `iter skip` all accept repeatable
+  `-m`/`--message` values, joined as blank-line-separated paragraphs.
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
@@ -147,7 +153,7 @@ covmap cover
 cd ../spec/
 covmap peer bind impl ../impl
 covmap connect main impl:main spec_to_impl
-covmap link spec_to_impl @body <impl_hash> "fn body"
+covmap link spec_to_impl @body <impl_hash> -m "fn body"
 
 # 5. Edit spec.md's Body. Status reports drift, but the link is intact —
 #    it references @body, not the (now-changed) content hash.
@@ -188,12 +194,12 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local paths for stable connection peer aliases. |
 | `connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection; omit `<peer>:` for another covering in the same repository. |
 | `disconnect <K>` | Delete only the named connection ref. |
-| `link <K> <A> <B> [<note>]` | Add a link; each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. |
+| `link <K> <A> <B> [-m <msg>]...` | Add a link with an optional multiline note; repeated values form paragraphs. Each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. A bare re-link preserves its note, while `-m ""` clears it. |
 | `unlink <K> <A> <B>` | Remove a link using the same endpoint forms. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |
-| `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; pull tasks one at a time (`next`/`done`/`skip`). Bare `iter` lists all. |
+| `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; `done`/`skip` accept repeatable message values for multiline task verdicts. Bare `iter` lists all. |
 | `html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser (one connection; auto-selected when only one exists). |
-| `migrate [--recover-covering <legacy>]...` | Upgrade `.covmap/` format 1, 2, or 3 to format 4; optionally identify an unreferenced traversal-created legacy ref. |
+| `migrate [--recover-covering <legacy>]...` | Upgrade `.covmap/` formats 1 through 4 to format 5; optionally identify an unreferenced traversal-created legacy ref. |
 
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
@@ -215,8 +221,10 @@ to the same content hash count as one node; repeated covering locations with
 that hash produce one hub row at the first covering-order location. Broken
 links do not contribute.
 
-Long link notes are wrapped beneath their resolved endpoint pair;
-`ls-links --resolve` remains the stable TAB-delimited form for scripts.
+Long and multiline link notes are wrapped beneath their resolved endpoint
+pair with explicit paragraph breaks preserved. In `ls-links` and
+`ls-links --resolve`, note fields escape `\`, TAB, CR, and LF as `\\`, `\t`,
+`\r`, and `\n`, so each link remains one physical TAB-delimited record.
 
 ### Live object cache
 
@@ -395,7 +403,7 @@ covmap does not install hooks or write `.git/`.
   selections/<C>/      # optional include/ignore policy for covering C
   objects/<hh>/<rest>  # local cache: raw <content> (hash = sha256(content))
   coverings/<name>     # covered files + one segment hash per line
-  connections/<name>   # portable peer/covering metadata + links
+  connections/<name>   # portable peer/covering metadata + links/note stanzas
   local/peers          # ignored checkout-local peer bindings
   iterators/<name>     # a covering frozen into an ordered, stateful worklist
 ```
@@ -405,11 +413,14 @@ repo created by an incompatible covmap version. The format version
 is bumped on changes to the segment hash, object encoding, or ref
 formats; patch releases never bump it. To upgrade a repo across a bump,
 run `covmap migrate`. Formats 1 and 2 first pass through the content-hash and
-portable-peer migrations. The final format-4 phase validates and publishes
-tracked selection policy. Before ordinary migration work, unsafe legacy
+portable-peer migrations; format 4 validates and publishes tracked selection
+policy. Format 5 rewrites non-empty inline link/task notes as adjacent
+`# note <line-count>` stanzas. It stages a complete snapshot, publishes
+`migrating-4-to-5` before any live ref replacement, and publishes version 5
+last. Before ordinary migration work, unsafe legacy
 covering names are rewritten consistently across refs, `HEAD`, connections,
 iterators, and selection directories using a deterministic full SHA-256
-escape; the version file is published last.
+escape.
 
 ## Repository layout
 

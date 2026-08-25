@@ -181,7 +181,8 @@ and derived HTML reports untouched.
 
 **Format version** **[R][S]** — the string in `.covmap/version` recording the
 on-disk format. covmap refuses to operate on a repository whose version
-disagrees.
+disagrees. The current format is 5. During its resumable 4-to-5 migration,
+`migrating-4-to-5` gates ordinary commands until staged refs are published.
 
 **fsck** **[R][S]** — integrity verification: checks covering names and
 partitions, selection-policy layout, live source against recorded hashes,
@@ -222,15 +223,20 @@ A snapshot layered *over* a covering — it records a per-task state and a
 iterator creation ensures each task object is present and those objects are
 retained append-only, each frozen task's content stays retrievable even after
 the covering is edited or deleted. Stored at
-`.covmap/iterators/<name>`, a purely additive directory (no format-version
-bump). Driven by `covmap iter <name> <verb>`. Has several sub-concepts
-(below).
+`.covmap/iterators/<name>`, a directory that was additive when introduced.
+Format 5 changes its task-note encoding to an adjacent length-prefixed stanza.
+Driven by `covmap iter <name> <verb>`. Has several sub-concepts (below).
 
 **Task** **[T][R][S]** — one entry of an **iterator**: a segment frozen at
 `new` time (its hash, location, label, and name) together with a **task
 state** and an optional note. Its content is anchored by the frozen hash;
 the line numbers are a hint to the current position. Sub-concept of
 **iterator**.
+
+**Task note** **[T][R][S]** — optional arbitrary multiline verdict about one
+iterator **task** during one pass. Repeatable `iter done/skip -m` values form
+ordered paragraphs; each resolution replaces the note, and resolution without
+message input clears it. Stored as an adjacent **note stanza** in format 5.
 
 **Task state** **[T][R][S]** — the status of a **task**: `pending` (not yet
 resolved), `done` (worked), or `skipped` (deliberately passed over). There
@@ -274,9 +280,14 @@ computed by trimming the common prefix/suffix and running LCS on the
 residual middle. The position-carry-forward primitive behind **diff-remap**.
 
 **Link** **[T][R][S]** — a single `(source, target)` association inside a
-connection, optionally annotated with a note; added by `link`, removed by
-`unlink`. A connection is a set of links (the theory: the elements of the
-relation `κ ⊆ C_A × C_B`).
+connection, optionally annotated with a note supplied to `link` through
+`-m`/`--message`; removed by `unlink`. A connection is a set of links (the
+theory: the elements of the relation `κ ⊆ C_A × C_B`).
+
+**Link note** **[T][R][S]** — optional arbitrary multiline rationale about
+one **link**, recording why its two endpoints correspond. Repeatable
+`link -m` values form ordered paragraphs. Stored in format 5 as an adjacent
+**note stanza** and escaped only when emitted through line-oriented plumbing.
 
 **Local state** **[T][R][S]** — covmap operational state excluded from the
 default project artifact: the reconstructible object cache,
@@ -290,7 +301,20 @@ content and replace checkout paths with peer aliases. The final metadata phase
 preserves and validates tracked selection policy. Before those phases, unsafe
 legacy covering names are deterministically escaped with a full SHA-256 digest
 and rewritten across refs, `HEAD`, connections, iterators, and selection
-directories.
+directories. The 4-to-5 phase stages a complete connection/iterator snapshot,
+publishes `migrating-4-to-5`, replaces live refs idempotently from staged
+bytes, and publishes version 5 last. It assumes no concurrent covmap writer.
+
+**Message input** **[T][R][S]** — the shared explicit `-m`/`--message`
+contract for segment messages, link notes, and task notes. Repeated values are
+joined by one blank line in command-line order; CRLF and CR normalize to LF;
+all trailing LFs are removed; an empty result clears. One invocation replaces
+the complete stored text. Absence remains command-specific.
+
+**Note stanza** **[T][R][S]** — format 5's adjacent durable encoding for one
+non-empty link or task note: `# note <line-count>` followed by exactly that
+many literal body lines. Length-prefixing makes blank, TAB-containing,
+record-looking, and `#`-prefixed body lines unambiguous and Git-reviewable.
 
 **Policy drift** **[T][R][S]** — the non-fatal state in which an existing
 covered path is no longer admitted by current **covering-input selection**.

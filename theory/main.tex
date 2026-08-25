@@ -353,6 +353,11 @@ whose elements are called \emph{links}. Each link $(s, t)$ is recorded
 by two \emph{endpoints} (Definition~\ref{def:endpoint}): a name when the
 segment is named (so the link survives edits to that segment's content),
 otherwise a segment hash.
+In addition, a partial annotation function
+$\eta_\kappa : \kappa \rightharpoonup \mathrm{Text}$ assigns an optional
+\emph{link note} to each pair. $\mathrm{Text}$ is arbitrary finite UTF-8
+text, including line breaks; the note is rationale about the correspondence
+and is not part of the pair's identity.
 \end{definition}
 
 A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
@@ -645,7 +650,7 @@ Let $\Cov$ be a covering of $A$ and let $\ell$ be an optional label. Write
 $\Cov \restriction \ell$ for the sub-multiset of segments of $\Cov$ whose
 label is $\ell$, and $\Cov \restriction \top = \Cov$ when no label is
 given. An \emph{iterator} over $\Cov$ is a tuple
-$\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \gamma)$ where
+$\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \eta_\tau, \gamma)$ where
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
 \item $\tau$ is a finite sequence of \emph{tasks}, one per segment of
       $\Cov \restriction \ell$, each task freezing that segment's tuple
@@ -655,6 +660,8 @@ $\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \gamma)$ where
 \item $\mathrm{st} : \tau \to \{\textsc{pending}, \textsc{done},
       \textsc{skipped}\}$ is the \emph{state map}, initially
       $\mathrm{st}(t) = \textsc{pending}$ for every task; and
+\item $\eta_\tau : \tau \rightharpoonup \mathrm{Text}$ assigns an optional
+      arbitrary-text \emph{task note}, the verdict of one pass over a task;
 \item $\gamma \in \tau \cup \{\bot\}$ is the \emph{cursor}, the one task
       the consumer is currently on ($\bot$ before the first task).
 \end{itemize}
@@ -690,7 +697,8 @@ step over silently: a deliberate jump of the cursor (which may land on a
 \textsc{pending} task) leaves that task \textsc{pending}, so a later
 advance returns to it. Leaving the current task requires resolving it,
 either \textsc{done} (worked) or \textsc{skipped} (deliberately passed
-over).
+over). A resolution replaces $\eta_\tau(\gamma)$ with its supplied complete
+note, or clears it when no note is supplied.
 
 \begin{proposition}[Complete enumeration]\label{prop:enumeration}
 Fix an iterator $\mathcal{I}$ and consider any run in which each step is
@@ -737,7 +745,7 @@ directory:
 \begin{verbatim}
 .covmap/
   .gitignore          default publication policy
-  version             on-disk format version (currently 4)
+  version             on-disk format version (currently 5)
   HEAD                default covering name
   include             optional repository positive default
   ignore              optional repository exclusions
@@ -756,17 +764,23 @@ performs that reconstruction explicitly. Since checked-out source is part of
 the live project state, unavailable covered source fails integrity verification
 even when a valid object remains in the cache. The current format separates
 the portable project artifact from ignored local state, replaces connection
-target paths with portable peer aliases, and carries repository and
-covering-specific selection policy as tracked metadata. Covering names are
+target paths with portable peer aliases, carries repository and
+covering-specific selection policy as tracked metadata, and stores every
+non-empty link or task note in a length-prefixed stanza adjacent to its
+owning row. Covering messages retain their indexed length-prefixed stanzas.
+This makes arbitrary multiline text unambiguous while keeping prose directly
+reviewable in version-control diffs. Covering names are
 non-empty UTF-8 strings other than \texttt{.}, \texttt{..}, or
 \texttt{HEAD}; they contain no path separator, colon, NUL, or Unicode
 whitespace and do not begin with \texttt{@} or \texttt{\#}. This single
 grammar makes ref paths safe and keeps covering names unambiguous in address
 and connection syntax.
-The \texttt{iterators/} directory is purely additive: an older
-\texttt{covmap} simply never reads it, so introducing it needs no
-format-version change, mirroring how the character column and segment name
-were added.
+Format 5 is incompatible with format-4 readers because those readers can
+mistake stanza bodies for records. Migration stages a complete rewritten
+connection/iterator snapshot, publishes the transitional version
+\texttt{migrating-4-to-5} before replacing live refs, publishes version 5
+last, and resumes idempotently from staged bytes after interruption. It
+assumes no concurrent covmap writer.
 
 \subsection{Project artifacts and publication boundary}
 \label{sec:project-artifacts}
@@ -991,9 +1005,13 @@ read-only unless hydration is requested explicitly.
 \item \texttt{covmap disconnect $K$}\\
       Delete the stored connection ref $K$ without deleting either covering,
       any segment object, or a derived report.
-\item \texttt{covmap link $K$ $A$ $B$ [$\nu$]}\\
+\item \texttt{covmap link $K$ $A$ $B$ [-m $\nu$]\ldots}\\
       \texttt{covmap unlink $K$ $A$ $B$}\\
-      Add or remove a single link, optionally annotated with note $\nu$.
+      Add or remove a single link, optionally annotated with note $\nu$;
+      the note is introduced by repeatable \texttt{-m} (or
+      \texttt{--message}) values.
+      For an existing pair, omitting it preserves the note and an explicitly
+      empty value clears the note.
       Each endpoint operand $A$ or $B$ may be a segment name, hash prefix,
       or position resolved against that side's covering.
 \item \texttt{covmap prune $K$}\\
@@ -1038,9 +1056,11 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       Reprint the cursor's task in any state --- the resume affordance
       after a crash or context loss. \texttt{--content} also prints the
       task's frozen bytes.
-\item \texttt{covmap iter $I$ done [-m <msg>]} / \texttt{skip [-m <msg>]}\\
+\item \texttt{covmap iter $I$ done [-m <msg>]\ldots} /
+      \texttt{skip [-m <msg>]\ldots}\\
       Set $\mathrm{st}(\gamma)$ to \textsc{done} / \textsc{skipped},
-      optionally recording a note. Neither advances.
+      optionally recording a note. Omitting the message option clears an
+      earlier task note. Neither advances.
 \item \texttt{covmap iter $I$ choose <addr>}\\
       Move the cursor to task \texttt{<addr>} (a jump); every task's state
       is untouched, so completeness is preserved.
@@ -1064,6 +1084,18 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       Delete the iterator; never touches the covering.
 \end{itemize}
 
+\subsection{Message input}
+
+Every message-bearing command uses the same explicit-input grammar.
+\texttt{-m} and \texttt{--message} are repeatable; their values remain in
+command-line order and are joined by one blank line. CRLF and bare CR are
+normalized to LF, every trailing LF is removed, and an empty result clears
+the stored text. This normalization is idempotent. A single value may itself
+contain line breaks. The complete normalized input replaces the existing
+segment message, link note, or task note; it never appends. Absence remains
+operation-specific: bare \texttt{annotate} reads, bare re-link preserves, and
+bare iterator resolution clears.
+
 \subsection{Plumbing}
 
 Lower-level commands meant for scripts.
@@ -1076,7 +1108,10 @@ Lower-level commands meant for scripts.
       record (hash, file, $a$, $b$, label, name, message) as TAB fields.
 \item \texttt{covmap ls-links [--resolve] $K$}\\
       Link endpoint pairs; \texttt{--resolve} emits each endpoint resolved
-      to its label and location as TAB fields.
+      to its label and location as TAB fields. The optional note field escapes
+      backslash, TAB, CR, and LF as \texttt{\textbackslash\textbackslash},
+      \texttt{\textbackslash t}, \texttt{\textbackslash r}, and
+      \texttt{\textbackslash n}, preserving one physical output line per link.
 \item \texttt{covmap rev-parse <addr>}
 \item \texttt{covmap fsck --broken-links}
 \end{itemize}

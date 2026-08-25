@@ -76,7 +76,7 @@ ambiguous in practice.
 Use `<A>` and `<B>` consistently:
 
 ```text
-covmap link   <K> <A> <B> [<note>]
+covmap link   <K> <A> <B> [-m <msg>]
 covmap unlink <K> <A> <B>
 ```
 
@@ -127,7 +127,7 @@ rename:
 
 ```text
 --- covmap repair begin ---
-covmap link 'K' '@new' '@target' '<existing note>'
+covmap link 'K' '@new' '@target' -m '<existing note>'
 covmap unlink 'K' '@old' '@target'
 --- covmap repair end ---
 ```

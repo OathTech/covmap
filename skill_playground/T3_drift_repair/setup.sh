@@ -19,9 +19,9 @@ IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
 GET=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Get"  | head -1 )
 PUT=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Put"  | head -1 )
 SIZE=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Size" | head -1 )
-( cd spec && "$COVMAP_BIN" link cache_links "$GET"  "$IMPL_H" "Get" )  >/dev/null
-( cd spec && "$COVMAP_BIN" link cache_links "$PUT"  "$IMPL_H" "Put" )  >/dev/null
-( cd spec && "$COVMAP_BIN" link cache_links "$SIZE" "$IMPL_H" "Size" ) >/dev/null
+( cd spec && "$COVMAP_BIN" link cache_links "$GET"  "$IMPL_H" -m "Get" )  >/dev/null
+( cd spec && "$COVMAP_BIN" link cache_links "$PUT"  "$IMPL_H" -m "Put" )  >/dev/null
+( cd spec && "$COVMAP_BIN" link cache_links "$SIZE" "$IMPL_H" -m "Size" ) >/dev/null
 
 # Drift: tighten the Put contract. Keeps line count the same, so the
 # Put segment's boundaries are still correct — only its bytes (hence

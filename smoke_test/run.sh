@@ -42,8 +42,8 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
-[[ $(cat "$WORK/spec/.covmap/version") == "4" ]] \
-  || { echo "  FAIL: init did not create format 4"; exit 1; }
+[[ $(cat "$WORK/spec/.covmap/version") == "5" ]] \
+  || { echo "  FAIL: init did not create format 5"; exit 1; }
 cmp -s "$WORK/spec/.covmap/.gitignore" <(printf '%s' \
 "# Local and reconstructible covmap state.
 # Commit selection policy, coverings, connections, and covmap metadata.
@@ -203,7 +203,7 @@ REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
   || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
 printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
   || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
-[[ $(cat "$WORK/spec/.covmap/version") == "4" ]] \
+[[ $(cat "$WORK/spec/.covmap/version") == "5" ]] \
   || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
@@ -239,19 +239,52 @@ hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
 DEC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Decrement" | head -1 )
 RS=$(  cd "$WORK/impl_rs" && "$COVMAP_BIN" ls-segments | head -1 )
-INCREMENT_NOTE="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
+INCREMENT_NOTE_FIRST="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
+INCREMENT_NOTE_SECOND="Validated against the shared increment and decrement implementation."
+INCREMENT_NOTE=$'The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review.\n\nValidated against the shared increment and decrement implementation.'
+INCREMENT_PLUMBING='The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review.\n\nValidated against the shared increment and decrement implementation.'
 echo "  inc:  $INC"
 echo "  dec:  $DEC"
 echo "  impl: $RS"
 # The Increment endpoint is given with a redundant `main:` covering prefix
 # (naming the source covering) — link accepts and strips it, like every
 # other segment-address command. Decrement uses the bare hash.
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "$INCREMENT_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" \
+  -m "$INCREMENT_NOTE_FIRST" -m "$INCREMENT_NOTE_SECOND" )
+grep -qF "# note 3" "$WORK/spec/.covmap/connections/widget_links" \
+  || { echo "  FAIL: format-5 link note stanza was not written"; exit 1; }
 # Name the target after the first link. The first stored endpoint remains the
 # resolving hash; the second is stored as @impl-widget. Degree must combine
 # both spellings into one target node.
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
+if ( cd "$WORK/spec" \
+  && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "positional note" >/dev/null 2>&1 ); then
+  echo "  FAIL: link accepted a positional note"
+  exit 1
+fi
+( cd "$WORK/spec" \
+  && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget -m one -m two >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -qF 'one\n\ntwo' ) \
+  || { echo "  FAIL: repeated link messages did not form paragraphs"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget -m "fn decrement" )
+
+hr "uniform repeated message input across annotate, link, and iterator"
+( cd "$WORK/spec" && "$COVMAP_BIN" annotate "main:$INC" \
+  -m "increment segment rationale" -m "kept separate for review" >/dev/null )
+[[ $(cd "$WORK/spec" && "$COVMAP_BIN" annotate "main:$INC") == \
+  $'increment segment rationale\n\nkept separate for review' ]] \
+  || { echo "  FAIL: repeated annotate messages did not form paragraphs"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe new main >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe next >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe done \
+  -m "iterator verdict" -m "validation details" >/dev/null )
+ITER_AUDIT=$(cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe peek --all)
+[[ $(printf '%s\n' "$ITER_AUDIT" | wc -l | tr -d ' ') == \
+  $(cd "$WORK/spec" && "$COVMAP_BIN" ls main | wc -l | tr -d ' ') ]] \
+  || { echo "  FAIL: iterator plumbing changed row cardinality"; exit 1; }
+printf '%s\n' "$ITER_AUDIT" | grep -qF 'iterator verdict\n\nvalidation details' \
+  || { echo "  FAIL: repeated iterator messages were not escaped on one line"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe rm >/dev/null )
 
 hr "unbound peer degrades inspection but blocks target mutation"
 ( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main disposable_peer_ref )
@@ -259,8 +292,10 @@ hr "unbound peer degrades inspection but blocks target mutation"
 UNBOUND_STATUS=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
 printf '%s\n' "$UNBOUND_STATUS" | grep -qF "unavailable: peer 'impl' is not bound"
 printf '%s\n' "$UNBOUND_STATUS" | grep -qF "0 source-broken, target unchecked"
-( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links | grep -qF "target unchecked" )
-( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" | grep -qF "(unchecked)" )
+UNBOUND_CONNECTION=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links )
+UNBOUND_SEGMENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" )
+printf '%s\n' "$UNBOUND_CONNECTION" | grep -qF "target unchecked"
+printf '%s\n' "$UNBOUND_SEGMENT" | grep -qF "(unchecked)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links >/dev/null )
 RESOLVE_ERR="$WORK/resolve.err"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links 2>"$RESOLVE_ERR" \
@@ -299,9 +334,14 @@ cmp "$WORK/spec/.covmap/connections/widget_links" \
   || { echo "  FAIL: hydration or peer binding dirtied the clone"; exit 1; }
 
 hr "re-link with a new note updates it in place (not a no-op)"
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" -m "fn decrement (revised)" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
   && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" -m "" )
+if ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement" ); then
+  echo "  FAIL: explicit empty link message did not clear the note"
+  exit 1
+fi
 
 hr "review surfaces: region union, resolved degree, wrapped notes, stable plumbing"
 SHOW_HELP=$( "$COVMAP_BIN" show --help )
@@ -391,11 +431,13 @@ printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "2 <- unknown widget.rs:1..28" \
   || { echo "  FAIL: resolved fan-in hub was not reported"; exit 1; }
 printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    The increment contract maps to the shared widget implementation segment" \
   || { echo "  FAIL: long link note was not wrapped beneath the endpoint pair"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    Validated against the shared increment and decrement implementation." \
+  || { echo "  FAIL: multiline link note paragraph was not rendered"; exit 1; }
 
 RESOLVED_PLUMBING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links )
 [[ $(printf '%s\n' "$RESOLVED_PLUMBING" | wc -l | tr -d ' ') == "2" ]] \
   || { echo "  FAIL: resolved plumbing changed row cardinality"; exit 1; }
-printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_NOTE" \
+printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_PLUMBING" \
   || { echo "  FAIL: resolved plumbing changed the long note"; exit 1; }
 STATUS_REVIEW=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
 if printf '%s\n' "$STATUS_REVIEW" | grep -q "degree"; then
@@ -521,8 +563,8 @@ printf '%s\n' "$SHOW_SELF" | grep -qF "main -> main (self-map)" \
 
 REPAIR_NOTE='literal $HOME, apostrophe '"'"', and `touch SHOULD_NOT_EXIST`'
 SECOND_REPAIR_NOTE='fan-out second link'
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target "$REPAIR_NOTE" )
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two "$SECOND_REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target -m "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two -m "$SECOND_REPAIR_NOTE" )
 
 hr "subdivision diagnoses name narrowing and broken hash endpoints"
 NAME_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:@audit-source 8 )
@@ -535,7 +577,7 @@ printf '%s\n' "$NAME_SPLIT" | grep -qF "inbound connections stored in another re
   || { echo "  FAIL: subdivision omitted the inbound-discovery limit"; exit 1; }
 
 STATUS_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:26 )
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two "hash subdivision" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two -m "hash subdivision" )
 HASH_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md:26 28 )
 printf '%s\n' "$HASH_SPLIT"
 printf '%s\n' "$HASH_SPLIT" | grep -qF "hash endpoint '$STATUS_HASH' will become broken" \
@@ -598,7 +640,7 @@ hr "unlink accepts exact @name endpoints"
 ( cd "$WORK/spec" && "$COVMAP_BIN" unlink self_audit @audit-source-next @audit-target-next )
 [[ $( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit | wc -l | tr -d ' ' ) == "1" ]] \
   || { echo "  FAIL: name-addressed unlink did not remove the link"; exit 1; }
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next -m "$REPAIR_NOTE" )
 
 hr "disconnect removes only the connection ref and warns about the default report"
 ( cd "$WORK/spec" && "$COVMAP_BIN" html --connection self_audit )

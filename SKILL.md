@@ -80,11 +80,15 @@ covmap has five places text can attach. Pick by *what the text is about*:
 | **label** | a segment | coarse status *category* (`unknown`/`reviewed`/`mapped`) | no (ref-local) | `covmap label` |
 | **name** | a segment | stable *slug identity* (`@enqueue`); no spaces/`:` | no | `covmap name` |
 | **message** | a segment | free-form *why this segment* (rationale, provenance, why (un)mapped) | no | `covmap annotate -m` |
-| **link note** | a link | *why this mapping* (A↔B) | n/a | `covmap link … <note>` |
-| **task note** | an iterator task | *this sweep's verdict* on a segment (transient) | n/a | `covmap iter … done/skip -m` |
+| **link note** | a link | *why this mapping* (A↔B) | n/a | `covmap link … -m <msg>...` |
+| **task note** | an iterator task | *this sweep's verdict* on a segment (transient) | n/a | `covmap iter … done/skip -m <msg>...` |
 
 Rule of thumb: **message** = a durable fact about the segment; **link
 note** = about a correspondence; **task note** = about one pass of work.
+All three use the same explicit input convention: repeat `-m`/`--message`
+for ordered paragraphs. One invocation replaces the complete text; `-m ""`
+clears. A bare annotate reads, a bare re-link preserves, and a bare iterator
+resolution clears.
 
 ## When to use this skill
 
@@ -147,7 +151,7 @@ are unique.
 | `covmap peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local resolution for stable peer aliases. | yes |
 | `covmap connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection. Omit `<peer>:` for a same-repository target (`connect main main audit`). | yes |
 | `covmap disconnect <K>` | Delete only connection ref `K`; coverings and objects are untouched. Regenerate the default HTML report if warned that it may be stale. | yes |
-| `covmap link <K> <A> <B> [<note>]` | Add a link. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking an existing pair with a new `<note>` updates the note; a bare re-link (no note) is a no-op that keeps it. | no |
+| `covmap link <K> <A> <B> [-m <msg>]...` | Add a link. Repeated messages form blank-line-separated paragraphs in one multiline note. `<A>`/`<B>` are segment addresses (`@name`, hash prefix, or position); a named segment is stored by `@name` so the link survives content edits. Re-linking with a new message updates the note, `-m ""` clears it, and a bare re-link keeps it. | no |
 | `covmap unlink <K> <A> <B>` | Remove a link using `@name`, a hash prefix, or a position on each side. | no |
 | `covmap prune <K>` | Drop links whose endpoints have disappeared from their coverings. | yes |
 | `covmap iter [<name> <verb> ...]` | **Freeze a covering into an ordered, resumable worklist.** Bare `iter` lists all iterators; see "Work a covering as a worklist" below. | yes |
@@ -160,7 +164,7 @@ are unique.
 | Command | Purpose |
 | ------- | ------- |
 | `covmap ls-segments [-l] <C>` | One hash per line; `-l` = full record `hash⇥file⇥a⇥b⇥label⇥name⇥message` (TAB, empty fields for absent name/message). |
-| `covmap ls-links [--resolve] <K>` | `<endpoint_A>\t<endpoint_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. |
+| `covmap ls-links [--resolve] <K>` | `<endpoint_A>\t<endpoint_B>[\t<note>]` per line; `--resolve` = `a-label⇥a-loc⇥b-label⇥b-loc⇥note`, endpoints resolved so no hand-join. Note fields escape `\`, TAB, CR, and LF as `\\`, `\t`, `\r`, and `\n`. |
 | `covmap rev-parse <addr>` | Resolve any address to its full 16-char hash. |
 | `covmap cat-segment <hash>` | Raw segment content to stdout. |
 | `covmap hash-segment <file> <a> <b> [-w]` | Hash a candidate segment (content only) without registering it (or with `-w`). |
@@ -451,7 +455,7 @@ before removing any stale pair, preserving each link note:
 
 ```text
 --- covmap repair begin ---
-covmap link 'K' '@new' '@target' 'existing note'
+covmap link 'K' '@new' '@target' -m 'existing note'
 covmap unlink 'K' '@old' '@target'
 --- covmap repair end ---
 ```
@@ -600,7 +604,7 @@ between `next` and `done`:
 covmap iter sweep new main --order file
 until covmap iter sweep finished; do
   covmap iter sweep next --content    # advance + read the task's frozen bytes
-  covmap iter sweep done -m "verdict"
+covmap iter sweep done -m "verdict" -m "validation performed"
 done
 ```
 
@@ -648,9 +652,10 @@ touches the covering). This is playground task T8. There is at most one
 active task at a time (a single cursor), which is why `status` names it
 rather than counting it.
 
-The `-m` note on `done`/`skip` is the task's verdict; each resolution
-*replaces* it, so re-resolving a task without `-m` clears any earlier
-note (`done -m "verified"` then `skip` leaves no stale "verified").
+The repeatable `-m`/`--message` note on `done`/`skip` is the task's verdict;
+values become blank-line-separated paragraphs. Each resolution *replaces* the
+note, so re-resolving a task without `-m` clears any earlier note
+(`done -m "verified"` then `skip` leaves no stale "verified").
 
 Iterators are **not** for tracking drift — a frozen task never goes
 "stale" (its content is pinned by hash). Drift is a property of the
@@ -720,7 +725,7 @@ $ covmap label main:spec.md:10 Body
 $ covmap name main:spec.md:1 intro
 $ covmap name main:src/lib.rs:1 implementation
 $ covmap connect main main spec_to_impl
-$ covmap link spec_to_impl @intro @implementation "fn foo"
+$ covmap link spec_to_impl @intro @implementation -m "fn foo"
 $ covmap fsck
 ```
 

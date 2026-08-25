@@ -706,21 +706,27 @@ const CONNECTION_NOTE_INDENT: &str = "    ";
 fn wrap_connection_note(note: &str) -> Vec<String> {
     let content_width = CONNECTION_NOTE_WIDTH - CONNECTION_NOTE_INDENT.chars().count();
     let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in note.split_whitespace() {
-        let next_len =
-            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
-        if !current.is_empty() && next_len > content_width {
-            lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
-            current.clear();
+    for source_line in note.split('\n') {
+        if source_line.is_empty() {
+            lines.push(CONNECTION_NOTE_INDENT.to_string());
+            continue;
+        }
+        let mut current = String::new();
+        for word in source_line.split_whitespace() {
+            let next_len =
+                current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
+            if !current.is_empty() && next_len > content_width {
+                lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
+                current.clear();
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
         }
         if !current.is_empty() {
-            current.push(' ');
+            lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
         }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(format!("{CONNECTION_NOTE_INDENT}{current}"));
     }
     lines
 }
@@ -879,14 +885,14 @@ fn show_link(repo: &Repo, k: &Connection, a: &str, b: &str) -> io::Result<u8> {
         .is_some_and(|t| covering::endpoint_resolves(t, &link.b));
 
     println!("link in {}", k.name);
-    println!(
-        "  note    {}",
-        if link.note.is_empty() {
-            "-"
-        } else {
-            &link.note
+    if link.note.is_empty() {
+        println!("  note    -");
+    } else {
+        println!("  note");
+        for line in wrap_connection_note(&link.note) {
+            println!("{line}");
         }
-    );
+    }
     let status = match (&tgt, a_ok, b_ok) {
         (None, true, _) => {
             "target unchecked (covering unavailable; source endpoint resolves)".to_string()
@@ -1862,6 +1868,12 @@ mod tests {
                 .join(" "),
             note
         );
+    }
+
+    #[test]
+    fn connection_note_wrapping_preserves_explicit_paragraphs() {
+        let lines = wrap_connection_note("first line\n\nsecond line");
+        assert_eq!(lines, vec!["    first line", "    ", "    second line"]);
     }
 
     #[test]

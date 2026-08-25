@@ -22,8 +22,8 @@ check() {
 echo "== T1 initial cover =="
 check "spec/.covmap/ exists"          test -d spec/.covmap
 check "impl_rs/.covmap/ exists"       test -d impl_rs/.covmap
-check "spec uses format 4"             grep -qx '4' spec/.covmap/version
-check "impl uses format 4"             grep -qx '4' impl_rs/.covmap/version
+check "spec uses format 5"             grep -qx '5' spec/.covmap/version
+check "impl uses format 5"             grep -qx '5' impl_rs/.covmap/version
 check "spec HEAD names a covering"    test -s spec/.covmap/HEAD
 check "impl_rs HEAD names a covering" test -s impl_rs/.covmap/HEAD
 check "spec positive policy is kept"  grep -qx '/stack.md' spec/.covmap/include

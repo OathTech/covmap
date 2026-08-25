@@ -67,7 +67,7 @@ pass labels as `split` operands.
   byte-for-byte.
 - Missing cache state was recovered by checked inspection and confirmed with
   idempotent `hydrate`, without changing the covering ref.
-- The repository remains format v3 and `covmap fsck` passes.
+- The repository remains format v5 and `covmap fsck` passes.
 
 ## Grading
 

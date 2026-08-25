@@ -390,12 +390,7 @@ impl Covering {
         // covmap's ref (backward compatible, no FORMAT_VERSION bump).
         for (i, e) in entries.iter().enumerate() {
             if let Some(msg) = &e.message {
-                let lines: Vec<&str> = msg.split('\n').collect();
-                buf.push_str(&format!("# message {} {}\n", i, lines.len()));
-                for l in lines {
-                    buf.push_str(l);
-                    buf.push('\n');
-                }
+                crate::message::push_stanza(&mut buf, &format!("# message {i}"), msg);
             }
         }
         buf
@@ -433,17 +428,20 @@ impl Covering {
                     .next()
                     .and_then(|s| s.parse().ok())
                     .ok_or_else(|| bad_message_header(line))?;
-                let body_start = i + 1;
-                let body_end = body_start + count;
-                if body_end > all.len() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("message stanza claims {count} lines past end of ref"),
-                    ));
+                if it.next().is_some() || count == 0 {
+                    return Err(bad_message_header(line));
                 }
-                let msg = all[body_start..body_end].join("\n");
+                let body_start = i + 1;
+                let (msg, body_end) =
+                    crate::message::read_body(&all, body_start, count, "message stanza")?;
                 if let Some(e) = entries.get_mut(idx) {
                     let e: &mut CoveringEntry = e;
+                    if e.message.is_some() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("duplicate message stanza for segment index {idx}"),
+                        ));
+                    }
                     e.message = Some(msg);
                 } else {
                     return Err(io::Error::new(
@@ -1368,10 +1366,11 @@ pub fn set_name(c: &mut Covering, idx: usize, new_name: Option<&str>) -> io::Res
 /// metadata that is not part of the segment hash, so this never touches the
 /// object store or any connection. Unlike a name it has no uniqueness or
 /// character constraints — it is arbitrary (possibly multi-line) text; only
-/// a trailing newline is trimmed so the stored form is canonical.
+/// line endings and trailing newlines are normalized so the stored form is
+/// canonical.
 pub fn set_message(c: &mut Covering, idx: usize, new_message: Option<&str>) {
     let normalized = new_message
-        .map(|m| m.strip_suffix('\n').unwrap_or(m).to_string())
+        .map(crate::message::normalize)
         .filter(|m| !m.is_empty());
     c.entries[idx].message = normalized;
 }

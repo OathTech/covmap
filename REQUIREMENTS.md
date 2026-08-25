@@ -86,6 +86,12 @@ segments automatically by content address rather than by duplication.
 ## req10 — Many-to-many annotated connections
 Connections shall be many-to-many relations between coverings, with
 optional per-link notes, supporting fan-out and fan-in between segments.
+The `link` command shall accept such a note through the same `-m` /
+`--message` option used by other message-bearing commands, rather than as a
+positional operand. Link notes shall be arbitrary multiline text. Repeated
+message options shall form ordered blank-line-separated paragraphs.
+Re-linking without a message shall preserve the existing note, while an
+explicitly empty message shall clear it.
 Each endpoint shall reference its segment either by name (preferred
 for mapped segments, so the link is resilient to content edits) or by
 segment hash. Renaming or clearing a segment name shall remain a
@@ -182,13 +188,19 @@ object cache plus plain-text covering and connection refs, carrying a format
 version so mismatched repositories are rejected. The current format shall
 separate portable project artifacts from checkout-local state and store
 connection targets as peer aliases rather than paths, and shall activate
-tracked positive and covering-specific input-selection policy. Covering names
+tracked positive and covering-specific input-selection policy. Format 5 shall
+store every non-empty link and iterator task note in an adjacent,
+length-prefixed stanza, leaving record rows note-free. Covering names
 shall use one validated path- and address-safe grammar at every command, ref,
 `HEAD`, connection, iterator, selection, migration, and verification boundary.
 For live covering entries, the ref and matching checked-out source are
 sufficient to reconstruct a missing object; an existing object whose bytes do
-not hash to its filename is corrupt. Migration from formats 1, 2, or 3 shall
-be resumable, publish the new version last, and deterministically escape any
+not hash to its filename is corrupt. Migration from formats 1 through 4 shall
+be resumable and publish the new version last. The 4-to-5 phase shall stage
+and inventory the complete connection/iterator snapshot, publish a
+transitional version before replacing live refs, resume from staged bytes,
+and refuse ordinary commands until completion. Migration assumes no
+concurrent covmap writer. Earlier phases shall deterministically escape any
 legacy covering name that the common grammar rejects.
 
 ## req18 — Covering-input selection
@@ -216,6 +228,8 @@ transition rather than exposing intermediate partitions. `rev-parse` and
 so cache population does not change whether a clean live hash resolves.
 Covering rows, connection rows, and peer bindings shall serialize in canonical
 order so repeated writes of equal logical state produce equal bytes.
+Line-oriented link and iterator plumbing shall escape backslash, TAB, CR, and
+LF in note fields so every logical record occupies exactly one physical line.
 
 ## req20 — Inspection, search, and visualization
 covmap shall let users inspect, search, and visualize coverings and
@@ -227,9 +241,10 @@ source/target coverage (req12), so a reader sees a mapping's integrity,
 completeness, and relations without hand-joining separate outputs.
 Connections whose source and target repositories are the same shall be
 displayed explicitly as self-maps rather than as an absolute-path target.
-Connection link listings shall place an existing single-line note on wrapped,
-indented lines below its resolved endpoint pair while leaving
-`ls-links --resolve` unchanged. Inspection that reads live segment bytes shall
+Connection link listings shall place an existing note on wrapped, indented
+lines below its resolved endpoint pair while preserving explicit line and
+paragraph breaks. HTML shall render decoded note line breaks. Inspection that
+reads live segment bytes shall
 reconstruct them from matching source when absent and may publish them to the
 cache on a best-effort basis. `status`, `show`, and `ls` shall opportunistically
 warm selected live objects without failing solely because the cache is
@@ -257,8 +272,11 @@ guarantee **complete enumeration**:
 `next` advances to the first pending task in the frozen order and is
 refused while the current task is still pending, so no task is stepped over
 unresolved and iteration is exhausted exactly when every task is `done` or
-`skipped`. Iterators live under `.covmap/iterators/`, a purely additive
-directory that needs no format-version bump.
+`skipped`. Resolving with `done` or `skip` without a `-m` / `--message`
+value shall clear any earlier task note. Repeated message options shall form
+ordered paragraphs in one arbitrary multiline task note. Iterators live under
+`.covmap/iterators/`; format 5 changes their task-note encoding to an adjacent
+length-prefixed stanza.
 
 ## req22 — Segment messages (annotation)
 covmap shall let a segment carry an optional, free-form *message*: durable,
@@ -273,6 +291,12 @@ the original message and later fragments have none; merge/recut/diff-remap
 otherwise carry it with the segment the way a name does. It is set and
 cleared with `covmap annotate`, surfaced by `show`/`ls`/`html`, and stored
 additively in the covering ref with no format-version bump.
+For `annotate`, `link`, `iter done`, and `iter skip`, explicit `-m` /
+`--message` input shall use one shared parser: repeated values are joined by
+one blank line, CRLF and CR normalize to LF, all trailing LFs are removed, and
+an empty normalized result clears. One invocation replaces the complete text.
+Absence remains command-specific: annotate reads, re-link preserves, and
+iterator resolution clears.
 
 ## req23 — Bounded drill-down to understanding
 covmap shall let a reader reach *understanding of one region of a mapping*
@@ -310,7 +334,9 @@ Git is the publication mechanism, not a runtime dependency: covmap shall not
 invoke Git, inspect its index, stage files, or commit changes, and the same
 artifact semantics shall work outside a Git repository. `covmap init` shall
 create a commented repository-scoped default ignore policy and report the
-durable/local boundary. `covmap migrate` shall upgrade format 1, 2, or 3
-repositories to format 4 through resumable staging, preserving a user-managed
+durable/local boundary. `covmap migrate` shall upgrade format 1, 2, 3, or 4
+repositories to format 5 through resumable staging, preserving a user-managed
 publication policy and pre-authored selection policy while warning when the
-publication policy omits required local-state patterns.
+publication policy omits required local-state patterns. The format-5 rewrite
+shall preserve logical link/task note values while converting inline notes to
+Git-reviewable multiline stanzas.

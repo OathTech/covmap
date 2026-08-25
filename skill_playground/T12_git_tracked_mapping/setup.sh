@@ -28,7 +28,7 @@ cp impl.rs author/impl/impl.rs
   "$COVMAP_BIN" peer bind impl ../impl >/dev/null
   "$COVMAP_BIN" connect main impl:main spec_to_impl >/dev/null
   "$COVMAP_BIN" link spec_to_impl @request-contract @request-handler \
-    "request contract is implemented by handle" >/dev/null
+    -m "request contract is implemented by handle" >/dev/null
   git init -q
   git add spec.md .covmap
   git -c user.name=covmap -c user.email=covmap@example.invalid \

@@ -125,14 +125,14 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
         "label" => "covmap label <C>:<h> <label>                 relabel a segment",
         "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
-        "annotate" => "covmap annotate <C>:<addr> [-m <msg>...] | -   set, replace, clear (-), or print a segment's message",
+        "annotate" => "covmap annotate <C>:<addr> [-m <msg>]... | -   set, replace, clear (-), or print a segment's message",
         "split" => {
             "covmap split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately"
         }
         "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
         "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
         "link" => {
-            "covmap link <K> <A> <B> [<note>]            add a link to connection K\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
+            "covmap link <K> <A> <B> [-m <msg>]...       add a link to connection K\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering\n  repeated messages form blank-line-separated paragraphs\n  on re-link, -m '' clears the note and no message flag preserves it"
         }
         "unlink" => {
             "covmap unlink <K> <A> <B>                   remove a link\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering"
@@ -148,11 +148,11 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "prune" => "covmap prune <K>                             drop links whose endpoints are no longer in their coverings",
         "iter" => {
-            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  peek          list pending tasks\n  peek --all    list the complete frozen worklist with state and notes"
+            "covmap iter [<name> <verb> ...]              freeze a covering into an ordered worklist\n  done/skip [-m <msg>]...  resolve current task; repeated messages form paragraphs; no flag clears its prior note\n  peek                     list pending tasks\n  peek --all               list the complete frozen worklist with state and escaped notes"
         }
         "html" => "covmap html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser (one connection; auto-selected if only one exists)",
         "migrate" => {
-            "covmap migrate [--recover-covering <legacy>]...  upgrade .covmap/ format (1/2/3 -> 4)"
+            "covmap migrate [--recover-covering <legacy>]...  upgrade .covmap/ format (1/2/3/4 -> 5)"
         }
         "hash-segment" => "covmap hash-segment <file> <a[:col]> <b[:col]> [-w]",
         "cat-segment" => "covmap cat-segment <hash>",
@@ -184,12 +184,12 @@ PORCELAIN
   diff <C1> <C2>                      added / removed / shared
   label <C>:<h> <label>               relabel a segment
   name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
-  annotate <C>:<addr> [-m <msg>...]   set/replace/clear (-)/print a segment's free-form message
+  annotate <C>:<addr> [-m <msg>]...   set/replace/clear (-)/print a segment's free-form message
   split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately
   merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
   recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
-  link <K> <A> <B> [<note>]           add a link; endpoints accept @name, hash prefix, or position
+  link <K> <A> <B> [-m <msg>]...      add a link; repeated messages form paragraphs
   unlink <K> <A> <B>                  remove a link by @name, hash prefix, or position
   connect <C_A> [<peer>:]<C_B> [<K>]  create empty connection; omit <peer>: for same-repo
   peer bind <alias> <path> | ls | rename <old> <new> | unbind <alias>
@@ -199,13 +199,13 @@ PORCELAIN
   iter [<name> <verb> ...]            freeze a covering into an ordered, resumable worklist
   html [-o <path>] [--covering <C>] [--connection <K>]   render a static HTML browser
   migrate [--recover-covering <legacy>]...
-                                     upgrade .covmap/ format (1/2/3 -> 4)
+                                     upgrade .covmap/ format (1/2/3/4 -> 5)
 
 ITERATORS (covmap iter <name> <verb>)
   <name> new <C> [--order file|label] [--label <l>]   freeze covering C into a worklist
   <name> next [--content|--content-plain] | current [--content|--content-plain]
                                                       advance to / reprint the current task
-  <name> done [-m <msg>] | skip [-m <msg>]            resolve the current task (does not advance)
+  <name> done [-m <msg>]... | skip [-m <msg>]...      resolve current task (does not advance)
   <name> choose <addr> | rewind [<addr>]              jump the cursor / reset a task to pending
   <name> peek [--all] [--content|--content-plain] | status | finished
                                                       look ahead / summarize / test exhaustion
@@ -718,7 +718,7 @@ fn link_command(connection: &str, a: &str, b: &str, note: &str) -> String {
         posix_shell_quote(b)
     );
     if !note.is_empty() {
-        command.push(' ');
+        command.push_str(" -m ");
         command.push_str(&posix_shell_quote(note));
     }
     command
@@ -861,40 +861,16 @@ fn cmd_annotate(args: &[String]) -> io::Result<u8> {
             "annotate <covering>:<addr> [-m <msg>]... | -",
         )
     })?;
-    // Parse the rest: -m/--message (repeatable) sets; a lone `-` clears;
-    // nothing means read.
-    let mut paragraphs: Vec<String> = Vec::new();
-    let mut clear = false;
-    let mut set = false;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-m" | "--message" => {
-                let v = args.get(i + 1).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "-m needs a message")
-                })?;
-                paragraphs.push(v.clone());
-                set = true;
-                i += 2;
-            }
-            "-" => {
-                clear = true;
-                i += 1;
-            }
-            other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("annotate: unexpected argument '{other}' (use -m <msg> or -)"),
-                ));
-            }
-        }
-    }
-    if set && clear {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "annotate: give either -m <msg> or - (clear), not both",
-        ));
-    }
+    // Repeated -m/--message values are paragraphs; exactly one bare `-`
+    // clears; no message arguments means read.
+    let message_args = &args[1..];
+    let clear = matches!(message_args, [arg] if arg == "-");
+    let message = if clear {
+        MessageInput::Explicit(String::new())
+    } else {
+        parse_message_input(message_args)
+            .map_err(|error| io::Error::new(error.kind(), format!("annotate: {error}")))?
+    };
 
     let (covname, addr) = parse_addr(addr_arg);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
@@ -904,7 +880,7 @@ fn cmd_annotate(args: &[String]) -> io::Result<u8> {
     let h = covering::short_hash(&c.entries[idx].hash).to_string();
 
     // Read mode: no -m and no `-`.
-    if !set && !clear {
+    if message == MessageInput::Absent {
         match &c.entries[idx].message {
             Some(m) => {
                 println!("{m}");
@@ -917,12 +893,8 @@ fn cmd_annotate(args: &[String]) -> io::Result<u8> {
         }
     }
 
-    let new_message = if clear {
-        None
-    } else {
-        Some(paragraphs.join("\n\n"))
-    };
-    covering::set_message(&mut c, idx, new_message.as_deref());
+    let new_message = message.into_option().unwrap_or_default();
+    covering::set_message(&mut c, idx, Some(&new_message));
     c.write(&repo)?;
     match &c.entries[idx].message {
         Some(_) => println!("annotated {h}"),
@@ -1419,17 +1391,24 @@ fn strip_side_covering<'a>(arg: &'a str, side_covering: &str) -> &'a str {
     }
 }
 
-fn cmd_link(args: &[String]) -> io::Result<u8> {
+fn parse_link_args(args: &[String]) -> io::Result<(&str, &str, &str, Option<String>)> {
+    // Keep parsing separate from repository mutation so message-flag behavior
+    // can be tested without constructing a repository fixture.
     if args.len() < 3 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "link <connection> <A> <B> [<note>]",
+            "link <connection> <A> <B> [-m <msg>]...",
         ));
     }
-    let (kname, ha_in, hb_in) = (&args[0], &args[1], &args[2]);
-    // `None` = no note argument (leave an existing note alone); `Some` = a
-    // note was given (set or replace it), even if it is the empty string.
-    let note = args.get(3).cloned();
+    let note = parse_message_input(&args[3..])
+        .map_err(|error| io::Error::new(error.kind(), format!("link: {error}")))?;
+    Ok((&args[0], &args[1], &args[2], note.into_option()))
+}
+
+fn cmd_link(args: &[String]) -> io::Result<u8> {
+    let (kname, ha_in, hb_in, note) = parse_link_args(args)?;
+    // `None` = no -m/--message flag (leave an existing note alone); `Some` =
+    // a note was given (set or replace it), even if it is the empty string.
     let repo = current_repo()?;
     let mut k = Connection::read(&repo, kname)?;
     let src = Covering::read(&repo, &k.source_covering)?;
@@ -2077,7 +2056,7 @@ fn cmd_iter_current(name: &str, args: &[String]) -> io::Result<u8> {
 }
 
 fn cmd_iter_resolve(name: &str, args: &[String], state: TaskState) -> io::Result<u8> {
-    let note = parse_message(args)?;
+    let note = parse_message_input(args)?.into_option();
     let repo = current_repo()?;
     let mut it = Iter::read(&repo, name)?;
     // A resolution replaces the note, so re-resolving without -m clears a
@@ -2228,10 +2207,25 @@ fn no_args(verb: &str, args: &[String]) -> io::Result<()> {
     }
 }
 
-/// Parse an optional `-m <msg>` / `--message <msg>` note argument. Any other
-/// argument is an error.
-fn parse_message(args: &[String]) -> io::Result<Option<String>> {
-    let mut msg: Option<String> = None;
+#[derive(Debug, PartialEq, Eq)]
+enum MessageInput {
+    Absent,
+    Explicit(String),
+}
+
+impl MessageInput {
+    fn into_option(self) -> Option<String> {
+        match self {
+            MessageInput::Absent => None,
+            MessageInput::Explicit(value) => Some(value),
+        }
+    }
+}
+
+/// Parse and normalize repeated `-m <msg>` / `--message <msg>` arguments.
+/// Any other argument is an error.
+fn parse_message_input(args: &[String]) -> io::Result<MessageInput> {
+    let mut messages = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -2239,7 +2233,7 @@ fn parse_message(args: &[String]) -> io::Result<Option<String>> {
                 let v = args.get(i + 1).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "-m needs a message")
                 })?;
-                msg = Some(v.clone());
+                messages.push(v.clone());
                 i += 2;
             }
             other => {
@@ -2250,7 +2244,13 @@ fn parse_message(args: &[String]) -> io::Result<Option<String>> {
             }
         }
     }
-    Ok(msg)
+    if messages.is_empty() {
+        Ok(MessageInput::Absent)
+    } else {
+        Ok(MessageInput::Explicit(crate::message::normalize_values(
+            &messages,
+        )))
+    }
 }
 
 // ---- html -----------------------------------------------------------------
@@ -2467,14 +2467,26 @@ fn cmd_ls_links(args: &[String]) -> io::Result<u8> {
         for p in &k.links {
             let (al, aloc) = resolve_fields(Some(&src), &p.a);
             let (bl, bloc) = resolve_fields(tgt.as_ref(), &p.b);
-            println!("{}\t{}\t{}\t{}\t{}", al, aloc, bl, bloc, p.note);
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                al,
+                aloc,
+                bl,
+                bloc,
+                crate::message::escape_field(&p.note)
+            );
         }
     } else {
         for p in &k.links {
             if p.note.is_empty() {
                 println!("{}\t{}", p.a, p.b);
             } else {
-                println!("{}\t{}\t{}", p.a, p.b, p.note);
+                println!(
+                    "{}\t{}\t{}",
+                    p.a,
+                    p.b,
+                    crate::message::escape_field(&p.note)
+                );
             }
         }
     }
@@ -2871,6 +2883,59 @@ mod tests {
 
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
+    }
+
+    #[test]
+    fn link_messages_require_a_flag_and_repairs_emit_it() {
+        let short = ["map", "@source", "@target", "-m", "why"]
+            .map(String::from)
+            .to_vec();
+        let long = ["map", "@source", "@target", "--message", "why"]
+            .map(String::from)
+            .to_vec();
+        let positional = ["map", "@source", "@target", "why"]
+            .map(String::from)
+            .to_vec();
+        let repeated = ["map", "@source", "@target", "-m", "one", "-m", "two"]
+            .map(String::from)
+            .to_vec();
+
+        assert_eq!(parse_link_args(&short).unwrap().3.as_deref(), Some("why"));
+        assert_eq!(parse_link_args(&long).unwrap().3.as_deref(), Some("why"));
+        assert!(parse_link_args(&positional)
+            .unwrap_err()
+            .to_string()
+            .contains("only -m <msg> is accepted"));
+        assert_eq!(
+            parse_link_args(&repeated).unwrap().3.as_deref(),
+            Some("one\n\ntwo")
+        );
+        assert_eq!(
+            link_command("map", "@source", "@target", "why"),
+            "covmap link 'map' '@source' '@target' -m 'why'"
+        );
+        assert_eq!(
+            link_command("map", "@source", "@target", ""),
+            "covmap link 'map' '@source' '@target'"
+        );
+    }
+
+    #[test]
+    fn shared_message_parser_normalizes_repeated_values() {
+        let repeated = ["-m", "first", "--message", "second"]
+            .map(String::from)
+            .to_vec();
+        let single = ["--message", "only"].map(String::from).to_vec();
+
+        assert_eq!(
+            parse_message_input(&repeated).unwrap(),
+            MessageInput::Explicit("first\n\nsecond".to_string())
+        );
+        assert_eq!(
+            parse_message_input(&single).unwrap(),
+            MessageInput::Explicit("only".to_string())
+        );
+        assert_eq!(parse_message_input(&[]).unwrap(), MessageInput::Absent);
     }
 
     #[test]

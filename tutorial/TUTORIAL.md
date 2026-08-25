@@ -348,6 +348,12 @@ straight by *what the text is about*:
 | link note | why *this mapping* (A↔B) | n/a |
 | iterator task note | *this sweep's* verdict on a segment | n/a |
 
+All three message-bearing operations use the same explicit-input convention:
+repeat `-m`/`--message` for ordered paragraphs. A single value may also
+contain line breaks. One invocation replaces the complete stored text and
+`-m ""` clears it. Absence remains operation-specific: annotate reads, a
+re-link preserves, and iterator resolution clears.
+
 ## 9. Connect, repair a rename, and disconnect
 
 A **connection** records links between segments of two coverings. Create
@@ -372,16 +378,21 @@ named, the links below are stored by `@name` and survive later content edits.
 ```sh
 covmap peer bind impl ../impl_rs             # alias -> local checkout path
 covmap connect main impl:main queue_links    # source -> peer:target, named relation
-covmap link queue_links @enqueue-op        queue.rs:1 "fn enqueue"
+covmap link queue_links @enqueue-op        queue.rs:1 -m "fn enqueue"
 covmap link queue_links @dequeue-op        queue.rs:1 \
-  "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
-covmap link queue_links @queuefull-meaning queue.rs:1 "QueueFull guard"
+  -m "The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review." \
+  -m "Validated against the empty-queue branch in queue.rs."
+covmap link queue_links @queuefull-meaning queue.rs:1 -m "QueueFull guard"
 covmap ls-links queue_links
 ```
 
+On an existing pair, a bare re-link preserves the note and `-m ""` clears it.
+`ls-links` keeps one physical line per link by escaping backslash, TAB, CR,
+and LF in the note field.
+
 ```
 @enqueue-op	b5368af9628e9079	fn enqueue
-@dequeue-op	b5368af9628e9079	The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.
+@dequeue-op	b5368af9628e9079	The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.
 @queuefull-meaning	b5368af9628e9079	QueueFull guard
 ```
 
@@ -421,7 +432,7 @@ covmap name main:@queuefull-meaning queuefull-clause
 renamed @queuefull-meaning -> @queuefull-clause in covering 'main'
 connection 'queue_links': stored source endpoint '@queuefull-meaning' is now broken
 --- covmap repair begin ---
-covmap link 'queue_links' '@queuefull-clause' 'b5368af9628e9079' 'QueueFull guard'
+covmap link 'queue_links' '@queuefull-clause' 'b5368af9628e9079' -m 'QueueFull guard'
 covmap unlink 'queue_links' '@queuefull-meaning' 'b5368af9628e9079'
 --- covmap repair end ---
 note: inbound connections stored in another repository cannot be discovered here
@@ -544,7 +555,7 @@ loop. Do the work between `next` and `done`:
 ```sh
 until covmap iter review finished; do
   covmap iter review next --content
-  covmap iter review done -m "audited"
+  covmap iter review done -m "audited" -m "validation performed"
 done
 covmap iter review status                # 7/7 resolved (7 done, 0 skipped) — finished
 covmap iter review current --content     # reprint the cursor and its frozen bytes
@@ -555,7 +566,10 @@ Between `next` and `done`, inspect the frozen content and do the actual work.
 reprints both the active task and the numbered content block you were reviewing.
 Use `--content-plain` when raw bytes are more useful. Content remains explicit;
 without either flag these commands print only the compact task row. Use
-`skip -m "why"` in place of `done` to pass deliberately.
+`skip -m "why" -m "remaining risk"` in place of `done` to pass deliberately.
+Repeated values become paragraphs in one task note. Resolving without a
+message clears any earlier task note; `peek --all` escapes its line breaks so
+each task stays on one physical output line.
 
 Each `next` / `current` / `peek` prints one parseable line per task —
 `<@name|hash>\t<label>\t<file>:<a>..<b>` — and `--content` additionally

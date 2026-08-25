@@ -45,7 +45,8 @@
    over and every one gets a verdict.
 
 3. **Record a verdict per task** in the note (`-m`). It is fine to `skip`
-   the anonymous preamble (it is not an endpoint) with a reason.
+   the anonymous preamble (it is not an endpoint) with a reason. For at least
+   one endpoint, use a second `-m` paragraph for the evidence you checked.
 
 4. **Report the tally** with `covmap iter review status`
    (e.g. `5/5 resolved (4 done, 1 skipped) — finished`).
@@ -71,6 +72,7 @@ The grader checks that:
 - **every task is resolved** — `finished` is true and no task is still
   pending (complete enumeration);
 - each of the four endpoint tasks carries a non-empty note (a verdict);
+- at least one endpoint verdict has two paragraphs;
 - the covering was **not mutated** by the sweep (an iterator is a snapshot
   layered over the covering — it never edits segments).
 

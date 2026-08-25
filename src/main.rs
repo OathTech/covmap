@@ -15,6 +15,7 @@ mod diff;
 mod fingerprint;
 mod html;
 mod iterator;
+mod message;
 mod migrate;
 mod peer;
 mod repo;

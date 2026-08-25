@@ -1,6 +1,6 @@
 # Uniform multiline messages
 
-Stage: **Accepted**
+Stage: **Landed**
 
 ## Relationship to landed CIPs
 

@@ -20,8 +20,8 @@ f0b6a789cceb23d5	theory/main.tex	495	559	mapped	drift
 4f81d8ab69b1a5e9	theory/main.tex	735	784	mapped	state_on_disk
 7f7bad6277d484ed	theory/main.tex	785	837	mapped	project_artifacts
 0198bdb7ce2d95de	theory/main.tex	838	862	mapped	addressing
-0ce0fd7093fe6958	theory/main.tex	863	951	mapped	refinement
-04dcf4e6a4417107	theory/main.tex	952	1052	mapped	inspection
-e1163eaceac49ad7	theory/main.tex	1053	1115	mapped	iterator_interface
-88c14b880c13265d	theory/main.tex	1116	1135	mapped	plumbing
-5ec8e066d4891f95	theory/main.tex	1136	1165	mapped	discipline
+9f5eebaa9e073f00	theory/main.tex	863	953	mapped	refinement
+a24950d04a4a5588	theory/main.tex	954	1056	mapped	inspection
+e1163eaceac49ad7	theory/main.tex	1057	1119	mapped	iterator_interface
+88c14b880c13265d	theory/main.tex	1120	1139	mapped	plumbing
+5ec8e066d4891f95	theory/main.tex	1140	1169	mapped	discipline

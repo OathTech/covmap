@@ -907,10 +907,11 @@ There is no segmentation rule. The interface gives the user one
       narrow to the first fragment; local hash endpoints to the original
       become broken. The command reports both effects and the inability to
       discover inbound refs stored in another repository.
-\item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
+\item \texttt{covmap merge $C$:$a_1$ $C$:$a_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
-      $\lambda$ (default \texttt{unknown}).
-\item \texttt{covmap recut $C$:$h$}\\
+      $\lambda$ (default \texttt{unknown}), where each $a_i$ is a hash,
+      name, or position address selecting one concrete covering occurrence.
+\item \texttt{covmap recut $C$:$a$}\\
       Refresh the segment's hash from current disk bytes. Keeps
       $(f, a, b, \lambda)$; rewrites the content from the file as it
       is now. Errors if the segment no longer fits the file (boundary
@@ -926,8 +927,9 @@ There is no segmentation rule. The interface gives the user one
       left untouched and its segments reported as unresolved. Absorbs
       boundary drift automatically for localized edits, so connections
       by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
-\item \texttt{covmap label $C$:$h$ $\lambda$}\\
-      Replace the label of one segment in the covering ref. Because labels
+\item \texttt{covmap label $C$:$a$ $\lambda$}\\
+      Replace the label of the addressed segment occurrence in the covering
+      ref, even when another occurrence has equal content. Because labels
       are not part of identity, the segment hash and object store are
       unchanged, so connections referencing the segment by hash or name
       keep resolving. The segment's name and message, if any, are preserved.
@@ -1001,7 +1003,9 @@ read-only unless hydration is requested explicitly.
 \item \texttt{covmap ls [-l] [$C$] [region \ldots] [--label $\ell$] [--linked|--unlinked]}\\
       List segments of $C$ in file-and-line order, optionally narrowed to the
       union of several file/range regions and intersected with a label or link
-      status.
+      status. Link status includes outgoing links and locally stored incoming
+      links; inbound cross-repository connections stored in another repository
+      are not discoverable from $C$'s repository.
 \item \texttt{covmap grep [-l] [-c $C$] <pattern>}\\
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\

@@ -608,42 +608,28 @@ pub fn entry_by_hash<'a>(c: &'a Covering, hash: &str) -> Option<&'a CoveringEntr
 /// (its content identity) is unchanged, the object store is untouched, and
 /// every connection endpoint that referenced the segment — by hash or by
 /// name — keeps resolving. Returns the (unchanged) hash.
-pub fn relabel(
-    _repo: &Repo,
-    c: &mut Covering,
-    old_hash: &str,
-    new_label: &str,
-) -> io::Result<String> {
-    let idx = c
-        .entries
-        .iter()
-        .position(|e| e.hash == old_hash)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("hash '{old_hash}' not in covering '{}'", c.name),
-            )
-        })?;
-    c.entries[idx].label = new_label.to_string();
-    Ok(c.entries[idx].hash.clone())
+pub fn relabel(c: &mut Covering, idx: usize, new_label: &str) -> io::Result<String> {
+    let entry = c.entries.get_mut(idx).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("segment index {idx} not in covering '{}'", c.name),
+        )
+    })?;
+    entry.label = new_label.to_string();
+    Ok(entry.hash.clone())
 }
 
 /// Refresh a segment's content from current disk bytes. Keeps the
 /// same (file, a, b, label); recomputes the hash from the file as it
 /// is now. Used after a file edit that changed bytes inside the
 /// segment but did not move its line boundaries. Returns the new hash.
-pub fn recut(repo: &Repo, c: &mut Covering, old_hash: &str) -> io::Result<String> {
-    let idx = c
-        .entries
-        .iter()
-        .position(|e| e.hash == old_hash)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("hash '{old_hash}' not in covering '{}'", c.name),
-            )
-        })?;
-    let entry = c.entries[idx].clone();
+pub fn recut(repo: &Repo, c: &mut Covering, idx: usize) -> io::Result<String> {
+    let entry = c.entries.get(idx).cloned().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("segment index {idx} not in covering '{}'", c.name),
+        )
+    })?;
     let abs = repo.root.join(&entry.file);
     let raw = fs::read_to_string(&abs)?;
     let lines: Vec<String> = raw.split_inclusive('\n').map(|s| s.to_string()).collect();
@@ -975,20 +961,20 @@ pub fn apply_split_plan(repo: &Repo, c: &mut Covering, plan: &SplitPlan) -> io::
 }
 
 /// Merge two adjacent segments in the same file into one. The
-/// segments must share a file and be contiguous (`h1.b + 1 == h2.a`).
-pub fn merge(repo: &Repo, c: &mut Covering, h1: &str, h2: &str, label: &str) -> io::Result<String> {
-    let i1 = c.entries.iter().position(|e| e.hash == h1).ok_or_else(|| {
-        io::Error::new(
+/// addressed entries must share a file and be contiguous.
+pub fn merge(
+    repo: &Repo,
+    c: &mut Covering,
+    i1: usize,
+    i2: usize,
+    label: &str,
+) -> io::Result<String> {
+    if i1 >= c.entries.len() || i2 >= c.entries.len() {
+        return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("hash '{h1}' not in covering"),
-        )
-    })?;
-    let i2 = c.entries.iter().position(|e| e.hash == h2).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("hash '{h2}' not in covering"),
-        )
-    })?;
+            format!("segment index not in covering '{}'", c.name),
+        ));
+    }
     // Order the two by position so the "left" segment's end abuts the
     // "right" segment's start, regardless of the order they were passed.
     let (lo, hi) = if i1 < i2 { (i1, i2) } else { (i2, i1) };
@@ -1473,12 +1459,54 @@ mod tests {
         let old = c.entries[0].hash.clone();
         let object = segment::object_path(&repo.objects_dir(), &old);
 
-        let new = relabel(&repo, &mut c, &old, "reviewed").unwrap();
+        let new = relabel(&mut c, 0, "reviewed").unwrap();
 
         assert_eq!(new, old);
         assert_eq!(c.entries[0].hash, old);
         assert_eq!(c.entries[0].label, "reviewed");
         assert_eq!(std::fs::read_to_string(object).unwrap(), "content\n");
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn relabel_targets_the_resolved_duplicate_hash_occurrence() {
+        let repo = tmp_repo();
+        let mut first = whole(&repo, "first.txt", "same\n", 1);
+        first.name = Some("first".into());
+        let mut second = whole(&repo, "second.txt", "same\n", 1);
+        second.name = Some("second".into());
+        assert_eq!(first.hash, second.hash);
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![first, second],
+        };
+
+        relabel(&mut c, 1, "reviewed").unwrap();
+
+        assert_eq!(c.entries[0].label, "unknown");
+        assert_eq!(c.entries[1].label, "reviewed");
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn recut_targets_the_resolved_duplicate_hash_occurrence() {
+        let repo = tmp_repo();
+        let first = whole(&repo, "first.txt", "same\n", 1);
+        let second = whole(&repo, "second.txt", "same\n", 1);
+        let old = first.hash.clone();
+        assert_eq!(old, second.hash);
+        std::fs::write(repo.root.join("first.txt"), "same\n").unwrap();
+        std::fs::write(repo.root.join("second.txt"), "changed\n").unwrap();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![first, second],
+        };
+
+        let new = recut(&repo, &mut c, 1).unwrap();
+
+        assert_eq!(c.entries[0].hash, old);
+        assert_eq!(c.entries[1].hash, new);
+        assert_ne!(new, old);
         std::fs::remove_dir_all(&repo.root).ok();
     }
 
@@ -1509,13 +1537,32 @@ mod tests {
         };
         let old = c.entries[0].hash.clone();
         apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(1, Some(7))]);
-        let (top, bot) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
-        let merged = merge(&repo, &mut c, &top, &bot, "unknown").unwrap();
+        let merged = merge(&repo, &mut c, 0, 1, "unknown").unwrap();
         assert_eq!(c.entries.len(), 1);
         // Merging the two halves restores the original content hash,
         // regardless of the labels used while they were split.
         assert_eq!(merged, old);
         assert_eq!(c.entries[0].range(), "1..1");
+        std::fs::remove_dir_all(&repo.root).ok();
+    }
+
+    #[test]
+    fn merge_targets_named_duplicate_hash_occurrences() {
+        let repo = tmp_repo();
+        let mut c = Covering {
+            name: "main".into(),
+            entries: vec![whole(&repo, "f.txt", "same\nsame\n", 2)],
+        };
+        apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(2, None)]);
+        assert_eq!(c.entries[0].hash, c.entries[1].hash);
+        c.entries[0].name = Some("first".into());
+        c.entries[1].name = Some("second".into());
+
+        merge(&repo, &mut c, 0, 1, "merged").unwrap();
+
+        assert_eq!(c.entries.len(), 1);
+        assert_eq!(c.entries[0].name.as_deref(), Some("first"));
+        assert_eq!(c.entries[0].label, "merged");
         std::fs::remove_dir_all(&repo.root).ok();
     }
 
@@ -1790,10 +1837,9 @@ mod tests {
         // Split keeps the name on the first fragment; clear it, name the
         // second fragment, then merge.
         apply_test_split(&repo, &mut c, SplitScope::Segment(0), &[cut(2, None)]);
-        let (top, bot) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
         c.entries[0].name = None;
         c.entries[1].name = Some("tail".into());
-        let _ = merge(&repo, &mut c, &top, &bot, "m").unwrap();
+        let _ = merge(&repo, &mut c, 0, 1, "m").unwrap();
         assert_eq!(c.entries.len(), 1);
         assert_eq!(c.entries[0].name.as_deref(), Some("tail"));
         std::fs::remove_dir_all(&repo.root).ok();
@@ -1919,8 +1965,7 @@ mod tests {
         assert_eq!(c.entries[1].message, None);
         // Give the second fragment a message, then merge: the earlier wins.
         set_message(&mut c, 1, Some("bottom rationale"));
-        let (h1, h2) = (c.entries[0].hash.clone(), c.entries[1].hash.clone());
-        merge(&repo, &mut c, &h1, &h2, "merged").unwrap();
+        merge(&repo, &mut c, 0, 1, "merged").unwrap();
         assert_eq!(c.entries.len(), 1);
         assert_eq!(
             c.entries[0].message.as_deref(),

@@ -554,7 +554,7 @@ fn show_segment(
         // Resolved links, both directions.
         let c = resolve_covering(repo, cn)?;
         let rel = crate::resolve::Relation::build(repo, cn, &c)?;
-        print_seg_links(&rel.links_of(&full));
+        print_seg_links(&rel.links_of(e));
     }
 
     if let Some(e) = &entry {
@@ -711,13 +711,12 @@ struct ResolvedConnectionLink {
 }
 
 fn resolve_connection_endpoint(c: Option<&Covering>, endpoint: &str) -> (Option<String>, String) {
-    match c.and_then(|covering| covering::endpoint_to_hash(covering, endpoint)) {
-        Some(hash) => {
-            let display = c
-                .and_then(|covering| covering.entries.iter().find(|entry| entry.hash == hash))
-                .map(display_entry)
-                .unwrap_or_else(|| endpoint.to_string());
-            (Some(hash), display)
+    match c.and_then(|covering| covering::endpoint_to_index(covering, endpoint)) {
+        Some(index) => {
+            let entry = &c
+                .expect("covering exists when an endpoint resolved")
+                .entries[index];
+            (Some(entry.hash.clone()), display_entry(entry))
         }
         None if c.is_some() => (None, format!("{endpoint} (broken)")),
         None => (None, endpoint.to_string()),
@@ -830,22 +829,9 @@ fn connection_lines(repo: &Repo, k: &Connection, all: bool) -> io::Result<Vec<St
         .and_then(|target| Covering::read(&target, &k.target_covering).ok());
     let resolved = resolve_connection_links(&src, tgt.as_ref(), k);
 
-    // Coverage: distinct resolving endpoints over covering cardinality.
-    let src_cov = resolved
-        .iter()
-        .filter_map(|link| link.source_hash.as_ref())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let src_tot = src.entries.len();
+    let (src_cov, src_tot) = coverage(&src, k.links.iter().map(|link| link.a.as_str()));
     let (tgt_cov, tgt_tot) = match &tgt {
-        Some(t) => (
-            resolved
-                .iter()
-                .filter_map(|link| link.target_hash.as_ref())
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-            t.entries.len(),
-        ),
+        Some(t) => coverage(t, k.links.iter().map(|link| link.b.as_str())),
         None => (0, 0),
     };
 
@@ -934,23 +920,18 @@ fn show_connection(repo: &Repo, k: &Connection, all: bool) -> io::Result<u8> {
 
 /// `label loc` for an endpoint, or the raw endpoint + `(broken)`.
 fn resolve_display(c: &Covering, ep: &str) -> String {
-    match covering::endpoint_to_hash(c, ep) {
-        Some(h) => c
-            .entries
-            .iter()
-            .find(|e| e.hash == h)
-            .map(display_entry)
-            .unwrap_or_else(|| ep.to_string()),
+    match covering::endpoint_to_index(c, ep) {
+        Some(index) => display_entry(&c.entries[index]),
         None => format!("{ep} (broken)"),
     }
 }
 
-/// (distinct resolving endpoints, covering cardinality).
+/// (distinct resolving covering occurrences, covering cardinality).
 fn coverage<'a>(c: &Covering, eps: impl Iterator<Item = &'a str>) -> (usize, usize) {
     let mut seen = std::collections::BTreeSet::new();
     for ep in eps {
-        if let Some(h) = covering::endpoint_to_hash(c, ep) {
-            seen.insert(h);
+        if let Some(index) = covering::endpoint_to_index(c, ep) {
+            seen.insert(index);
         }
     }
     (seen.len(), c.entries.len())
@@ -1269,7 +1250,7 @@ fn write_region_segs(
         let handle = entry_handle(e);
         let lbl = if e.label.is_empty() { "-" } else { &e.label };
         writeln!(out, "  {handle}  {lbl}  {}", e.loc())?;
-        let links = rel.links_of(&e.hash);
+        let links = rel.links_of(e);
         if links.outgoing.is_empty() && links.incoming.is_empty() {
             writeln!(out, "    (unlinked)")?;
         }
@@ -1386,7 +1367,7 @@ pub(super) fn cmd_ls(args: &[String]) -> io::Result<u8> {
         })
         .filter(|e| regions.is_empty() || regions.iter().any(|region| region.contains(e)))
         .filter(|e| match (link_filter, rel.as_ref()) {
-            (Some(want_linked), Some(rel)) => rel.is_linked(&e.hash) == want_linked,
+            (Some(want_linked), Some(rel)) => rel.is_linked(e) == want_linked,
             _ => true,
         })
         .collect();
@@ -1754,6 +1735,32 @@ mod tests {
                 .unwrap()
                 .file,
             "first.txt"
+        );
+        let (_, display) = resolve_connection_endpoint(Some(&covering), "@second");
+        assert_eq!(display, "mapped second.txt:7..7");
+        assert_eq!(
+            resolve_display(&covering, "@second"),
+            "mapped second.txt:7..7"
+        );
+    }
+
+    #[test]
+    fn coverage_counts_named_duplicate_hash_occurrences_separately() {
+        let covering = Covering {
+            name: "main".to_string(),
+            entries: vec![
+                named_entry("aaaaaaaaaaaaaaaa", 1, "first"),
+                named_entry("aaaaaaaaaaaaaaaa", 2, "second"),
+            ],
+        };
+
+        assert_eq!(
+            coverage(&covering, ["@first", "@second"].into_iter()),
+            (2, 2)
+        );
+        assert_eq!(
+            coverage(&covering, ["aaaaaaaaaaaaaaaa"].into_iter()),
+            (1, 2)
         );
     }
 

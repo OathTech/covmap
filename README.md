@@ -186,12 +186,12 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | `show <addr> [--content\|--content-plain\|--no-content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Focused segment/link and file/range views include numbered content by default; links show both endpoints, while regions show selected source content only. `--no-content` selects compact metadata/relationships and `--content-plain` selects raw bytes. Label lenses and covering/connection summaries remain compact. Partial-line numbered views mark measured omitted columns with `.`; if drift or missing source prevents measuring the remainder, a separate `REST-OF-LINE-UNKNOWN` diagnostic follows the recorded line. `--all` is connection-summary only. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
-| `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
+| `label <C>:<addr> <label>` | Relabel the addressed segment occurrence (ref-local; hash unchanged). |
 | `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. A rename lists exact local `@old` endpoints and emits a safe link-then-unlink repair when possible; it never rewrites connections implicitly. |
 | `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
 | `split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert one or more line or character cuts. New fragments are `unknown`; apply metadata separately. |
-| `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
-| `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
+| `merge <C>:<addr1> <C>:<addr2> [<label>]` | Merge two addressed adjacent segments. |
+| `recut <C>:<addr>` | Refresh the addressed segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
 | `peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local paths for stable connection peer aliases. |
 | `connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection; omit `<peer>:` for another covering in the same repository. |
@@ -217,7 +217,9 @@ If a region filename also names a covering, make the covering explicit; for
 example, `covmap ls -l HEAD main` selects the file `main` in `HEAD`.
 
 The regions form a union; `--label`, `--linked`, and `--unlinked` further
-filter that selection. `show <connection>` reports resolved maximum in/out
+filter that selection. Link status includes outgoing links and same-repository
+incoming links whose connection refs are stored locally; inbound connections
+stored in another repository remain undiscoverable. `show <connection>` reports resolved maximum in/out
 degree and bounded fan-in/fan-out hubs. Hash and `@name` endpoints resolving
 to the same content hash count as one node; repeated covering locations with
 that hash produce one hub row at the first covering-order location. Broken

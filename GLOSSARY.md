@@ -101,7 +101,8 @@ selected by that covering's effective policy, before any **split**/**merge**
 refinement. Its **granularity** is near 0. Sub-concept of **cover**.
 
 **Coverage (source / target)** **[T][S]** — the fraction of a covering's
-segments that appear in at least one link of a connection. A connection
+concrete segment occurrences that appear in at least one link of a connection.
+Distinct named occurrences with equal content count separately. A connection
 is *source-total* when its source coverage is 1.
 
 **Covered set** *(also: covered files)* **[T][R][S]** — the set `F` of
@@ -276,7 +277,8 @@ Sub-concept of **iterator**.
 metadata that is *not* part of the segment hash (like the segment's name
 and message). `cover` assigns `unknown`; typical relabels are `ignored`,
 `reviewed`, and `mapped`. Two segments with equal content share one object
-regardless of label, and re-labelling never changes a hash.
+regardless of label; name and position addresses still relabel the selected
+covering occurrence, and re-labelling never changes a hash.
 
 **Label lens** **[T][R][S]** — an inspection query (`covmap show --label
 <l>`) returning every segment of a covering carrying label `<l>` together

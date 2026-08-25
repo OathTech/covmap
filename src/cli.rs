@@ -123,14 +123,14 @@ fn command_help_line(cmd: &str) -> Option<&'static str> {
         }
         "grep" => "covmap grep [-l] [-c <C>] <pattern>          segments whose label or content matches",
         "diff" => "covmap diff <C1> <C2>                        added / removed / shared",
-        "label" => "covmap label <C>:<h> <label>                 relabel a segment",
+        "label" => "covmap label <C>:<addr> <label>              relabel the addressed segment",
         "name" => "covmap name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name",
         "annotate" => "covmap annotate <C>:<addr> [-m <msg>]... | -   set, replace, clear (-), or print a segment's message",
         "split" => {
             "covmap split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately"
         }
-        "merge" => "covmap merge <C>:<h1> <C>:<h2> [<label>]     merge two adjacent segments",
-        "recut" => "covmap recut <C>:<h|@name> | recut --remap [<C>[:<a>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
+        "merge" => "covmap merge <C>:<addr1> <C>:<addr2> [<label>] merge two adjacent segments",
+        "recut" => "covmap recut <C>:<addr> | recut --remap [<C>[:<addr>]]   refresh a segment, or diff-remap a covering's segments onto the edited file",
         "link" => {
             "covmap link <K> <A> <B> [-m <msg>]...       add a link to connection K\n  <A> and <B>: @name, hash prefix, or file:line[:col] in that side's covering\n  repeated messages form blank-line-separated paragraphs\n  on re-link, -m '' clears the note and no message flag preserves it"
         }
@@ -183,12 +183,12 @@ PORCELAIN
   ls [-l] [<covering>] [<region> ...] list segments, optionally narrowed to regions
   grep [-l] [-c <C>] <pattern>        segments whose label or content matches
   diff <C1> <C2>                      added / removed / shared
-  label <C>:<h> <label>               relabel a segment
+  label <C>:<addr> <label>            relabel the addressed segment
   name <C>:<h|@name> <name|->         set, rename, or clear (-) a segment's name
   annotate <C>:<addr> [-m <msg>]...   set/replace/clear (-)/print a segment's free-form message
   split <C>:<segment|file> <cut> [<cut> ...]   atomically insert line[:column] cuts; apply metadata separately
-  merge <C>:<h1> <C>:<h2> [<label>]   merge two adjacent segments
-  recut <C>:<h|@name>                 refresh a segment's hash from current disk bytes
+  merge <C>:<addr1> <C>:<addr2> [<label>]   merge two adjacent segments
+  recut <C>:<addr>                    refresh a segment's hash from current disk bytes
   recut --remap [<C>[:<addr>]] [--threshold <f>]   diff-remap; for unresolved segments, print fingerprint relocation proposals (propose-only)
   link <K> <A> <B> [-m <msg>]...      add a link; repeated messages form paragraphs
   unlink <K> <A> <B>                  remove a link by @name, hash prefix, or position
@@ -537,7 +537,7 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "label <covering>:<hash> <label>",
+            "label <covering>:<address> <label>",
         ));
     }
     let (covname, prefix) = parse_addr(&args[0]);
@@ -545,8 +545,9 @@ fn cmd_label(args: &[String]) -> io::Result<u8> {
     let new_label = args[1].clone();
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &covname)?;
-    let old = covering::resolve_segment_hash(&c, &prefix)?;
-    let new_hash = covering::relabel(&repo, &mut c, &old, &new_label)?;
+    let idx = covering::resolve_segment(&c, &prefix)?;
+    let old = c.entries[idx].hash.clone();
+    let new_hash = covering::relabel(&mut c, idx, &new_label)?;
     c.write(&repo)?;
     println!(
         "{} -> {}  (label '{}' in covering '{}')",
@@ -1127,9 +1128,8 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
     if remap {
         return cmd_recut_remap(addr.as_deref(), threshold);
     }
-    let addr = addr.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<hash|@name>")
-    })?;
+    let addr = addr
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "recut <covering>:<address>"))?;
     let (covname, prefix) = parse_addr(&addr);
     let covname = covname.unwrap_or_else(|| "HEAD".to_string());
     let repo = current_repo()?;
@@ -1137,7 +1137,7 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
     // Accept either a hash prefix or an `@name` segment address.
     let idx = covering::resolve_segment(&c, &prefix)?;
     let old = c.entries[idx].hash.clone();
-    let new_hash = covering::recut(&repo, &mut c, &old)?;
+    let new_hash = covering::recut(&repo, &mut c, idx)?;
     c.write(&repo)?;
     if old == new_hash {
         println!("{} (unchanged)", old);
@@ -1157,8 +1157,11 @@ fn cmd_recut(args: &[String]) -> io::Result<u8> {
 /// drifted file in the covering is.
 fn remap_scope(repo: &Repo, addr: Option<&str>) -> io::Result<(String, Option<String>)> {
     match addr {
-        Some(a) if a == "HEAD" || repo.covering_exists(a)? => Ok((a.to_string(), None)),
+        Some("HEAD") => Ok(("HEAD".to_string(), None)),
         Some(a) => {
+            if crate::repo::valid_covering_name(a) && repo.covering_exists(a)? {
+                return Ok((a.to_string(), None));
+            }
             let (cn, seg) = parse_addr(a);
             let covname = cn.unwrap_or_else(|| "HEAD".to_string());
             let c = resolve_covering(repo, &covname)?;
@@ -1351,7 +1354,7 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
     if args.len() < 2 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "merge <covering>:<h1> <covering>:<h2> [<label>]",
+            "merge <covering>:<address1> <covering>:<address2> [<label>]",
         ));
     }
     let (cn1, p1) = parse_addr(&args[0]);
@@ -1370,9 +1373,11 @@ fn cmd_merge(args: &[String]) -> io::Result<u8> {
         .unwrap_or_else(|| DEFAULT_LABEL.to_string());
     let repo = current_repo()?;
     let mut c = resolve_covering(&repo, &cn1)?;
-    let h1 = covering::resolve_segment_hash(&c, &p1)?;
-    let h2 = covering::resolve_segment_hash(&c, &p2)?;
-    let h = covering::merge(&repo, &mut c, &h1, &h2, &label)?;
+    let i1 = covering::resolve_segment(&c, &p1)?;
+    let i2 = covering::resolve_segment(&c, &p2)?;
+    let h1 = c.entries[i1].hash.clone();
+    let h2 = c.entries[i2].hash.clone();
+    let h = covering::merge(&repo, &mut c, i1, i2, &label)?;
     c.write(&repo)?;
     println!("merged {} + {} -> {}", h1, h2, h);
     Ok(0)
@@ -2810,6 +2815,31 @@ mod tests {
         assert_eq!(
             remap_scope(&repo, Some("HEAD")).unwrap(),
             ("HEAD".to_string(), None)
+        );
+        fs::remove_dir_all(repo.root).unwrap();
+    }
+
+    #[test]
+    fn remap_scope_accepts_named_hashed_and_positional_segment_addresses() {
+        let repo = temp_repo("remap-segment");
+        initialize_test_repo(&repo);
+        Covering {
+            name: "main".into(),
+            entries: vec![split_entry("1234567890abcdef", "other.txt", 2, "other")],
+        }
+        .write(&repo)
+        .unwrap();
+
+        let expected = ("main".to_string(), Some("other.txt".to_string()));
+        assert_eq!(remap_scope(&repo, Some("main:@other")).unwrap(), expected);
+        assert_eq!(remap_scope(&repo, Some("main:1234")).unwrap(), expected);
+        assert_eq!(
+            remap_scope(&repo, Some("main:other.txt:2")).unwrap(),
+            expected
+        );
+        assert_eq!(
+            remap_scope(&repo, Some("@other")).unwrap(),
+            ("HEAD".to_string(), Some("other.txt".to_string()))
         );
         fs::remove_dir_all(repo.root).unwrap();
     }

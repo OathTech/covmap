@@ -116,10 +116,11 @@ code→test map to derive docs→test).
 covmap shall report covering metrics (cardinality, line count,
 granularity), connection coverage (source and target totality), and resolved
 connection degree (maximum in/out degree plus bounded non-trivial fan-in and
-fan-out hubs). Degree shall be keyed by resolved segment identity rather than
-stored endpoint spelling: covering entries with the same content hash form one
-operational node and one hub row. Links with either endpoint broken shall not
-contribute.
+fan-out hubs). Coverage shall count concrete covering occurrences, so distinct
+named occurrences with equal content count separately. Degree shall instead be
+keyed by resolved segment identity rather than stored endpoint spelling:
+covering entries with the same content hash form one operational node and one
+hub row. Links with either endpoint broken shall not contribute.
 Partition entropy is a defined covering measure (`theory/main.tex`) but
 is computed only, not surfaced in command output — it is not actionable
 on its own.
@@ -315,6 +316,9 @@ and intersecting that union with a **label** or link-status filter; a `show` of
 a region or label shall present each selected segment with its resolved image
 (req20), realizing κ(S) (the image of a subset under a connection); and a
 `show` of a single segment or link shall resolve its links in both directions.
+Link-status inspection shall include outgoing links and incoming links from
+connections stored in the current repository; inbound cross-repository
+connections stored elsewhere remain undiscoverable locally.
 A connection shall report degree maxima and at most ten non-trivial fan-in and
 fan-out hubs per direction, while the existing large-connection threshold
 continues to suppress the individual link list unless `--all` is given. This

@@ -1,13 +1,13 @@
 ---
 name: covmap
-description: Use covmap to partition repositories into content-addressed segments and link segments across two repositories (e.g. a markdown spec and an implementation). Trigger whenever the user asks to map, track, or cover a repository against another, audit which segments are linked, or repair links after one of the repositories was edited. Also trigger when the user pastes `covmap status` or `covmap fsck` output.
+description: Use covmap to map and audit content-addressed segments within one repository or across repositories. Trigger when the user asks to map or cover files, audit link coverage, repair drift, or interpret covmap status or fsck output.
 ---
 
 # covmap skill
 
-covmap is a local CLI that partitions each of two repositories into
+covmap is a local CLI that partitions selected files in one or more
 content-addressed **segments** organized into named **coverings**,
-then records **connections** between segments of the two repositories.
+then records **connections** within or between those repositories.
 This skill teaches you how to drive it as fluently as `git`.
 
 The mathematical model is in `covmap/theory/main.tex`; the source is
@@ -136,18 +136,18 @@ are unique.
 | `covmap init` | Create `.covmap/` in cwd. | no |
 | `covmap cover [<C>]` | Add a whole-file `unknown` segment for every selected file not yet covered. **Idempotent and additive — never overwrites refined segments.** Read unmatched-include and policy-drift warnings. | yes |
 | `covmap hydrate [<C>]` | Verify live source against covering hashes and atomically recreate missing cache objects; omitted `<C>` means every covering. | **yes** |
-| `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage**. | **yes** |
-| `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or link status. | yes |
+| `covmap status [<C>]` | Per-covering summary + drift + per-connection broken count and source/target **coverage** of concrete segment occurrences. | **yes** |
+| `covmap ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments of `C`, optionally narrowed to the union of several file/range **regions** and intersected with a label or locally discoverable outgoing/incoming link status. | yes |
 | `covmap show <addr> [--content\|--content-plain\|--no-content] [--all]` | Print a segment, covering, connection, **region** (`<C>:<file>[:a..b]`), or single link (`<K> <A> <B>`). Focused segment/link and file/range views include numbered content by default; a link shows both endpoints, while a region shows each selected source segment with its mapped image. `--no-content` selects compact metadata/relationships, and `--content-plain` selects raw bytes. The **label lens** (`--label <l> [<C>]`) and covering/connection summaries stay compact by default. Partial-line numbered views mark measured omitted columns with `.`; an unmeasurable trailing remainder is reported separately as `REST-OF-LINE-UNKNOWN`. `--all` is connection-summary only. | yes |
 | `covmap grep [-l] [-c <C>] <pattern>` | Segments whose label or content matches. | yes |
 | `covmap diff <C1> <C2>` | Added / removed / shared segments. | yes |
-| `covmap label <C>:<h> <label>` | Replace a segment's label (ref-local; hash unchanged). | no |
+| `covmap label <C>:<addr> <label>` | Replace the addressed segment occurrence's label (ref-local; hash unchanged). | no |
 | `covmap name <C>:<h\|@name> <name\|->` | Set, rename, or clear (`-`) a segment's name. A rename does not rewrite connections: read its affected-endpoint diagnostics and execute an emitted repair block when present. | **yes when renaming/clearing** |
 | `covmap annotate <C>:<addr> [-m <msg>]...` | Set/replace a segment's free-form **message** (why it was cut / what it is / why it is or isn't mapped). Repeatable `-m` = paragraphs; `-` clears; no `-m` prints it. Not hashed — editing it never causes drift. | yes (read) |
 | `covmap split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert line or character cuts. A file selector can span several original segments. New fragments are `unknown`; the first keeps the original name/message and later fragments are anonymous. Apply labels/names/messages separately. | yes |
-| `covmap merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
-| `covmap recut <C>:<h>` | Refresh a segment's hash from current disk bytes (boundaries unchanged). Use after a file edit that did not move line boundaries. A named segment keeps its name, so connections by `@name` stay intact. | yes |
-| `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
+| `covmap merge <C>:<addr1> <C>:<addr2> [<label>]` | Merge two adjacent addressed segments. The merged segment inherits the single surviving name (left wins if both named). | yes |
+| `covmap recut <C>:<addr>` | Refresh the addressed segment's hash from current disk bytes (boundaries unchanged). A named segment keeps its name, so connections by `@name` stay intact. | yes |
+| `covmap recut --remap [<C>[:<addr>]] [--threshold <f>]` | **Diff-remap + fingerprint.** Reconstruct each selected file from the covering, diff against disk, and re-fit every line-aligned segment's boundaries through the unchanged regions — following inserts/deletes automatically and preserving names. Use for **boundary drift** (lines added/removed). Per-file all-or-nothing. For a moved/rewritten segment it can't place, prints a **propose-only** fingerprint relocation guess (ranked, scored; `--threshold` default 0.4). | **yes** |
 | `covmap peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local resolution for stable peer aliases. | yes |
 | `covmap connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection. Omit `<peer>:` for a same-repository target (`connect main main audit`). | yes |
 | `covmap disconnect <K>` | Delete only connection ref `K`; coverings and objects are untouched. Regenerate the default HTML report if warned that it may be stale. | yes |
@@ -368,7 +368,7 @@ Drill down in ≤3 calls, ending on a self-sufficient view:
    connection's coverage (how much is mapped).
 2. **Narrow** — `covmap ls -l <C> <region>...` lists the union of several
    files or `file:a..b` ranges in covering order, without duplicates
-   (`--unlinked` finds gaps; `--label` intersects the same selection).
+   (`--unlinked` finds locally discoverable gaps; `--label` intersects it).
    If a filename also names a covering, pass the covering explicitly first,
    such as `covmap ls -l HEAD main` to select file `main` in `HEAD`.
 3. **Understand** — `covmap show <C>:<file>[:a..b]` prints each segment in
@@ -424,20 +424,20 @@ The two kinds of drift you will see:
   intact across the recut — no relinking needed. If the segment is
   anonymous (linked by hash), `unlink`/`link` to point connections at
   the new hash.
-- **Boundary drift** (lines added/removed inside a segment). `recut`
-  will refuse if the segment no longer fits the file. Either use
-  `covmap recut --remap` (whole-file diff-remap, which re-fits the
-  surviving segments automatically — see workflow E), or `merge` the
-  affected adjacent segments and re-`split` at the new line numbers.
+- **Boundary drift** (lines added/removed inside a segment). Plain `recut`
+  may refuse, or may still fit while capturing the wrong lines. Run
+  `covmap recut --remap <C>` to re-fit surviving segments automatically
+  (see workflow E); use `merge` and `split` only when remap cannot place
+  the boundaries.
 
 Steps:
 
 1. Run `covmap status`. Note the drift line and any broken links.
 2. Run `covmap fsck --broken-links` to list links whose endpoints
    disappeared from their covering.
-3. For each affected segment: choose `recut` (boundaries fine) or
-   `merge` + `split` (boundaries shifted). Read the new bytes with
-   `covmap show <C>:<new_hash>` to confirm the implementation still
+3. For each affected segment: choose `recut` (boundaries unchanged) or
+   `recut --remap <C>` (boundaries shifted); manually merge/split if unresolved.
+   Read the new bytes with `covmap show <C>:<new_hash>` to confirm it still
    matches.
 4. Only for **anonymous** (hash-linked) segments: `unlink` the old link,
    `link` the new one. Named (`@name`) segments need no relinking.
@@ -526,7 +526,7 @@ chain: **name** keeps the link alive → **diff-remap** re-fits
 surviving boundaries → **fingerprint** proposes a relocation for the
 rest.
 
-### C. Annotate / mark a batch of unlinked segments
+### C. Annotate / mark a batch of segments
 
 covmap labels are ref-local status metadata — *not* part of segment
 identity — so relabelling is cheap and safe to do freely, even on linked
@@ -534,7 +534,7 @@ segments. Common labels: `unknown` (default for fresh segments),
 `ignored`, `reviewed`, `mapped`.
 
 ```
-# label every unmapped Increment-related segment as 'reviewed'
+# label every Increment-related segment as 'reviewed'
 covmap grep -l Increment | while read h; do
   covmap label "main:$h" reviewed
 done
@@ -560,7 +560,7 @@ connections:
   recorded segments.
 - `drift: N file(s) edited` — N files have been modified since their
   segments were recorded. The following `edited:` lines name them. Use
-  `recut` (or merge+split if boundaries moved) to refresh. Likewise,
+  `recut` (or `recut --remap <C>` if boundaries moved) to refresh. Likewise,
   `missing/binary:` lines name paths that cannot be checked as text.
 - `<conn>: <source-C> -> <peer>:<target-C> : N links, M broken` — relink
   or `prune` if `M > 0`. Same-repository targets display `(self-map)`.

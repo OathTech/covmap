@@ -25,7 +25,8 @@ set -euo pipefail
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Read'   | head -1 )" read-ep   ) >/dev/null
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Delete' | head -1 )" delete-ep ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
-( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" api_links ) >/dev/null
+( cd spec && "$COVMAP_BIN" peer bind impl ../impl_rs ) >/dev/null
+( cd spec && "$COVMAP_BIN" connect main impl:main api_links ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link api_links @read-ep   "$IMPL_H" -m "fn read"   ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link api_links @delete-ep "$IMPL_H" -m "fn delete" ) >/dev/null
 

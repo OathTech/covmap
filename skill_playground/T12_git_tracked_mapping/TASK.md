@@ -11,7 +11,10 @@
 
 ## Starting state
 
-- Both clones contain format-3 covering artifacts and matching source.
+- Both clones contain current-format covering artifacts and matching source.
+- The spec clone contains a tracked global include plus a
+  `selections/main/include` override; the implementation clone contains its
+  tracked global include.
 - `review/spec-clone/.covmap/connections/spec_to_impl` stores
   `target_peer=impl`, not an absolute checkout path.
 - The clone has no `.covmap/objects/` content and no `.covmap/local/peers`.
@@ -34,11 +37,13 @@ git status --short
 The first `peer ls` reports `impl` as unbound. Offline verification checks the
 local source endpoint and hydrates the clean live object while leaving the
 external target unchecked. Binding supplies only checkout-local resolution;
-it must not rewrite the committed connection.
+it must not rewrite the committed connection or selection policy.
 
 ## Success criteria (graded)
 
 - The connection still has byte-identical `target_peer=impl` metadata.
+- Global and covering-specific selection policy is byte-identical to the
+  author's tracked policy.
 - Full `covmap fsck` passes and `show` resolves the mapping.
 - The local covering cache was hydrated.
 - `.covmap/local/peers` resolves `impl` to the review implementation clone.

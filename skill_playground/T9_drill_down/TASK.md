@@ -51,8 +51,10 @@ view that resolves the relation — not to dump whole coverings and grep.
    ```
 
    This prints the segment plus its resolved outgoing link — the handler
-   (`@impl-delete`, `handlers.rs:19..29`) it maps to — in one call. A
-   region view (`covmap show main:api.md:18..24`) works too.
+   (`@impl-delete`, `handlers.rs:19..29`) it maps to — and the segment's
+   recorded content in one call. A region view (`covmap show
+   main:api.md:18..24`) shows every intersecting source segment in full with
+   its content and mapping. Add `--no-content` for relationships only.
 
 4. **Trace the auth concern** — the label lens, one call:
 

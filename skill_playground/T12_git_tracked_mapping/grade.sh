@@ -31,6 +31,15 @@ check "connection stores a peer alias and no absolute target path" bash -c "
   ! grep -q '^# target_repo=' review/spec-clone/.covmap/connections/spec_to_impl
 "
 
+check "tracked selection policy is unchanged in the clone" bash -c "
+  cmp author/spec/.covmap/include review/spec-clone/.covmap/include &&
+  cmp author/spec/.covmap/selections/main/include \
+      review/spec-clone/.covmap/selections/main/include &&
+  cd review/spec-clone &&
+  git ls-files --error-unmatch .covmap/include \
+      .covmap/selections/main/include >/dev/null
+"
+
 check "the clone's local covering object was hydrated" bash -c "
   [[ \$(find review/spec-clone/.covmap/objects -type f | wc -l | tr -d ' ') -eq 1 ]]
 "

@@ -28,7 +28,7 @@
 4. Run `covmap fsck --broken-links` — it now lists the Put link.
 5. Re-link to the new hash:
    `covmap unlink cache_links <old_put_hash> <impl_hash>`
-   `covmap link   cache_links <new_put_hash> <impl_hash> "Put (LRU)"`
+   `covmap link   cache_links <new_put_hash> <impl_hash> -m "Put (LRU)"`
 6. Verify with `covmap status` that the connection has 3 links and
    0 broken, and `covmap fsck --broken-links` produces no output.
 

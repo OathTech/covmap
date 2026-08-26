@@ -34,7 +34,8 @@ via the [covmap skill](../../.claude/skills/covmap/SKILL.md).
   then apply labels explicitly and verify the resulting complete partition.
 - **T12_git_tracked_mapping** — restore a committed cross-repository mapping
   in a differently arranged clone by hydrating source-backed objects and
-  binding its stable peer alias without changing tracked bytes.
+  binding its stable peer alias without changing tracked mapping or selection
+  policy bytes.
 
 ## Running a task
 

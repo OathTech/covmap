@@ -24,6 +24,13 @@ check "all links reference impl hash" bash -c "
   count=\$( ( cd spec && \"$COVMAP_BIN\" ls-links queue_links | awk '{print \$2}' | grep -c '^${IMPL_H}\$' ) )
   [[ \$count -eq 3 ]]
 "
+check "every link carries a note" bash -c "
+  ( cd spec && \"$COVMAP_BIN\" ls-links queue_links ) \
+    | awk -F'\t' 'NF >= 3 && \$3 != \"\" {noted++} END {exit noted == 3 ? 0 : 1}'
+"
+check "at least one note has two paragraphs" bash -c "
+  ( cd spec && \"$COVMAP_BIN\" ls-links queue_links ) | grep -qF '\\n\\n'
+"
 check "fsck passes (spec)"           bash -c "cd spec && \"$COVMAP_BIN\" fsck"
 check "fsck passes (impl)"           bash -c "cd impl_rs && \"$COVMAP_BIN\" fsck"
 

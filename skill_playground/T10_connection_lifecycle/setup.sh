@@ -10,4 +10,4 @@ set -euo pipefail
 "$COVMAP_BIN" name main:guide.md:3 old-source >/dev/null
 "$COVMAP_BIN" name main:guide.md:7 target >/dev/null
 "$COVMAP_BIN" connect main main audit >/dev/null
-"$COVMAP_BIN" link audit @old-source @target "same-repo rationale" >/dev/null
+"$COVMAP_BIN" link audit @old-source @target -m "same-repo rationale" >/dev/null

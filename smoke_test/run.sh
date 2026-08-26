@@ -42,17 +42,35 @@ hr "init repo B (impl_rs)"
 hr "cover both (one whole-file unknown segment per file)"
 ( cd "$WORK/spec" && "$COVMAP_BIN" cover )
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" cover )
-[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
-  || { echo "  FAIL: init did not create format 3"; exit 1; }
+[[ $(cat "$WORK/spec/.covmap/version") == "5" ]] \
+  || { echo "  FAIL: init did not create format 5"; exit 1; }
 cmp -s "$WORK/spec/.covmap/.gitignore" <(printf '%s' \
 "# Local and reconstructible covmap state.
-# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+# Commit selection policy, coverings, connections, and covmap metadata.
 /local/
 /objects/
 /iterators/
 /*.html
-*.tmp
+\#covmap-tmp-*.tmp
 ") || { echo "  FAIL: generated .covmap/.gitignore differs from policy"; exit 1; }
+
+hr "tmp-suffixed covering refs remain Git-trackable"
+TMP_POLICY="$WORK/tmp_policy"
+mkdir -p "$TMP_POLICY"
+printf 'tracked\n' > "$TMP_POLICY/source.txt"
+( cd "$TMP_POLICY" && "$COVMAP_BIN" init >/dev/null \
+  && printf '/source.txt\n' > .covmap/include \
+  && "$COVMAP_BIN" cover release.tmp >/dev/null \
+  && : > '.covmap/coverings/#covmap-tmp-release.tmp.tmp' \
+  && git init -q \
+  && git add .covmap )
+TMP_STAGED=$( cd "$TMP_POLICY" && git diff --cached --name-only )
+printf '%s\n' "$TMP_STAGED" | grep -qxF '.covmap/coverings/release.tmp' \
+  || { echo "  FAIL: tmp-suffixed covering ref was not staged"; exit 1; }
+if printf '%s\n' "$TMP_STAGED" | grep -qF '#covmap-tmp-release.tmp.tmp'; then
+  echo "  FAIL: reserved atomic temp file was staged"
+  exit 1
+fi
 
 hr "default Git publication policy stages refs but not local state"
 ( cd "$WORK/spec" && mkdir -p .covmap/objects/aa .covmap/iterators .covmap/local \
@@ -75,6 +93,7 @@ if ( cd "$WORK/spec" && git ls-files .covmap/report.html .covmap/objects/aa/.par
   echo "  FAIL: generated report, nested temp, iterator, or binding was staged"
   exit 1
 fi
+rm -f "$WORK/spec/.covmap/iterators/session"
 ERROR_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }' )
 WIDGET_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-segments -l main | awk -F '\t' '$2 == "widget.md" { print $1 }' )
 
@@ -90,9 +109,13 @@ rm -rf "$WORK/spec/.covmap/objects"/*
 ( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse "${ERROR_HASH:0:8}" | grep -qF "$ERROR_HASH" )
 [[ $(find "$WORK/spec/.covmap/objects" -type f | wc -l | tr -d ' ') == "0" ]] \
   || { echo "  FAIL: live hash resolution unexpectedly populated the cache"; exit 1; }
-( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$ERROR_HASH" --content | grep -qF "# Errors" )
+( cd "$WORK/spec" && "$COVMAP_BIN" show "${ERROR_HASH:0:8}" \
+  | grep -Eq '^[[:space:]]*1 \| # Errors$' )
 [[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
-  || { echo "  FAIL: show --content did not warm its live object"; exit 1; }
+  || { echo "  FAIL: bare-hash show did not default to content or warm its live object"; exit 1; }
+BARE_COMPACT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "${ERROR_HASH:0:8}" --no-content )
+! printf '%s\n' "$BARE_COMPACT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: bare-hash --no-content emitted content"; exit 1; }
 rm -rf "$WORK/spec/.covmap/objects"/*
 ( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${ERROR_HASH:0:8}" | grep -qF "# Errors" )
 [[ -f "$(object_file "$WORK/spec" "$ERROR_HASH")" ]] \
@@ -183,7 +206,7 @@ REF_HASH_AFTER=$(shasum "$WORK/spec/.covmap/coverings/main" | awk '{print $1}')
   || { echo "  FAIL: rejected multi-cut changed the covering ref"; exit 1; }
 printf '%s\n' "$LEGACY_OUT" | grep -qF "Apply metadata afterward" \
   || { echo "  FAIL: legacy-label error omitted metadata composition guidance"; exit 1; }
-[[ $(cat "$WORK/spec/.covmap/version") == "3" ]] \
+[[ $(cat "$WORK/spec/.covmap/version") == "5" ]] \
   || { echo "  FAIL: atomic multi-cut changed the repository format"; exit 1; }
 
 hr "ls -l after splits (should be 7 widget.md segments + 1 errors.md segment)"
@@ -219,19 +242,52 @@ hr "link Increment + Decrement -> widget.rs"
 INC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Increment" | head -1 )
 DEC=$( cd "$WORK/spec"    && "$COVMAP_BIN" grep -l -c main "### Decrement" | head -1 )
 RS=$(  cd "$WORK/impl_rs" && "$COVMAP_BIN" ls-segments | head -1 )
-INCREMENT_NOTE="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
+INCREMENT_NOTE_FIRST="The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review."
+INCREMENT_NOTE_SECOND="Validated against the shared increment and decrement implementation."
+INCREMENT_NOTE=$'The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review.\n\nValidated against the shared increment and decrement implementation.'
+INCREMENT_PLUMBING='The increment contract maps to the shared widget implementation segment and keeps this rationale readable during connection review.\n\nValidated against the shared increment and decrement implementation.'
 echo "  inc:  $INC"
 echo "  dec:  $DEC"
 echo "  impl: $RS"
 # The Increment endpoint is given with a redundant `main:` covering prefix
 # (naming the source covering) — link accepts and strips it, like every
 # other segment-address command. Decrement uses the bare hash.
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" "$INCREMENT_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "main:$INC" "$RS" \
+  -m "$INCREMENT_NOTE_FIRST" -m "$INCREMENT_NOTE_SECOND" )
+grep -qF "# note 3" "$WORK/spec/.covmap/connections/widget_links" \
+  || { echo "  FAIL: format-5 link note stanza was not written"; exit 1; }
 # Name the target after the first link. The first stored endpoint remains the
 # resolving hash; the second is stored as @impl-widget. Degree must combine
 # both spellings into one target node.
 ( cd "$WORK/impl_rs" && "$COVMAP_BIN" name "main:$RS" impl-widget )
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "fn decrement" )
+if ( cd "$WORK/spec" \
+  && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget "positional note" >/dev/null 2>&1 ); then
+  echo "  FAIL: link accepted a positional note"
+  exit 1
+fi
+( cd "$WORK/spec" \
+  && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget -m one -m two >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -qF 'one\n\ntwo' ) \
+  || { echo "  FAIL: repeated link messages did not form paragraphs"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" @impl-widget -m "fn decrement" )
+
+hr "uniform repeated message input across annotate, link, and iterator"
+( cd "$WORK/spec" && "$COVMAP_BIN" annotate "main:$INC" \
+  -m "increment segment rationale" -m "kept separate for review" >/dev/null )
+[[ $(cd "$WORK/spec" && "$COVMAP_BIN" annotate "main:$INC") == \
+  $'increment segment rationale\n\nkept separate for review' ]] \
+  || { echo "  FAIL: repeated annotate messages did not form paragraphs"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe new main >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe next >/dev/null )
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe done \
+  -m "iterator verdict" -m "validation details" >/dev/null )
+ITER_AUDIT=$(cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe peek --all)
+[[ $(printf '%s\n' "$ITER_AUDIT" | wc -l | tr -d ' ') == \
+  $(cd "$WORK/spec" && "$COVMAP_BIN" ls main | wc -l | tr -d ' ') ]] \
+  || { echo "  FAIL: iterator plumbing changed row cardinality"; exit 1; }
+printf '%s\n' "$ITER_AUDIT" | grep -qF 'iterator verdict\n\nvalidation details' \
+  || { echo "  FAIL: repeated iterator messages were not escaped on one line"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter message_probe rm >/dev/null )
 
 hr "unbound peer degrades inspection but blocks target mutation"
 ( cd "$WORK/spec" && "$COVMAP_BIN" connect main impl:main disposable_peer_ref )
@@ -239,8 +295,19 @@ hr "unbound peer degrades inspection but blocks target mutation"
 UNBOUND_STATUS=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
 printf '%s\n' "$UNBOUND_STATUS" | grep -qF "unavailable: peer 'impl' is not bound"
 printf '%s\n' "$UNBOUND_STATUS" | grep -qF "0 source-broken, target unchecked"
-( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links | grep -qF "target unchecked" )
-( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" | grep -qF "(unchecked)" )
+UNBOUND_CONNECTION=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links )
+UNBOUND_SEGMENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" )
+if ! UNBOUND_LINK=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show widget_links "$INC" "$RS" ); then
+  echo "  FAIL: unavailable-target single-link inspection returned nonzero"
+  exit 1
+fi
+printf '%s\n' "$UNBOUND_CONNECTION" | grep -qF "target unchecked"
+printf '%s\n' "$UNBOUND_SEGMENT" | grep -qF "(unchecked)"
+printf '%s\n' "$UNBOUND_LINK" | grep -qF "target unchecked" \
+  && printf '%s\n' "$UNBOUND_LINK" | grep -q -- '^--- content source main:' \
+  && ! printf '%s\n' "$UNBOUND_LINK" | grep -q -- '^--- content target ' \
+  || { echo "  FAIL: unavailable target did not preserve successful source-only link inspection"; exit 1; }
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links >/dev/null )
 RESOLVE_ERR="$WORK/resolve.err"
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links 2>"$RESOLVE_ERR" \
@@ -279,9 +346,14 @@ cmp "$WORK/spec/.covmap/connections/widget_links" \
   || { echo "  FAIL: hydration or peer binding dirtied the clone"; exit 1; }
 
 hr "re-link with a new note updates it in place (not a no-op)"
-( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" "fn decrement (revised)" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" -m "fn decrement (revised)" )
 ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement (revised)" \
   && echo "  note updated OK" || { echo "  FAIL: note not updated"; exit 1; } )
+( cd "$WORK/spec" && "$COVMAP_BIN" link widget_links "$DEC" "$RS" -m "" )
+if ( cd "$WORK/spec" && "$COVMAP_BIN" ls-links widget_links | grep -q "fn decrement" ); then
+  echo "  FAIL: explicit empty link message did not clear the note"
+  exit 1
+fi
 
 hr "review surfaces: region union, resolved degree, wrapped notes, stable plumbing"
 SHOW_HELP=$( "$COVMAP_BIN" show --help )
@@ -293,6 +365,13 @@ LS_HELP=$( "$COVMAP_BIN" ls --help )
 printf '%s\n' "$LS_HELP" | grep -qF "list segments, optionally narrowed to regions" \
   && printf '%s\n' "$TOP_HELP" | grep -qF "list segments, optionally narrowed to regions" \
   || { echo "  FAIL: focused and top-level ls help disagree"; exit 1; }
+if CONNECTION_ARITY_ERROR=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show widget_links aaa 2>&1 ); then
+  echo "  FAIL: show connection accepted one endpoint"
+  exit 1
+fi
+[[ "$CONNECTION_ARITY_ERROR" == *"expected no endpoints or exactly <A> <B>; got 1 endpoint argument(s)"* ]] \
+  || { echo "  FAIL: show connection did not explain its endpoint arity"; exit 1; }
 
 MULTI_LS=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main errors.md widget.md:10..20 widget.md:14..20 )
 printf '%s\n' "$MULTI_LS"
@@ -302,6 +381,104 @@ printf '%s\n' "$MULTI_LS"
   && $(printf '%s\n' "$MULTI_LS" | grep -c 'widget.md') == "3" ]] \
   && ! printf '%s\n' "$MULTI_LS" | grep -q 'widget.md:1..5' \
   || { echo "  FAIL: multi-region ls did not restrict the union"; exit 1; }
+
+REGION_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show main:widget.md:10..17 )
+[[ $(printf '%s\n' "$REGION_CONTENT" | grep -c -- '^--- content ') == "2" ]] \
+  && printf '%s\n' "$REGION_CONTENT" | grep -Eq '^10 \| ### Increment$' \
+  && printf '%s\n' "$REGION_CONTENT" | grep -Eq '^14 \| ### Decrement$' \
+  || { echo "  FAIL: region show did not default to one content block per segment"; exit 1; }
+REGION_STRADDLING=$( cd "$WORK/spec" && "$COVMAP_BIN" show main:widget.md:11..15 )
+[[ $(printf '%s\n' "$REGION_STRADDLING" | grep -c -- '^--- content ') == "2" ]] \
+  && printf '%s\n' "$REGION_STRADDLING" | grep -Eq '^[[:space:]]*10 \| ### Increment$' \
+  && printf '%s\n' "$REGION_STRADDLING" | grep -Eq '^[[:space:]]*16 \| `decrement` decreases' \
+  || { echo "  FAIL: straddling region clipped intersecting segments to query boundaries"; exit 1; }
+REGION_COMPACT=$( cd "$WORK/spec" && "$COVMAP_BIN" show main:widget.md:10..17 --no-content )
+! printf '%s\n' "$REGION_COMPACT" | grep -q -- '^--- content ' \
+  && printf '%s\n' "$REGION_COMPACT" | grep -q -- '    -> ' \
+  || { echo "  FAIL: region --no-content did not retain compact relationships"; exit 1; }
+LABEL_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show --label Increment main --content-plain )
+[[ $(printf '%s\n' "$LABEL_CONTENT" | grep -c -- '^--- content ') == "1" ]] \
+  && printf '%s\n' "$LABEL_CONTENT" | grep -qE '^### Increment$' \
+  && ! printf '%s\n' "$LABEL_CONTENT" | grep -qF '10 | ### Increment' \
+  || { echo "  FAIL: label show did not emit plain segment content"; exit 1; }
+LABEL_COMPACT=$( cd "$WORK/spec" && "$COVMAP_BIN" show --label Increment main )
+! printf '%s\n' "$LABEL_COMPACT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: label lens stopped being compact by default"; exit 1; }
+SEGMENT_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" )
+printf '%s\n' "$SEGMENT_CONTENT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: focused segment did not default to numbered content"; exit 1; }
+SEGMENT_COMPACT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$INC" --no-content )
+! printf '%s\n' "$SEGMENT_COMPACT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: focused segment --no-content emitted content"; exit 1; }
+LINK_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links "$INC" "$RS" )
+[[ $(printf '%s\n' "$LINK_CONTENT" | grep -c -- '^--- content ') == "2" ]] \
+  && printf '%s\n' "$LINK_CONTENT" | grep -q -- '^--- content source main:' \
+  && printf '%s\n' "$LINK_CONTENT" | grep -q -- '^--- content target main:@impl-widget ---$' \
+  || { echo "  FAIL: single-link show did not emit role-qualified endpoint content"; exit 1; }
+LINK_PLAIN=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show widget_links "$INC" "$RS" --content-plain )
+[[ $(printf '%s\n' "$LINK_PLAIN" | grep -c -- '^--- content ') == "2" ]] \
+  && printf '%s\n' "$LINK_PLAIN" | grep -qE '^### Increment$' \
+  && printf '%s\n' "$LINK_PLAIN" | grep -qE '^pub struct Widget \{$' \
+  && ! printf '%s\n' "$LINK_PLAIN" | grep -qF '10 | ### Increment' \
+  || { echo "  FAIL: single-link --content-plain did not emit raw endpoint bytes"; exit 1; }
+LINK_COMPACT=$( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links "$INC" "$RS" --no-content )
+! printf '%s\n' "$LINK_COMPACT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: single-link --no-content emitted content"; exit 1; }
+if CONTENT_FLAG_ERROR=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show main:widget.md:10..17 --content plain 2>&1 ); then
+  echo "  FAIL: show accepted plain as a stray positional content value"
+  exit 1
+fi
+[[ "$CONTENT_FLAG_ERROR" == *"use --content-plain"* ]] \
+  || { echo "  FAIL: show did not point the old plain spelling to --content-plain"; exit 1; }
+if CONTENT_CONFLICT=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show "main:$INC" --no-content --content 2>&1 ); then
+  echo "  FAIL: show accepted conflicting content modes"
+  exit 1
+fi
+printf '%s\n' "$CONTENT_CONFLICT" | grep -qF "content format specified more than once" \
+  || { echo "  FAIL: show content-mode conflict was not diagnosed"; exit 1; }
+if SUMMARY_CONTENT=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show widget_links --content --all 2>&1 ); then
+  echo "  FAIL: connection summary accepted a positive content mode"
+  exit 1
+fi
+printf '%s\n' "$SUMMARY_CONTENT" \
+  | grep -qF "show connection 'widget_links': --content is not valid for a connection summary" \
+  || { echo "  FAIL: summary content error did not win over valid --all"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" show widget_links --no-content --all >/dev/null )
+if COVERING_CONTENT=$( cd "$WORK/spec" && "$COVMAP_BIN" show main --content 2>&1 ); then
+  echo "  FAIL: covering summary accepted a positive content mode"
+  exit 1
+fi
+printf '%s\n' "$COVERING_CONTENT" \
+  | grep -qF "show covering 'main': --content is not valid for a covering summary" \
+  || { echo "  FAIL: covering summary content error was not explicit"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" show main --no-content >/dev/null )
+if REGION_ALL=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show main:widget.md:10..17 --all 2>&1 ); then
+  echo "  FAIL: region view accepted connection-only --all"
+  exit 1
+fi
+printf '%s\n' "$REGION_ALL" | grep -qF -- "--all is only valid for a connection summary" \
+  || { echo "  FAIL: region --all rejection was not explicit"; exit 1; }
+
+( cd "$WORK/spec" && "$COVMAP_BIN" iter content_probe new main --label Increment >/dev/null )
+ITER_NEXT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter content_probe next )
+printf '%s\n' "$ITER_NEXT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: iterator next did not default to frozen content"; exit 1; }
+ITER_CURRENT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter content_probe current )
+printf '%s\n' "$ITER_CURRENT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: iterator current did not default to frozen content"; exit 1; }
+ITER_CURRENT_COMPACT=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" iter content_probe current --no-content )
+! printf '%s\n' "$ITER_CURRENT_COMPACT" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: iterator current --no-content emitted content"; exit 1; }
+ITER_PEEK=$( cd "$WORK/spec" && "$COVMAP_BIN" iter content_probe peek )
+! printf '%s\n' "$ITER_PEEK" | grep -q -- '^--- content ' \
+  || { echo "  FAIL: iterator peek stopped being compact by default"; exit 1; }
+( cd "$WORK/spec" && "$COVMAP_BIN" iter content_probe rm >/dev/null )
 
 REGION_LINKED=$( cd "$WORK/spec" && "$COVMAP_BIN" ls -l main widget.md:10..13 --linked )
 [[ $(printf '%s\n' "$REGION_LINKED" | wc -l | tr -d ' ') == "1" \
@@ -343,11 +520,13 @@ printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "2 <- unknown widget.rs:1..28" \
   || { echo "  FAIL: resolved fan-in hub was not reported"; exit 1; }
 printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    The increment contract maps to the shared widget implementation segment" \
   || { echo "  FAIL: long link note was not wrapped beneath the endpoint pair"; exit 1; }
+printf '%s\n' "$SHOW_WIDGET_LINKS" | grep -qF "    Validated against the shared increment and decrement implementation." \
+  || { echo "  FAIL: multiline link note paragraph was not rendered"; exit 1; }
 
 RESOLVED_PLUMBING=$( cd "$WORK/spec" && "$COVMAP_BIN" ls-links --resolve widget_links )
 [[ $(printf '%s\n' "$RESOLVED_PLUMBING" | wc -l | tr -d ' ') == "2" ]] \
   || { echo "  FAIL: resolved plumbing changed row cardinality"; exit 1; }
-printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_NOTE" \
+printf '%s\n' "$RESOLVED_PLUMBING" | grep -qF "$INCREMENT_PLUMBING" \
   || { echo "  FAIL: resolved plumbing changed the long note"; exit 1; }
 STATUS_REVIEW=$( cd "$WORK/spec" && "$COVMAP_BIN" status )
 if printf '%s\n' "$STATUS_REVIEW" | grep -q "degree"; then
@@ -417,6 +596,22 @@ if CAT_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" cat-segment "${DEC:0:8}" 2>&1 )
 fi
 printf '%s\n' "$CAT_DRIFT" | grep -qF "resolved but recorded bytes are unavailable" \
   || { echo "  FAIL: cat-segment did not distinguish a live hash from missing bytes"; exit 1; }
+if SHOW_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" show "main:$DEC" 2>&1 ); then
+  echo "  FAIL: focused show succeeded without recorded bytes"
+  exit 1
+fi
+printf '%s\n' "$SHOW_DRIFT" | grep -qF "segment $DEC" \
+  && printf '%s\n' "$SHOW_DRIFT" | grep -qF "content unavailable" \
+  || { echo "  FAIL: focused content failure did not preserve context and diagnose the error"; exit 1; }
+if REGION_DRIFT=$( cd "$WORK/spec" \
+  && "$COVMAP_BIN" show main:widget.md:10..17 2>&1 ); then
+  echo "  FAIL: region show succeeded with unavailable selected content"
+  exit 1
+fi
+printf '%s\n' "$REGION_DRIFT" | grep -Eq '^[[:space:]]*10 \| ### Increment$' \
+  && printf '%s\n' "$REGION_DRIFT" | grep -qF "widget.md:14..17" \
+  && printf '%s\n' "$REGION_DRIFT" | grep -qF "content unavailable" \
+  || { echo "  FAIL: region content failure suppressed context or later output"; exit 1; }
 if ITER_DRIFT=$( cd "$WORK/spec" && "$COVMAP_BIN" iter drift_probe new main --label Decrement 2>&1 ); then
   echo "  FAIL: iter new froze a task whose recorded bytes were unavailable"
   exit 1
@@ -473,8 +668,8 @@ printf '%s\n' "$SHOW_SELF" | grep -qF "main -> main (self-map)" \
 
 REPAIR_NOTE='literal $HOME, apostrophe '"'"', and `touch SHOULD_NOT_EXIST`'
 SECOND_REPAIR_NOTE='fan-out second link'
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target "$REPAIR_NOTE" )
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two "$SECOND_REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target -m "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source @audit-target-two -m "$SECOND_REPAIR_NOTE" )
 
 hr "subdivision diagnoses name narrowing and broken hash endpoints"
 NAME_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:@audit-source 8 )
@@ -487,7 +682,7 @@ printf '%s\n' "$NAME_SPLIT" | grep -qF "inbound connections stored in another re
   || { echo "  FAIL: subdivision omitted the inbound-discovery limit"; exit 1; }
 
 STATUS_HASH=$( cd "$WORK/spec" && "$COVMAP_BIN" rev-parse main:widget.md:26 )
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two "hash subdivision" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit "$STATUS_HASH" @audit-target-two -m "hash subdivision" )
 HASH_SPLIT=$( cd "$WORK/spec" && "$COVMAP_BIN" split main:widget.md:26 28 )
 printf '%s\n' "$HASH_SPLIT"
 printf '%s\n' "$HASH_SPLIT" | grep -qF "hash endpoint '$STATUS_HASH' will become broken" \
@@ -550,7 +745,7 @@ hr "unlink accepts exact @name endpoints"
 ( cd "$WORK/spec" && "$COVMAP_BIN" unlink self_audit @audit-source-next @audit-target-next )
 [[ $( cd "$WORK/spec" && "$COVMAP_BIN" ls-links self_audit | wc -l | tr -d ' ' ) == "1" ]] \
   || { echo "  FAIL: name-addressed unlink did not remove the link"; exit 1; }
-( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next "$REPAIR_NOTE" )
+( cd "$WORK/spec" && "$COVMAP_BIN" link self_audit @audit-source-next @audit-target-next -m "$REPAIR_NOTE" )
 
 hr "disconnect removes only the connection ref and warns about the default report"
 ( cd "$WORK/spec" && "$COVMAP_BIN" html --connection self_audit )

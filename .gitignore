@@ -20,6 +20,9 @@ skill_playground/_runs/
 tutorial/_work/
 tutorial/_play/
 
+# Local review artifacts
+.review_scratch/
+
 # Editor/OS detritus
 .DS_Store
 *.swp

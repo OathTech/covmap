@@ -2,10 +2,9 @@
 #
 # run_tutorial.sh — the executable companion to TUTORIAL.md.
 #
-# It builds a throwaway workspace under tutorial/_work/ holding a tiny
-# Markdown spec and a Rust implementation, then runs every command the
-# tutorial walks through, in order. The script is the source of truth:
-# TUTORIAL.md narrates exactly these steps.
+# TUTORIAL.md is the source of truth. This companion builds a throwaway
+# workspace under tutorial/_work/, executes its walkthrough in order, and
+# adds assertions plus a few explicitly documented robustness checks.
 #
 # Usage:
 #   ./run_tutorial.sh          # run the whole tutorial in a fresh _work/
@@ -92,29 +91,37 @@ repair. Workspace: $WORK
 EOF
 
 #############################################################################
-hr "1. init + ignore + cover  (REQ1, REQ6, REQ7, REQ18)"
+hr "1. init + select + cover  (REQ1, REQ6, REQ7, REQ18)"
 #############################################################################
 ( cd "$WORK/spec"    && run init )
 ( cd "$WORK/impl_rs" && run init )
 
-# Keep build output out of the covering BEFORE the first cover.
+# Select source-of-truth files positively, with build output as a hard veto.
+printf '/queue.md\n/errors.md\n' > "$WORK/spec/.covmap/include"
 printf 'build/\n' > "$WORK/spec/.covmap/ignore"
-echo "  (wrote spec/.covmap/ignore: build/)"
+printf '/queue.rs\n' > "$WORK/impl_rs/.covmap/include"
+echo "  (wrote repository includes and shared ignore)"
 
 ( cd "$WORK/spec"    && run cover )
 ( cd "$WORK/impl_rs" && run cover )
 
 assert "build/ was ignored (not covered)" \
   bash -c "! ( cd '$WORK/spec' && '$COVMAP' ls main | grep -q 'build/artifact' )"
+assert "global positive selection covered exactly the two spec sources" \
+  bash -c "[[ \$(cd '$WORK/spec' && '$COVMAP' ls-segments main | wc -l | tr -d ' ') -eq 2 ]]"
 
 #############################################################################
 hr "2. inspect the covering  (REQ12, REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run status )
 ( cd "$WORK/spec" && run ls -l )
+( cd "$WORK/spec" && run show main:queue.md )
 
-SPEC_HASH="$(cd "$WORK/spec" && "$COVMAP" ls main | head -1 | cut -f1)"
+ERROR_HASH="$(cd "$WORK/spec" && "$COVMAP" ls-segments -l main | awk -F '\t' '$2 == "errors.md" { print $1 }')"
 QUEUE_HASH="$(cd "$WORK/spec" && "$COVMAP" ls-segments -l main | awk -F '\t' '$2 == "queue.md" { print $1 }')"
+SPEC_HASH="$ERROR_HASH"
+assert "initial segment hashes match the TUTORIAL2 transcript" \
+  bash -c "[[ '$ERROR_HASH' = 238857a21a1ee053 && '$QUEUE_HASH' = c7da83ee193093c5 ]]"
 echo "  (clearing reconstructible live object caches)"
 rm -rf "$WORK/spec/.covmap/objects"/* "$WORK/impl_rs/.covmap/objects"/*
 ( cd "$WORK/spec" && run fsck --offline )
@@ -244,7 +251,7 @@ hr "8. annotate a segment with why it was cut  (REQ22)"
     -m "Core enqueue op — mapped to the Rust impl." \
     -m "Cut as its own segment so the spec<->impl link is 1:1." )
 ( cd "$WORK/spec" && run annotate main:@enqueue-op )   # no -m: print the message
-( cd "$WORK/spec" && run show main:@enqueue-op | sed -n '1,6p' )
+( cd "$WORK/spec" && run show main:@enqueue-op )
 
 assert "the message is stored on the segment (shown by ls -l)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' ls -l main | grep -qF 'Core enqueue op' )"
@@ -255,10 +262,14 @@ hr "9. connect spec -> impl and link by name  (REQ2, REQ10, REQ16)"
 ( cd "$WORK/spec" && run peer bind impl ../impl_rs )
 ( cd "$WORK/spec" && run connect main impl:main queue_links )
 IMPL=$( cd "$WORK/impl_rs" && "$COVMAP" ls-segments )
-DEQUEUE_NOTE="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
-( cd "$WORK/spec" && run link queue_links @enqueue-op        "$IMPL" "fn enqueue" )
-( cd "$WORK/spec" && run link queue_links @dequeue-op        "$IMPL" "$DEQUEUE_NOTE" )
-( cd "$WORK/spec" && run link queue_links @queuefull-meaning "$IMPL" "QueueFull guard" )
+DEQUEUE_NOTE_FIRST="The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review."
+DEQUEUE_NOTE_SECOND="Validated against the empty-queue branch in queue.rs."
+DEQUEUE_NOTE=$'The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.'
+DEQUEUE_PLUMBING='The dequeue operation delegates empty-queue handling to the same implementation segment while preserving the mapping rationale for review.\n\nValidated against the empty-queue branch in queue.rs.'
+( cd "$WORK/spec" && run link queue_links @enqueue-op        queue.rs:1 -m "fn enqueue" )
+( cd "$WORK/spec" && run link queue_links @dequeue-op        queue.rs:1 \
+    -m "$DEQUEUE_NOTE_FIRST" -m "$DEQUEUE_NOTE_SECOND" )
+( cd "$WORK/spec" && run link queue_links @queuefull-meaning queue.rs:1 -m "QueueFull guard" )
 ( cd "$WORK/spec" && run ls-links queue_links )
 
 assert "connection has 3 links, all by @name" \
@@ -268,7 +279,7 @@ echo "  clone portability:"
 ( cd "$WORK/spec" && mkdir -p .covmap/iterators \
   && : > .covmap/iterators/tutorial-session \
   && : > .covmap/report.html \
-  && : > .covmap/nested.tmp )
+  && : > '.covmap/#covmap-tmp-nested.tmp' )
 ( cd "$WORK/spec" && git init -q && git add queue.md errors.md .covmap \
   && git -c user.name=covmap -c user.email=covmap@example.invalid commit -qm "tutorial spec" )
 ( cd "$WORK/impl_rs" && git init -q && git add queue.rs .covmap \
@@ -283,7 +294,10 @@ assert "clone contains no peer binding" \
 assert "clone contains no iterator, report, or temporary state" \
   bash -c "[[ ! -e '$WORK/review/spec/.covmap/iterators/tutorial-session' \
     && ! -e '$WORK/review/spec/.covmap/report.html' \
-    && ! -e '$WORK/review/spec/.covmap/nested.tmp' ]]"
+    && ! -e '$WORK/review/spec/.covmap/#covmap-tmp-nested.tmp' ]]"
+assert "clone contains tracked repository selection policy" \
+  bash -c "[[ -f '$WORK/review/spec/.covmap/include' \
+    && -f '$WORK/review/spec/.covmap/ignore' ]]"
 ( cd "$WORK/review/spec" && run fsck --offline --hydrate )
 ( cd "$WORK/review/spec" && run peer bind impl ../deps/implementation )
 ( cd "$WORK/review/spec" && run fsck )
@@ -293,7 +307,7 @@ assert "clone reuses identical committed connection bytes" \
 assert "clone-local hydration and binding stay ignored" \
   bash -c "[[ -z \$(cd '$WORK/review/spec' && git status --short) ]]"
 rm -f "$WORK/spec/.covmap/iterators/tutorial-session" \
-  "$WORK/spec/.covmap/nested.tmp"
+  "$WORK/spec/.covmap/#covmap-tmp-nested.tmp"
 
 echo "  same-repository shorthand and lifecycle:"
 ( cd "$WORK/spec" && run connect main main local_preview )
@@ -324,7 +338,15 @@ hr "10. inspect: show, grep, diff, fsck, status  (REQ15, REQ19, REQ20)"
 # it against the refined `main`. Shared segments print with `=`, segments
 # only in one side with `-` / `+`.
 ( cd "$WORK/spec" && run cover alt )
+( cd "$WORK/spec" && run status alt )
 ( cd "$WORK/spec" && run diff main alt )
+assert "alt uses the repository include and covers both source files" \
+  bash -c "
+    out=\$(cd '$WORK/spec' && '$COVMAP' ls alt)
+    [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 2 ]] \
+      && printf '%s\n' \"\$out\" | grep -q 'queue.md' \
+      && printf '%s\n' \"\$out\" | grep -q 'errors.md'
+  "
 ( cd "$WORK/spec" && run fsck )
 ( cd "$WORK/spec" && run status )
 
@@ -334,11 +356,13 @@ assert "fsck passes after linking" bash -c "( cd '$WORK/spec' && '$COVMAP' fsck 
 hr "10b. bounded drill-down: understand a region in a few calls  (REQ23)"
 #############################################################################
 # The inspection access pattern: narrow to a region, then `show` it to see
-# each segment together with what it maps to — resolved to label+loc, in one
-# self-sufficient call (no bare-hash hand-joining).
+# each segment's content together with what it maps to — resolved to
+# label+loc, in one self-sufficient call (no bare-hash hand-joining).
 ( cd "$WORK/spec" && run ls -l main queue.md errors.md ) # union of two files
-( cd "$WORK/spec" && run show main:queue.md )            # region: segments + images
+( cd "$WORK/spec" && run show main:queue.md )            # file decomposition + images
+( cd "$WORK/spec" && run show main:queue.md:8..11 )      # straddles two full segments
 ( cd "$WORK/spec" && run show --label reviewed main )    # concern across files
+( cd "$WORK/spec" && run show queue_links @enqueue-op "$IMPL" ) # both endpoint contents
 ( cd "$WORK/spec" && run show queue_links )               # degree hubs + notes
 
 assert "multi-region ls returns both files once in covering order" bash -c "
@@ -359,11 +383,12 @@ assert "show queue_links reports the resolved fan-in hub" bash -c "
 assert "show queue_links wraps the long mapping note" bash -c "
   out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links)
   printf '%s\n' \"\$out\" | grep -q '^    The dequeue operation delegates empty-queue handling to the same' \
-    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review'"
+    && printf '%s\n' \"\$out\" | grep -q '^    implementation segment while preserving the mapping rationale for review' \
+    && printf '%s\n' \"\$out\" | grep -q '^    Validated against the empty-queue branch in queue.rs.'"
 assert "ls-links --resolve keeps the long note on one TAB record" bash -c "
   out=\$(cd '$WORK/spec' && '$COVMAP' ls-links --resolve queue_links)
   [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 3 ]] \
-    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_NOTE\""
+    && printf '%s\n' \"\$out\" | grep -qF \"$DEQUEUE_PLUMBING\""
 # `status` surfaces per-connection coverage.
 assert "status reports connection coverage" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' status ) | grep -q 'coverage'"
@@ -372,6 +397,26 @@ assert "status remains terse and omits degree detail" bash -c "
 # region show resolves the mapping (the enqueue op maps to the impl).
 assert "region show resolves a link to its target loc" bash -c "
   ( cd '$WORK/spec' && '$COVMAP' show main:queue.md ) | grep -q '\->'"
+assert "file show defaults to one content block per source segment" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show main:queue.md)
+  [[ \$(printf '%s\n' \"\$out\" | grep -c '^--- content ') -eq 4 ]]"
+assert "straddling range renders both intersecting segments in full" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show main:queue.md:8..11)
+  printf '%s\n' \"\$out\" | grep -q '^--- content @enqueue-op ---' \
+    && printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*5 \| ## Enqueue' \
+    && printf '%s\n' \"\$out\" | grep -q '^--- content @dequeue-op ---' \
+    && printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*10 \| ## Dequeue'"
+assert "region --no-content keeps relationships and suppresses content" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show main:queue.md --no-content)
+  printf '%s\n' \"\$out\" | grep -q '\->' \
+    && ! printf '%s\n' \"\$out\" | grep -q '^--- content '"
+assert "label lens stays compact by default" bash -c "
+  ! ( cd '$WORK/spec' && '$COVMAP' show --label reviewed main ) | grep -q '^--- content '"
+assert "single-link show includes both role-qualified endpoint contents" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' show queue_links @enqueue-op '$IMPL')
+  [[ \$(printf '%s\n' \"\$out\" | grep -c '^--- content ') -eq 2 ]] \
+    && printf '%s\n' \"\$out\" | grep -q '^--- content source main:@enqueue-op ---' \
+    && printf '%s\n' \"\$out\" | grep -q '^--- content target main:'"
 
 #############################################################################
 hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
@@ -390,18 +435,36 @@ hr "11. iterator: freeze the covering into a worklist and sweep it  (REQ21)"
 assert "peek lists all 7 pending tasks (the choosable set)" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter review peek | wc -l ) ) -eq 7 ]]"
 
-# `next --content` advances AND dumps the frozen bytes in one call — the
-# review affordance (documented on next/current/peek alike). Regression
-# guard: this must be accepted, not rejected as an unexpected argument.
-assert "next --content advances and emits frozen content" \
+# Exercise content overrides on an assertion-only iterator so the documented
+# `review` loop below still begins with all seven tasks pending.
+( cd "$WORK/spec" && "$COVMAP" iter display new main --order file >/dev/null )
+
+# `next` advances and prints frozen content with the same numbered renderer
+# as `show`; `--no-content` is the compact scripting override.
+assert "next advances and emits frozen content by default" \
   bash -c "
-    out=\$( cd '$WORK/spec' && '$COVMAP' iter review next --content )
-    # more than one line = handle line + at least one content line
-    [[ \$(printf '%s\n' \"\$out\" | wc -l) -gt 1 ]]
+    out=\$( cd '$WORK/spec' && '$COVMAP' iter display next )
+    printf '%s\n' \"\$out\" | grep -q -- '^--- content '
+    printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*[0-9]+ \| '
   "
-# That advanced onto (and printed) the first task; resolve it so the
-# canonical loop below picks up cleanly from the next pending task.
-( cd "$WORK/spec" && "$COVMAP" iter review done -m "audited (with content)" >/dev/null )
+assert "current --no-content emits only the compact task row" \
+  bash -c "
+    [[ \$( cd '$WORK/spec' && '$COVMAP' iter display current --no-content | wc -l | tr -d ' ' ) -eq 1 ]]
+  "
+assert "current --content-plain emits raw frozen content" \
+  bash -c "
+    out=\$( cd '$WORK/spec' && '$COVMAP' iter display current --content-plain )
+    printf '%s\n' \"\$out\" | grep -q -- '^--- content '
+    ! printf '%s\n' \"\$out\" | grep -Eq '^[[:space:]]*[0-9]+ \| '
+  "
+# Resolve the assertion-only task to verify audit-note serialization.
+( cd "$WORK/spec" && "$COVMAP" iter display done \
+  -m "audited" -m "validation performed" >/dev/null )
+assert "iterator audit output escapes multiline notes onto one record" bash -c "
+  out=\$(cd '$WORK/spec' && '$COVMAP' iter display peek --all)
+  [[ \$(printf '%s\n' \"\$out\" | wc -l | tr -d ' ') -eq 7 ]] \
+    && printf '%s\n' \"\$out\" | grep -qF 'audited\\n\\nvalidation performed'"
+( cd "$WORK/spec" && "$COVMAP" iter display rm >/dev/null )
 
 # The manual controls — shown on a throwaway `plan` iterator so the `review`
 # sweep below stays pristine (iterators are cheap, independent overlays).
@@ -423,14 +486,15 @@ assert "rewind undid the skip (0 skipped on the plan iterator)" \
 
 # The canonical loop: `next` hands out the first pending task and is refused
 # until it is resolved, so every segment is visited exactly once. We `done`
-# each task with a one-line note (skipping nothing here). The loop body is
+# each task with the tutorial's two-paragraph audit note (skipping nothing).
+# The loop body is
 # kept comment-free: an interactive zsh treats a pasted `#` as a command,
 # not a comment, which would leave the current task unresolved and spin.
 ( cd "$WORK/spec" && bash -c '
   until "'"$COVMAP"'" iter review finished; do
-    line=$("'"$COVMAP"'" iter review next)
-    handle=$(printf "%s" "$line" | cut -f1)
-    "'"$COVMAP"'" iter review done -m "audited $handle" >/dev/null
+    "'"$COVMAP"'" iter review next
+    "'"$COVMAP"'" iter review done \
+      -m "audited" -m "validation performed"
   done
 ' )
 ( cd "$WORK/spec" && run iter review status )
@@ -444,13 +508,12 @@ assert "the sweep did not mutate the covering (fsck still clean)" \
   bash -c "( cd '$WORK/spec' && '$COVMAP' fsck )"
 
 # An iterator can be filtered to one label — e.g. a backfill of only the
-# not-yet-refined `unknown` segments. `alt` (step 9) is the whole-file
-# covering: two `unknown` segments (queue.md, errors.md), so this freezes
-# exactly those two tasks, narrowing the worklist to the backlog.
+# not-yet-refined `unknown` segments. `alt` (step 10) has one whole-file
+# segment for each selected source, so this freezes exactly two tasks.
 ( cd "$WORK/spec" && run iter backfill new alt --label unknown )
 ( cd "$WORK/spec" && run iter )        # bare `iter` lists every iterator
 
-assert "label-filtered iterator froze only the unknown segments" \
+assert "label-filtered iterator froze the two selected unknown segments" \
   bash -c "[[ \$( ( cd '$WORK/spec' && '$COVMAP' iter backfill status | grep -oE '/[0-9]+' | head -1 | tr -d / ) ) -eq 2 ]]"
 
 # Delete the iterators; the covering is untouched (they are pure overlays).
@@ -466,10 +529,9 @@ hr "12. T5-style drift: in-place edit + recut, link survives  (REQ13, REQ14)"
 cp "$FILES/queue.reworded.md" "$WORK/spec/queue.md"
 echo "  edit (files/queue.md -> files/queue.reworded.md):"
 diff "$FILES/queue.md" "$FILES/queue.reworded.md" | sed 's/^/    /' || true
-( cd "$WORK/spec" && run status main )
+( cd "$WORK/spec" && run status )
 echo "  (note: queue_links still shows 0 broken — the link is by @name)"
-DEQ=$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@dequeue-op"{print $1}' )
-( cd "$WORK/spec" && run recut "main:$DEQ" )
+( cd "$WORK/spec" && run recut main:@dequeue-op )
 ( cd "$WORK/spec" && run status main )
 
 assert "after recut: drift clean" \
@@ -520,7 +582,7 @@ hr "15. prune: drop a genuinely broken link  (REQ14)"
 #############################################################################
 # Demonstrate prune on a deliberately broken link: clear a segment's name,
 # which deletes that segment identity, breaking its link. Then prune drops it.
-( cd "$WORK/spec" && run name "main:$( cd "$WORK/spec" && "$COVMAP" ls -l main | awk -F'\t' '$5=="@queuefull-clause"{print $1}' )" - )
+( cd "$WORK/spec" && run name main:@queuefull-clause - )
 ( cd "$WORK/spec" && run fsck --broken-links || true )
 ( cd "$WORK/spec" && run prune queue_links )
 ( cd "$WORK/spec" && run status main )
@@ -530,11 +592,14 @@ hr "16. render the HTML report  (REQ20)"
 #############################################################################
 ( cd "$WORK/spec" && run html )
 echo "  open: $WORK/spec/.covmap/report.html"
+assert "HTML source, target, and compare views include file line numbers" \
+  bash -c "test \"\$(grep -o 'class=\\\"line-number\\\"' '$WORK/spec/.covmap/report.html' | wc -l | tr -d ' ')\" -ge 3"
 
 #############################################################################
 hr "Done"
 #############################################################################
-cat <<EOF
+if [[ "${KEEP:-0}" == "1" || "${1:-}" == "keep" ]]; then
+  cat <<EOF
 All tutorial steps ran successfully.
 
 Workspace kept at: $WORK
@@ -545,7 +610,8 @@ Workspace kept at: $WORK
 Re-run any time (it resets _work/ first):  ./run_tutorial.sh
 Remove the workspace:                       ./run_tutorial.sh clean
 EOF
-
-if [[ "${KEEP:-0}" != "1" && "${1:-}" != "keep" ]]; then
-  : # _work/ is intentionally kept by default so you can open the report.
+else
+  echo "All tutorial steps ran successfully."
+  echo "Removing $WORK (set KEEP=1 to preserve it for inspection)."
+  rm -rf "$WORK"
 fi

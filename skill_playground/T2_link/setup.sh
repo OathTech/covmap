@@ -14,4 +14,5 @@ set -euo pipefail
 ( cd spec && "$COVMAP_BIN" label main:queue.md:9  Dequeue  ) >/dev/null
 ( cd spec && "$COVMAP_BIN" label main:queue.md:14 Length   ) >/dev/null
 
-( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" queue_links ) >/dev/null
+( cd spec && "$COVMAP_BIN" peer bind impl ../impl_rs ) >/dev/null
+( cd spec && "$COVMAP_BIN" connect main impl:main queue_links ) >/dev/null

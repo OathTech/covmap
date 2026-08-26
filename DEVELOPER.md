@@ -17,7 +17,7 @@ is a lens on the same tool, and a change is not finished until all six agree.
 | b | **Requirements** | `REQUIREMENTS.md` | Coarse capabilities the implementation must provide, each derived from and mapped to the theory (via the `reqmap` connection in this repo's own `.covmap/`). |
 | c | **Implementation** | `src/` (incl. `#[cfg(test)]` unit tests) | The Rust CLI and its unit tests. *What covmap does.* |
 | d | **Skill** | `SKILL.md` + `skill_playground/` | The agent-facing workflow guide and its fixture-based evaluation tasks (T1–T12). *How to drive covmap.* |
-| e | **Tutorial** | `tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh` | A guided end-to-end tour; the script is the source of truth and doubles as an integration test. *How covmap feels in practice.* |
+| e | **Tutorial** | `tutorial/TUTORIAL.md` + `tutorial/run_tutorial.sh` | A guided end-to-end tour; the document defines the walkthrough and the derived script doubles as an integration test. *How covmap feels in practice.* |
 | f | **Glossary** | `GLOSSARY.md` | The shared vocabulary across the other artifacts, with cross-references to primary definitions. *What covmap's terms mean consistently.* |
 
 ## Consistency contract
@@ -42,8 +42,8 @@ layers rest on a settled definition.
    behavior and its edge cases.
 4. **Skill** — document the workflow in `SKILL.md`; add or extend a
    `skill_playground/` task if it introduces an agent-visible operation.
-5. **Tutorial** — add a step to `run_tutorial.sh` (with an assertion) and
-   narrate it in `TUTORIAL.md`.
+5. **Tutorial** — define the walkthrough in `TUTORIAL.md`, then derive the
+   matching `run_tutorial.sh` step and assertion from it.
 6. **Glossary** — add or amend entries for the capability's concepts and
    cross-reference their primary definitions.
 

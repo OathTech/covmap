@@ -24,7 +24,7 @@ LOGIN=$( cd spec && "$COVMAP_BIN" grep -l -c main "## Login" | head -1 )
 ( cd spec && "$COVMAP_BIN" name "main:$LOGIN" login-contract ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
 ( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" auth_links ) >/dev/null
-( cd spec && "$COVMAP_BIN" link auth_links @login-contract "$IMPL_H" "fn login" ) >/dev/null
+( cd spec && "$COVMAP_BIN" link auth_links @login-contract "$IMPL_H" -m "fn login" ) >/dev/null
 
 # Drift: tighten the Login contract wording. Same number of lines, so
 # the Login segment's boundaries are intact -- only its bytes change.

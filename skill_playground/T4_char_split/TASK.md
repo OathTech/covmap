@@ -42,7 +42,7 @@
    Confirm with `covmap show` that the segment's content is exactly
    the normative sentence.
 5. Link that clause segment to the single `impl_rs` segment:
-   `covmap link buffer_links <clause_hash> <impl_hash> "power-of-two capacity"`.
+   `covmap link buffer_links <clause_hash> <impl_hash> -m "power-of-two capacity"`.
 6. Run `covmap status` and `covmap fsck`; confirm the covering is
    still a clean partition and the link is not broken.
 

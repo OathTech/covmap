@@ -132,7 +132,7 @@ The generated `.covmap/.gitignore` is:
 /objects/
 /iterators/
 /*.html
-*.tmp
+\#covmap-tmp-*.tmp
 ```
 
 This file is a default Git hygiene policy, not a fence or guarantee.
@@ -151,7 +151,7 @@ The distinction is semantic:
 | `objects/` | ignored | local content cache reconstructible for every clean live segment |
 | `local/peers` | ignored | contains machine-specific checkout paths |
 | `iterators/` | ignored | cursor and task state are normally user/session-specific and high-churn |
-| HTML and `*.tmp` | ignored | generated output and interrupted atomic writes |
+| HTML and `#covmap-tmp-*.tmp` | ignored | generated output and interrupted atomic writes |
 
 ### Object cache and hydration
 
@@ -661,7 +661,8 @@ an on-disk format change:
   multi-cut/merge with an empty cache and with drift, offline/full fsck,
   interrupted migration resumption, format-1 chaining, deterministic migration
   alias collisions, migration preservation of a custom nested ignore file, and
-  nested atomic `*.tmp` ignores including object paths. Test the exact generated
+  reserved atomic-temp ignores including object paths without hiding valid
+  `.tmp`-suffixed project refs. Test the exact generated
   ignore file and `init` guidance; document that forced adds bypass ignores and
   that already-tracked objects/iterators require an explicit index removal.
 - **Skill** (`SKILL.md` + `skill_playground/`): teach committing `.covmap/`,

@@ -53,6 +53,14 @@ of file $f$, and $|f, i|_A$ for the number of characters of that line.
 other files are skipped by \texttt{cover} and never appear in any covering.
 \end{definition}
 
+\begin{definition}[Discoverable files]\label{def:discoverable}
+The \emph{discoverable set} $D(A)$ contains the regular files reached by a
+recursive walk of $A$ without following symbolic links and without entering
+any path component whose name begins with ``\texttt{.}''. Discoverability is
+independent of covering-input selection policy; policy filters $D(A)$ rather
+than changing the repository walk.
+\end{definition}
+
 \subsection{Positions and segments}
 
 A segment is a contiguous range of \emph{characters} inside a single
@@ -152,6 +160,76 @@ A covering need not partition the whole repository. It declares which
 files it accepts responsibility for. New files appearing in $A$ are
 covered by re-running \texttt{cover} on $\Cov$ (\S\ref{sec:initial-cover}),
 which is additive and never disturbs existing segments.
+
+\subsection{Covering-input selection}\label{sec:selection}
+
+Selection policy controls which discoverable files may be added by a future
+\texttt{cover}; it does not redefine the covered set $F(\Cov)$ already
+recorded by a covering.
+
+\begin{definition}[File-pattern match]\label{def:file-match}
+Let $\mathrm{entry\_match}(p,x)$ be covmap's gitignore-lite match of pattern
+$p$ against one repository-relative file or directory path $x$. For a file
+$f$, let $\mathrm{ancestors}(f)$ be its repository-relative parent
+directories. Define
+\[
+  \mathrm{file\_match}(p,f) =
+    \mathrm{entry\_match}(p,f)
+    \lor
+    \exists d \in \mathrm{ancestors}(f):
+      \mathrm{entry\_match}(p,d).
+\]
+Thus a directory pattern applies to every descendant, while \texttt{*} and
+\texttt{?} remain confined to one path component. Pattern order has no
+meaning, and negation is not part of the language.
+\end{definition}
+
+\begin{definition}[Effective selection policy]\label{def:selection}
+For covering name $C$, let $G^+$ be the optional repository include pattern
+set, $G^-$ the repository ignore set (empty when absent), $C^+$ the optional
+covering-specific include set, and $C^-$ the covering-specific ignore set
+(empty when absent). Define
+\[
+I(C) =
+\begin{cases}
+C^+ & \text{when the covering-specific include file exists},\\
+G^+ & \text{otherwise, when the repository include file exists},\\
+\mathrm{ALL} & \text{otherwise}.
+\end{cases}
+\]
+A present empty include set is distinct from an absent include file and
+selects no files. For a repository-relative path $f$, define
+\[
+\begin{aligned}
+\mathrm{included}(C,f) &=
+  \begin{cases}
+  \mathrm{true} & I(C)=\mathrm{ALL},\\
+  \exists p \in I(C): \mathrm{file\_match}(p,f) & \text{otherwise},
+  \end{cases}\\
+\mathrm{ignored}(C,f) &=
+  \exists p \in G^- \cup C^-: \mathrm{file\_match}(p,f),\\
+\mathrm{admitted}(C,f) &=
+  \mathrm{included}(C,f) \land \neg\mathrm{ignored}(C,f),\\
+\mathrm{selected}(C,f) &=
+  f \in D(A) \land \mathrm{admitted}(C,f).
+\end{aligned}
+\]
+The repository ignore set is therefore a hard veto, while a
+covering-specific include replaces rather than unions with the repository
+default.
+\end{definition}
+
+\begin{proposition}[Selection additivity]\label{prop:selection-additive}
+Running \texttt{cover} for $C$ may add a whole-file segment only for a
+selected readable, non-empty UTF-8 file not already in $F(\Cov_C)$. It never
+removes or rewrites an existing segment. Consequently narrowing selection
+policy may make $F(\Cov_C)$ disagree with current policy, but it cannot change
+$F(\Cov_C)$ without a distinct explicit removal operation.
+\end{proposition}
+
+Selection belongs to each endpoint covering's repository. A connection reads
+the actual endpoint coverings and never infers segment membership from
+selection policy.
 
 Equivalently, for each file $f \in F$ a covering supplies a sequence
 of cut \emph{positions} $p_0 \prec p_1 \prec \cdots \prec p_{k_f}$,
@@ -275,6 +353,11 @@ whose elements are called \emph{links}. Each link $(s, t)$ is recorded
 by two \emph{endpoints} (Definition~\ref{def:endpoint}): a name when the
 segment is named (so the link survives edits to that segment's content),
 otherwise a segment hash.
+In addition, a partial annotation function
+$\eta_\kappa : \kappa \rightharpoonup \mathrm{Text}$ assigns an optional
+\emph{link note} to each pair. $\mathrm{Text}$ is arbitrary finite UTF-8
+text, including line breaks; the note is rationale about the correspondence
+and is not part of the pair's identity.
 \end{definition}
 
 A link $(s, t) \in \kappa$ records that segment $s$ of $A$ is linked
@@ -567,7 +650,7 @@ Let $\Cov$ be a covering of $A$ and let $\ell$ be an optional label. Write
 $\Cov \restriction \ell$ for the sub-multiset of segments of $\Cov$ whose
 label is $\ell$, and $\Cov \restriction \top = \Cov$ when no label is
 given. An \emph{iterator} over $\Cov$ is a tuple
-$\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \gamma)$ where
+$\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \eta_\tau, \gamma)$ where
 \begin{itemize}[leftmargin=2em,itemsep=1pt]
 \item $\tau$ is a finite sequence of \emph{tasks}, one per segment of
       $\Cov \restriction \ell$, each task freezing that segment's tuple
@@ -577,6 +660,8 @@ $\mathcal{I} = (\Cov, \ell, \tau, <, \mathrm{st}, \gamma)$ where
 \item $\mathrm{st} : \tau \to \{\textsc{pending}, \textsc{done},
       \textsc{skipped}\}$ is the \emph{state map}, initially
       $\mathrm{st}(t) = \textsc{pending}$ for every task; and
+\item $\eta_\tau : \tau \rightharpoonup \mathrm{Text}$ assigns an optional
+      arbitrary-text \emph{task note}, the verdict of one pass over a task;
 \item $\gamma \in \tau \cup \{\bot\}$ is the \emph{cursor}, the one task
       the consumer is currently on ($\bot$ before the first task).
 \end{itemize}
@@ -612,7 +697,8 @@ step over silently: a deliberate jump of the cursor (which may land on a
 \textsc{pending} task) leaves that task \textsc{pending}, so a later
 advance returns to it. Leaving the current task requires resolving it,
 either \textsc{done} (worked) or \textsc{skipped} (deliberately passed
-over).
+over). A resolution replaces $\eta_\tau(\gamma)$ with its supplied complete
+note, or clears it when no note is supplied.
 
 \begin{proposition}[Complete enumeration]\label{prop:enumeration}
 Fix an iterator $\mathcal{I}$ and consider any run in which each step is
@@ -659,9 +745,11 @@ directory:
 \begin{verbatim}
 .covmap/
   .gitignore          default publication policy
-  version             on-disk format version (currently 3)
+  version             on-disk format version (currently 5)
   HEAD                default covering name
-  ignore              optional gitignore-lite patterns
+  include             optional repository positive default
+  ignore              optional repository exclusions
+  selections/<C>/     optional include/ignore policy for covering C
   objects/<hh>/<rest> local raw-content cache, addressed by hash
   coverings/<name>    one file per covering (covered files + segments)
   connections/<name>  one file per connection (metadata + links)
@@ -674,26 +762,38 @@ objects. Missing live objects can be reconstructed from checked-out source
 only while the recorded range reproduces the ref's hash; \texttt{hydrate}
 performs that reconstruction explicitly. Since checked-out source is part of
 the live project state, unavailable covered source fails integrity verification
-even when a valid object remains in the cache. Format 3 separates the portable
-project artifact from ignored local state and replaces connection target paths
-with portable peer aliases.
-The \texttt{iterators/} directory is purely additive: an older
-\texttt{covmap} simply never reads it, so introducing it needs no
-format-version change, mirroring how the character column and segment name
-were added.
+even when a valid object remains in the cache. The current format separates
+the portable project artifact from ignored local state, replaces connection
+target paths with portable peer aliases, carries repository and
+covering-specific selection policy as tracked metadata, and stores every
+non-empty link or task note in a length-prefixed stanza adjacent to its
+owning row. Covering messages retain their indexed length-prefixed stanzas.
+This makes arbitrary multiline text unambiguous while keeping prose directly
+reviewable in version-control diffs. Covering names are
+non-empty UTF-8 strings other than \texttt{.}, \texttt{..}, or
+\texttt{HEAD}; they contain no path separator, colon, NUL, or Unicode
+whitespace and do not begin with \texttt{@} or \texttt{\#}. This single
+grammar makes ref paths safe and keeps covering names unambiguous in address
+and connection syntax.
+Format 5 is incompatible with format-4 readers because those readers can
+mistake stanza bodies for records. Migration stages a complete rewritten
+connection/iterator snapshot, publishes the transitional version
+\texttt{migrating-4-to-5} before replacing live refs, publishes version 5
+last, and resumes idempotently from staged bytes after interruption. It
+assumes no concurrent covmap writer.
 
 \subsection{Project artifacts and publication boundary}
 \label{sec:project-artifacts}
 
 \begin{definition}[Publication boundary]\label{def:publication-boundary}
 The \emph{covmap project artifact} consists of the format version, default
-covering, covering-input policy, covering refs, connection refs, and default
-publication policy. \emph{Local state} consists of the reconstructible content
-cache, checkout-specific peer bindings, iterator work state and its retained
-objects, generated reports, and temporary files. Publication retains the
-project artifact and excludes local state by default. A project may
-deliberately publish an iterator snapshot only by publishing its worklist and
-retained objects together.
+covering, repository and covering-specific input-selection policy, covering
+refs, connection refs, and default publication policy. \emph{Local state}
+consists of the reconstructible content cache, checkout-specific peer
+bindings, iterator work state and its retained objects, generated reports, and
+temporary files. Publication retains the project artifact and excludes local
+state by default. A project may deliberately publish an iterator snapshot only
+by publishing its worklist and retained objects together.
 \end{definition}
 
 \begin{definition}[Portable peer reference]\label{def:peer-reference}
@@ -769,11 +869,15 @@ There is no segmentation rule. The interface gives the user one
 \item \texttt{covmap init}\\
       Create \texttt{.covmap/} in the current directory.
 \item \texttt{covmap cover [$C$]}\\
-      For every readable UTF-8 file under the repo not already
-      covered by $C$, add a single segment $(f, 1, |f|_A,
-      \texttt{unknown})$ to $C$. Idempotent: re-running \texttt{cover}
-      adds segments only for new files. Existing segments are never
-      touched, so any user-driven refinement is preserved.
+      Resolve \texttt{HEAD}, load the effective policy of
+      Definition~\ref{def:selection}, and for every selected readable,
+      non-empty UTF-8 file not already covered by $C$, add a single segment
+      $(f, 1, |f|_A, \texttt{unknown})$ to $C$. Idempotent: re-running
+      \texttt{cover} adds segments only for newly selected files. Existing
+      segments are never touched, so any user-driven refinement is preserved.
+      Report each active include pattern that matches no discoverable file,
+      and warn without failing when an already-covered path is no longer
+      admitted by current policy.
 \item \texttt{covmap hydrate [$C$]}\\
       Verify every live entry of $C$ (or every covering when omitted) against
       checked-out source and atomically recreate each missing cache object.
@@ -803,10 +907,11 @@ There is no segmentation rule. The interface gives the user one
       narrow to the first fragment; local hash endpoints to the original
       become broken. The command reports both effects and the inability to
       discover inbound refs stored in another repository.
-\item \texttt{covmap merge $C$:$h_1$ $C$:$h_2$ [$\lambda$]}\\
+\item \texttt{covmap merge $C$:$a_1$ $C$:$a_2$ [$\lambda$]}\\
       Replace two adjacent segments by their union, labelled
-      $\lambda$ (default \texttt{unknown}).
-\item \texttt{covmap recut $C$:$h$}\\
+      $\lambda$ (default \texttt{unknown}), where each $a_i$ is a hash,
+      name, or position address selecting one concrete covering occurrence.
+\item \texttt{covmap recut $C$:$a$}\\
       Refresh the segment's hash from current disk bytes. Keeps
       $(f, a, b, \lambda)$; rewrites the content from the file as it
       is now. Errors if the segment no longer fits the file (boundary
@@ -822,8 +927,9 @@ There is no segmentation rule. The interface gives the user one
       left untouched and its segments reported as unresolved. Absorbs
       boundary drift automatically for localized edits, so connections
       by \texttt{@$\nu$} survive without manual \texttt{merge}/\texttt{split}.
-\item \texttt{covmap label $C$:$h$ $\lambda$}\\
-      Replace the label of one segment in the covering ref. Because labels
+\item \texttt{covmap label $C$:$a$ $\lambda$}\\
+      Replace the label of the addressed segment occurrence in the covering
+      ref, even when another occurrence has equal content. Because labels
       are not part of identity, the segment hash and object store are
       unchanged, so connections referencing the segment by hash or name
       keep resolving. The segment's name and message, if any, are preserved.
@@ -852,10 +958,22 @@ region of the mapping should take a short, bounded sequence of commands
 whose final step resolves the relation fully (endpoints shown as
 \texttt{covering:label loc}, not bare hashes), so no follow-up lookup is
 forced. Listing commands print one condensed line per item; a command that
-names one item prints all covmap holds about it. The region view and the
-label lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union
-of file/range regions or a label, presenting each selected segment together
-with its image.
+names one item prints all covmap holds about it. The region view and the label
+lens realize $\kappa(S)$ (Definition~\ref{def:image}) for a finite union of
+file/range regions or a label, presenting each selected segment together with
+its image.
+Presentation is \emph{content-first} when the selector names one segment, one
+link, or one explicit file/range region. Segment and region views include the
+selected source segments' recorded content; a link view includes both resolved
+endpoints' content. Region content follows file order, and a line range renders
+each intersecting segment in full without recursively expanding mapped target
+content. Label lenses and covering/connection summaries remain compact by
+default. \texttt{--no-content} requests the compact form; \texttt{--content}
+pins numbered content and \texttt{--content-plain} requests raw bytes on
+content-capable routes.
+File-oriented visual inspection preserves source coordinates by displaying
+the original 1-indexed file line number beside every rendered source line,
+including a line partitioned among several character-level segments.
 When inspection needs live segment bytes whose cache entry is absent, it
 reconstructs them only from source that reproduces the recorded hash.
 \texttt{status}, \texttt{show}, and \texttt{ls} may publish those verified
@@ -871,18 +989,23 @@ read-only unless hydration is requested explicitly.
       their segments were recorded and names each edited or unreadable
       path. Per connection: link count, broken count, and source/target
       coverage (Definition~\ref{def:coverage}).
-\item \texttt{covmap show <addr>}\\
+\item \texttt{covmap show <addr>
+      [--content|--content-plain|--no-content] [--all]}\\
       Print the segment, covering, connection, \emph{region}
       ($C$:file[:a..b]), or single link at \texttt{<addr>}; a segment or
       link shows its resolved links, a region/label its image. \texttt{--label
       $\ell$} runs the label lens. A connection view reports resolved degree
       maxima and bounded non-trivial hubs (Definition~\ref{def:degree});
       \texttt{--all} expands its link list, with link notes on wrapped lines
-      below their resolved endpoint pair.
+      below their resolved endpoint pair, and is invalid on every other
+      route. Positive content modes are invalid on covering and connection
+      summaries, while \texttt{--no-content} is an idempotent compact request.
 \item \texttt{covmap ls [-l] [$C$] [region \ldots] [--label $\ell$] [--linked|--unlinked]}\\
       List segments of $C$ in file-and-line order, optionally narrowed to the
       union of several file/range regions and intersected with a label or link
-      status.
+      status. Link status includes outgoing links and locally stored incoming
+      links; inbound cross-repository connections stored in another repository
+      are not discoverable from $C$'s repository.
 \item \texttt{covmap grep [-l] [-c $C$] <pattern>}\\
       Print segments whose label or content matches \texttt{<pattern>}.
 \item \texttt{covmap diff $C_1$ $C_2$}\\
@@ -901,9 +1024,13 @@ read-only unless hydration is requested explicitly.
 \item \texttt{covmap disconnect $K$}\\
       Delete the stored connection ref $K$ without deleting either covering,
       any segment object, or a derived report.
-\item \texttt{covmap link $K$ $A$ $B$ [$\nu$]}\\
+\item \texttt{covmap link $K$ $A$ $B$ [-m $\nu$]\ldots}\\
       \texttt{covmap unlink $K$ $A$ $B$}\\
-      Add or remove a single link, optionally annotated with note $\nu$.
+      Add or remove a single link, optionally annotated with note $\nu$;
+      the note is introduced by repeatable \texttt{-m} (or
+      \texttt{--message}) values.
+      For an existing pair, omitting it preserves the note and an explicitly
+      empty value clears the note.
       Each endpoint operand $A$ or $B$ may be a segment name, hash prefix,
       or position resolved against that side's covering.
 \item \texttt{covmap prune $K$}\\
@@ -912,10 +1039,13 @@ read-only unless hydration is requested explicitly.
 \item \texttt{covmap fsck [--offline [--hydrate]]}\\
       Verify that every covering is a partition of its covered set, source
       reproduces each recorded hash, every present cache object hashes to its
-      key, and every checked connection endpoint resolves. Missing live cache
-      objects are valid when source reconstructs them. \texttt{--offline}
-      leaves external repositories unchecked; adding \texttt{--hydrate}
-      recreates missing local objects during the same pass.
+      key, every covering name and selection-policy path is valid, every
+      policy file is readable and well-formed, and every checked connection
+      endpoint resolves. A valid selection directory may precede creation of
+      its covering ref. Missing live cache objects are valid when source
+      reconstructs them. \texttt{--offline} leaves external repositories
+      unchecked; adding \texttt{--hydrate} recreates missing local objects
+      during the same pass.
 \end{itemize}
 
 Read-only inspection degrades explicitly when an external peer is unavailable:
@@ -936,29 +1066,33 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
       (Definition~\ref{def:iterator}). \texttt{--order} defaults to
       \texttt{file}; \texttt{--label $\ell$} restricts $\tau$ to the
       segments labelled $\ell$. The cursor starts at $\bot$.
-\item \texttt{covmap iter $I$ next [--content]}\\
+\item \texttt{covmap iter $I$ next [--content|--content-plain|--no-content]}\\
       \emph{Advance} (Definition~\ref{def:advance}): move the cursor to
       the $<$-least \textsc{pending} task and print it. Refused while the
       current task is still \textsc{pending}; exits non-zero when none
-      remains. \texttt{--content} also prints the task's frozen bytes.
-\item \texttt{covmap iter $I$ current [--content]}\\
+      remains. Numbered frozen bytes are printed by default;
+      \texttt{--no-content} requests only the task row.
+\item \texttt{covmap iter $I$ current [--content|--content-plain|--no-content]}\\
       Reprint the cursor's task in any state --- the resume affordance
-      after a crash or context loss. \texttt{--content} also prints the
-      task's frozen bytes.
-\item \texttt{covmap iter $I$ done [-m <msg>]} / \texttt{skip [-m <msg>]}\\
+      after a crash or context loss, with numbered frozen bytes by default.
+\item \texttt{covmap iter $I$ done [-m <msg>]\ldots} /
+      \texttt{skip [-m <msg>]\ldots}\\
       Set $\mathrm{st}(\gamma)$ to \textsc{done} / \textsc{skipped},
-      optionally recording a note. Neither advances.
+      optionally recording a note. Omitting the message option clears an
+      earlier task note. Neither advances.
 \item \texttt{covmap iter $I$ choose <addr>}\\
       Move the cursor to task \texttt{<addr>} (a jump); every task's state
       is untouched, so completeness is preserved.
 \item \texttt{covmap iter $I$ rewind [<addr>]}\\
       Reset a \textsc{done}/\textsc{skipped} task to \textsc{pending}
       (default: the cursor's task).
-\item \texttt{covmap iter $I$ peek [--all] [--content]}\\
+\item \texttt{covmap iter $I$ peek [--all]
+      [--content|--content-plain|--no-content]}\\
       Look ahead, without advancing, at the \textsc{pending} tasks in order
       (the set \texttt{choose} may target, including the active one);
       \texttt{--all} lists the whole worklist tagged with each task's state,
-      and \texttt{--content} also prints frozen bytes.
+      and explicit \texttt{--content} or \texttt{--content-plain} also prints
+      frozen bytes. Peek remains compact by default.
 \item \texttt{covmap iter $I$ status}\\
       Reports the resolved fraction $(k+m)/n$ (done $k$ plus skipped $m$ of
       $n$ tasks), which reaches $n/n$ exactly at exhaustion, and marks the
@@ -970,6 +1104,18 @@ prefix. Bare \texttt{covmap iter} lists all iterators.
 \item \texttt{covmap iter $I$ rm}\\
       Delete the iterator; never touches the covering.
 \end{itemize}
+
+\subsection{Message input}
+
+Every message-bearing command uses the same explicit-input grammar.
+\texttt{-m} and \texttt{--message} are repeatable; their values remain in
+command-line order and are joined by one blank line. CRLF and bare CR are
+normalized to LF, every trailing LF is removed, and an empty result clears
+the stored text. This normalization is idempotent. A single value may itself
+contain line breaks. The complete normalized input replaces the existing
+segment message, link note, or task note; it never appends. Absence remains
+operation-specific: bare \texttt{annotate} reads, bare re-link preserves, and
+bare iterator resolution clears.
 
 \subsection{Plumbing}
 
@@ -983,7 +1129,10 @@ Lower-level commands meant for scripts.
       record (hash, file, $a$, $b$, label, name, message) as TAB fields.
 \item \texttt{covmap ls-links [--resolve] $K$}\\
       Link endpoint pairs; \texttt{--resolve} emits each endpoint resolved
-      to its label and location as TAB fields.
+      to its label and location as TAB fields. The optional note field escapes
+      backslash, TAB, CR, and LF as \texttt{\textbackslash\textbackslash},
+      \texttt{\textbackslash t}, \texttt{\textbackslash r}, and
+      \texttt{\textbackslash n}, preserving one physical output line per link.
 \item \texttt{covmap rev-parse <addr>}
 \item \texttt{covmap fsck --broken-links}
 \end{itemize}
@@ -1000,7 +1149,8 @@ Lower-level commands meant for scripts.
       path bindings are local operational choices, not changes to project
       meaning.
 \item Every state-changing operation is explicit. \texttt{cover} is
-      additive only. Refining a covering requires \texttt{split},
+      additive only; selection policy governs future candidates and never
+      synchronizes the covered set. Refining a covering requires \texttt{split},
       \texttt{merge}, \texttt{recut}, or \texttt{label} —
       \texttt{covmap} never silently re-segments existing files.
 \item A missing live object is reconstructed only from source whose content

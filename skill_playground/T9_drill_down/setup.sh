@@ -42,13 +42,14 @@ set -euo pipefail
 ( cd impl_rs && "$COVMAP_BIN" name main:handlers.rs:30 impl-health ) >/dev/null
 
 # --- connect + link each endpoint to its handler -----------------------
-( cd spec && "$COVMAP_BIN" connect main "../impl_rs:main" apimap ) >/dev/null
-( cd spec && "$COVMAP_BIN" link apimap @spec-get    @impl-list   "GET list"        ) >/dev/null
-( cd spec && "$COVMAP_BIN" link apimap @spec-post   @impl-create "POST create"     ) >/dev/null
-( cd spec && "$COVMAP_BIN" link apimap @spec-delete @impl-delete "DELETE by id"    ) >/dev/null
-( cd spec && "$COVMAP_BIN" link apimap @spec-health @impl-health "liveness probe"  ) >/dev/null
+( cd spec && "$COVMAP_BIN" peer bind impl ../impl_rs ) >/dev/null
+( cd spec && "$COVMAP_BIN" connect main impl:main apimap ) >/dev/null
+( cd spec && "$COVMAP_BIN" link apimap @spec-get    @impl-list   -m "GET list"        ) >/dev/null
+( cd spec && "$COVMAP_BIN" link apimap @spec-post   @impl-create -m "POST create"     ) >/dev/null
+( cd spec && "$COVMAP_BIN" link apimap @spec-delete @impl-delete -m "DELETE by id"    ) >/dev/null
+( cd spec && "$COVMAP_BIN" link apimap @spec-health @impl-health -m "liveness probe"  ) >/dev/null
 ( cd spec && "$COVMAP_BIN" link apimap @auth-errors @impl-create \
-  "Authentication failures from the shared error contract are returned by the create handler before request validation continues." ) >/dev/null
+  -m "Authentication failures from the shared error contract are returned by the create handler before request validation continues." ) >/dev/null
 
 echo "Setup done. spec/main -> impl_rs/main via 'apimap' (5 links, all named)."
 echo "Two endpoints are labelled 'auth'. The map is complete and drift-free."

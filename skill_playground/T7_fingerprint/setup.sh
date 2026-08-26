@@ -25,7 +25,7 @@ set -euo pipefail
 ( cd spec && "$COVMAP_BIN" name "main:$( "$COVMAP_BIN" grep -l -c main '## Audit logs' | head -1 )" audit-retention ) >/dev/null
 IMPL_H=$( cd impl_rs && "$COVMAP_BIN" ls-segments )
 ( cd spec && "$COVMAP_BIN" connect main "$(pwd)/../impl_rs:main" policy_links ) >/dev/null
-( cd spec && "$COVMAP_BIN" link policy_links @audit-retention "$IMPL_H" "audit log retention" ) >/dev/null
+( cd spec && "$COVMAP_BIN" link policy_links @audit-retention "$IMPL_H" -m "audit log retention" ) >/dev/null
 
 # Drift by RELOCATION: move the Audit logs section to the end of the
 # file. Diff-remap cannot place it; fingerprinting will propose it.

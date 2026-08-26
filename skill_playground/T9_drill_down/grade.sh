@@ -45,6 +45,9 @@ check "show @spec-delete resolves to the delete handler" bash -c "
 check "show @spec-delete lists exactly one outgoing link" bash -c "
   cd spec && \"$COVMAP_BIN\" show main:@spec-delete | grep -q '1 outgoing'
 "
+check "show @spec-delete includes content by default" bash -c "
+  cd spec && \"$COVMAP_BIN\" show main:@spec-delete | grep -q '^--- content @spec-delete ---'
+"
 
 # (3) The label lens returns BOTH auth endpoints, each with its mapping.
 check "label lens finds the two auth endpoints" bash -c "
@@ -58,6 +61,9 @@ check "label lens resolves auth endpoints to their handlers" bash -c "
   echo \"\$out\" | grep -q 'impl-create\|handlers.rs:8' \
     && echo \"\$out\" | grep -q 'impl-delete\|handlers.rs:19'
 "
+check "label lens remains compact by default" bash -c "
+  cd spec && ! \"$COVMAP_BIN\" show --label auth main | grep -q '^--- content '
+"
 
 # (4) status surfaces coverage for the connection.
 check "status reports apimap coverage" bash -c "
@@ -67,6 +73,15 @@ check "status reports apimap coverage" bash -c "
 # (5) region view resolves the mapping for a file slice.
 check "region show resolves a link" bash -c "
   cd spec && \"$COVMAP_BIN\" show main:api.md:18..24 | grep -q '\\->'
+"
+check "region show includes source content by default" bash -c "
+  cd spec && \"$COVMAP_BIN\" show main:api.md:18..24 | grep -q '^--- content '
+"
+check "region --no-content retains relationships without content" bash -c "
+  cd spec
+  out=\$(\"$COVMAP_BIN\" show main:api.md:18..24 --no-content)
+  printf '%s\n' \"\$out\" | grep -q '\\->' \
+    && ! printf '%s\n' \"\$out\" | grep -q '^--- content '
 "
 
 # (6) Connection review reports the resolved hub and wraps the long note.

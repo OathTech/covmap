@@ -37,10 +37,13 @@ stable enough to use day-to-day but may change before 1.0. Cooperative
 single-writer assumed; concurrent writers from multiple processes are
 not supported.
 
-The on-disk format is **version 3**. `covmap migrate` upgrades format 1
-or 2 repositories, preserving content-only hashes while replacing connection
-checkout paths with portable peer aliases and canonicalizing tracked refs.
-CIP 0010 and req24 define the Git-trackable project artifact.
+The on-disk format is **version 5**. `covmap migrate` upgrades formats 1
+through 4 through resumable stages. Format 5 stores link and iterator task
+notes as adjacent length-prefixed stanzas, allowing Git-reviewable multiline
+text without ambiguous record lines. During the final rewrite, the
+transitional version `migrating-4-to-5` gates ordinary commands; rerunning
+`covmap migrate` resumes from the complete staged snapshot. Do not run another
+covmap writer concurrently with migration.
 
 ## Install
 
@@ -80,6 +83,10 @@ There are no runtime dependencies beyond `sha2`.
   it was cut, what it is, why it is (not) mapped — set with `covmap annotate
   … -m`. Like a name it is covering-local and not part of the hash, so
   editing it never causes drift.
+- A **link note** is optional arbitrary multiline rationale about one mapping
+  pair. A **task note** is the verdict recorded by one iterator pass.
+  `annotate`, `link`, `iter done`, and `iter skip` all accept repeatable
+  `-m`/`--message` values, joined as blank-line-separated paragraphs.
 - A **connection** is a relation between segments of one covering
   and segments of another, possibly in a different repository. Refs
   live at `.covmap/connections/<name>` in the *source* repo. Each
@@ -100,11 +107,14 @@ There are no runtime dependencies beyond `sha2`.
   plan layered over the covering — it never mutates it. Creation retains every
   selected task object; a missing clean object is reconstructed, while a
   drifted cache miss refuses the freeze with restore-and-hydrate guidance.
+  `next` and `current` include the frozen task content by default;
+  `--no-content` selects the compact task row.
 
 There are no built-in segmentation rules. `covmap cover` walks the
 repo and emits a single whole-file segment labelled `unknown` for
-every readable UTF-8 file it has not yet covered. You refine the
-covering with `covmap split`, `covmap merge`, and `covmap recut`.
+every selected readable UTF-8 file it has not yet covered. Selection may be
+global or covering-specific. You refine the covering with `covmap split`,
+`covmap merge`, and `covmap recut`.
 `split` inserts one or more cut positions atomically; labels, names,
 and messages are applied afterward as separate metadata operations.
 
@@ -145,7 +155,7 @@ covmap cover
 cd ../spec/
 covmap peer bind impl ../impl
 covmap connect main impl:main spec_to_impl
-covmap link spec_to_impl @body <impl_hash> "fn body"
+covmap link spec_to_impl @body <impl_hash> -m "fn body"
 
 # 5. Edit spec.md's Body. Status reports drift, but the link is intact —
 #    it references @body, not the (now-changed) content hash.
@@ -169,29 +179,29 @@ Run `covmap help` for the full reference. Top-level porcelain:
 | Command | Purpose |
 | --- | --- |
 | `init` | Create `.covmap/` in the cwd. |
-| `cover [<C>]` | Add one whole-file `unknown` segment per uncovered file. |
+| `cover [<C>]` | Add one whole-file `unknown` segment per selected uncovered file; warn about unmatched includes and existing files outside current policy. |
 | `hydrate [<C>]` | Reconstruct missing live cache objects from source that matches the covering hash. |
 | `status [<C>]` | Cardinality, lines, drift, broken links, per-connection coverage. |
 | `ls [-l] [<C>] [<region> ...] [--label <l>] [--linked\|--unlinked]` | List segments, optionally narrowed to the union of several file/range regions and intersected with a label or link status. |
-| `show <addr> [--content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Connection views report resolved degree hubs and wrap notes; `--label <l>` = label lens. |
+| `show <addr> [--content\|--content-plain\|--no-content] [--all]` | Print a segment, covering, connection, region (`<C>:<file>[:a..b]`), or link — with links resolved to `label loc`. Focused segment/link and file/range views include numbered content by default; links show both endpoints, while regions show selected source content only. `--no-content` selects compact metadata/relationships and `--content-plain` selects raw bytes. Label lenses and covering/connection summaries remain compact. Partial-line numbered views mark measured omitted columns with `.`; if drift or missing source prevents measuring the remainder, a separate `REST-OF-LINE-UNKNOWN` diagnostic follows the recorded line. `--all` is connection-summary only. |
 | `grep [-l] [-c <C>] <pat>` | Segments whose label or content matches. |
 | `diff <C1> <C2>` | Added / removed / shared segments. |
-| `label <C>:<h> <label>` | Relabel a segment (ref-local; hash unchanged). |
+| `label <C>:<addr> <label>` | Relabel the addressed segment occurrence (ref-local; hash unchanged). |
 | `name <C>:<h\|@name> <name\|->` | Set, rename, or clear a segment's name. A rename lists exact local `@old` endpoints and emits a safe link-then-unlink repair when possible; it never rewrites connections implicitly. |
 | `annotate <C>:<addr> [-m <msg>]...` | Set/replace/clear a segment's free-form message (ref-local; not hashed). |
 | `split <C>:<segment\|file> <cut> [<cut> ...]` | Atomically insert one or more line or character cuts. New fragments are `unknown`; apply metadata separately. |
-| `merge <C>:<h1> <C>:<h2> [<label>]` | Merge two adjacent segments. |
-| `recut <C>:<h>` | Refresh a segment's hash from current disk bytes. |
+| `merge <C>:<addr1> <C>:<addr2> [<label>]` | Merge two addressed adjacent segments. |
+| `recut <C>:<addr>` | Refresh the addressed segment's hash from current disk bytes. |
 | `recut --remap [<C>[:<addr>]] [--threshold <f>]` | Diff-remap: re-fit segments onto an edited file. For a moved/rewritten segment it can't place, prints a propose-only fingerprint relocation guess. |
 | `peer bind <alias> <path>` / `peer ls` / `peer rename <old> <new>` / `peer unbind <alias>` | Manage checkout-local paths for stable connection peer aliases. |
 | `connect <C_A> [<peer>:]<C_B> [<K>]` | Create an empty connection; omit `<peer>:` for another covering in the same repository. |
 | `disconnect <K>` | Delete only the named connection ref. |
-| `link <K> <A> <B> [<note>]` | Add a link; each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. |
+| `link <K> <A> <B> [-m <msg>]...` | Add a link with an optional multiline note; repeated values form paragraphs. Each endpoint accepts `@name`, a hash prefix, or `file:line[:col]`. A bare re-link preserves its note, while `-m ""` clears it. |
 | `unlink <K> <A> <B>` | Remove a link using the same endpoint forms. |
 | `prune <K>` | Drop links whose endpoints have left their coverings. |
-| `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; pull tasks one at a time (`next`/`done`/`skip`). Bare `iter` lists all. |
+| `iter [<name> <verb> ...]` | Freeze a covering into an ordered, resumable worklist; `done`/`skip` accept repeatable message values for multiline task verdicts. Bare `iter` lists all. |
 | `html [-o <path>] [--covering <C>] [--connection <K>]` | Render a static HTML browser (one connection; auto-selected when only one exists). |
-| `migrate` | Upgrade `.covmap/` on-disk format (1 or 2 → 3). |
+| `migrate [--recover-covering <legacy>]...` | Upgrade `.covmap/` formats 1 through 4 to format 5; optionally identify an unreferenced traversal-created legacy ref. |
 
 Plumbing commands (line-oriented, stable for scripts):
 `hash-segment`, `cat-segment`, `ls-segments`, `ls-links`, `rev-parse`,
@@ -207,14 +217,24 @@ If a region filename also names a covering, make the covering explicit; for
 example, `covmap ls -l HEAD main` selects the file `main` in `HEAD`.
 
 The regions form a union; `--label`, `--linked`, and `--unlinked` further
-filter that selection. `show <connection>` reports resolved maximum in/out
+filter that selection. Link status includes outgoing links and same-repository
+incoming links whose connection refs are stored locally; inbound connections
+stored in another repository remain undiscoverable. `show <connection>` reports resolved maximum in/out
 degree and bounded fan-in/fan-out hubs. Hash and `@name` endpoints resolving
 to the same content hash count as one node; repeated covering locations with
 that hash produce one hub row at the first covering-order location. Broken
 links do not contribute.
 
-Long link notes are wrapped beneath their resolved endpoint pair;
-`ls-links --resolve` remains the stable TAB-delimited form for scripts.
+`show <C>:<file>[:a..b]` presents the selected file slice as ordered segments
+with their resolved relationships and recorded content. A line range renders
+each intersecting segment in full. Use `--no-content` for relationships only;
+mapped target content is available through focused `show <K> <A> <B>`, not
+recursively expanded by a region view.
+
+Long and multiline link notes are wrapped beneath their resolved endpoint
+pair with explicit paragraph breaks preserved. In `ls-links` and
+`ls-links --resolve`, note fields escape `\`, TAB, CR, and LF as `\\`, `\t`,
+`\r`, and `\n`, so each link remains one physical TAB-delimited record.
 
 ### Live object cache
 
@@ -264,7 +284,7 @@ covmap label main:spec.md:10 reviewed
 An alphabetic former label now fails with a hint to use `label`, `name`, or
 `annotate`. A position-shaped former label such as `42` is indistinguishable
 from a cut and is therefore treated as one. This is a command-grammar change
-only: it does not alter the format-3 ref schemas.
+only: it does not alter the covering-ref schemas.
 
 `covmap html` renders the whole map as a static, self-contained page:
 
@@ -277,7 +297,8 @@ annotation and its resolved links to the other side](docs/screenshot.png)
 shows how many of its segments are linked; linked segments are highlighted
 in the panels; and hovering a segment reveals its annotation and the
 segments it maps to on the other side. (List, Source, and Target views
-offer other ways in.)*
+offer other ways in.) Source, Target, and Compare show the original line
+number beside every file line.*
 
 ## Address forms
 
@@ -291,32 +312,53 @@ offer other ways in.)*
   handle. Every command taking a segment address accepts all three forms.
 - `HEAD` resolves to the covering named in `.covmap/HEAD`.
 
-## Ignoring files
+## Selecting covering inputs
 
-covmap reads optional gitignore-lite patterns from `.covmap/ignore`,
-one per line. Supported syntax:
+`cover` applies tracked gitignore-lite policy to otherwise-discoverable
+regular files. Dot-prefixed path components and symbolic links are never
+discoverable.
+
+- `.covmap/include` is the optional repository-wide positive default.
+- `.covmap/ignore` is the repository-wide exclusion veto.
+- `.covmap/selections/<C>/include`, when present, replaces the global include
+  for covering `C`.
+- `.covmap/selections/<C>/ignore` adds covering-specific exclusions.
+
+If neither applicable include file exists, all discoverable files are
+included. A present empty include selects none. Ignore files always veto an
+included path. Policy affects only future additions: narrowing it never
+removes or rewrites an existing segment, and `cover` warns about covered paths
+that current policy no longer admits.
+
+Supported pattern syntax:
 
 - `*.go` — matches any `.go` file by name.
 - `schema/` — matches the directory `schema/` and everything under it.
 - `/CODEOWNERS` — anchored to the repo root.
 - `#` lines and blank lines are ignored.
 
-This covering-input policy is distinct from `.covmap/.gitignore`, which
-controls the default Git publication boundary. `covmap init` creates:
+Directory patterns apply to descendants. Pattern order and `!` negation have
+no special meaning. Each active include pattern that matches no discoverable
+file produces a source-line warning; matches are counted before ignore vetoes.
+
+Selection policy is distinct from `.covmap/.gitignore`, which controls the
+default Git publication boundary. `covmap init` creates:
 
 ```gitignore
 # Local and reconstructible covmap state.
-# Commit .covmap/coverings, .covmap/connections, and covmap metadata.
+# Commit selection policy, coverings, connections, and covmap metadata.
 /local/
 /objects/
 /iterators/
 /*.html
-*.tmp
+\#covmap-tmp-*.tmp
 ```
 
 Ordinary `git add .covmap` therefore stages portable refs and configuration,
 not caches, checkout-specific peer paths, iterator state, reports, or
-temporary files. This is a default policy, not an enforcement fence:
+covmap atomic-write temporary files. The escaped `#` is a literal basename
+prefix, so valid project refs such as `coverings/release.tmp` remain tracked.
+This is a default policy, not an enforcement fence:
 `git add -f` can override it and ignore rules do not untrack files already in
 the index.
 
@@ -365,12 +407,14 @@ covmap does not install hooks or write `.git/`.
 ```
 <repo>/.covmap/
   .gitignore           # tracked default publication policy
-  version              # on-disk format version (currently "3")
+  version              # on-disk format compatibility marker
   HEAD                 # default covering name (one line)
-  ignore               # optional gitignore-lite patterns
+  include              # optional repository positive default
+  ignore               # optional repository exclusions
+  selections/<C>/      # optional include/ignore policy for covering C
   objects/<hh>/<rest>  # local cache: raw <content> (hash = sha256(content))
   coverings/<name>     # covered files + one segment hash per line
-  connections/<name>   # portable peer/covering metadata + links
+  connections/<name>   # portable peer/covering metadata + links/note stanzas
   local/peers          # ignored checkout-local peer bindings
   iterators/<name>     # a covering frozen into an ordered, stateful worklist
 ```
@@ -379,10 +423,15 @@ Every command checks `.covmap/version` and refuses to operate on a
 repo created by an incompatible covmap version. The format version
 is bumped on changes to the segment hash, object encoding, or ref
 formats; patch releases never bump it. To upgrade a repo across a bump,
-run `covmap migrate`. Format 1 first re-keys objects under the content-only
-hash; format 2 then stages canonical refs, converts target paths to peer
-aliases, records local bindings, and publishes format 3 with the version file
-last.
+run `covmap migrate`. Formats 1 and 2 first pass through the content-hash and
+portable-peer migrations; format 4 validates and publishes tracked selection
+policy. Format 5 rewrites non-empty inline link/task notes as adjacent
+`# note <line-count>` stanzas. It stages a complete snapshot, publishes
+`migrating-4-to-5` before any live ref replacement, and publishes version 5
+last. Before ordinary migration work, unsafe legacy
+covering names are rewritten consistently across refs, `HEAD`, connections,
+iterators, and selection directories using a deterministic full SHA-256
+escape.
 
 ## Repository layout
 
